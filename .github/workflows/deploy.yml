@@ -49,22 +49,27 @@ jobs:
             SERVICES=$(git diff --name-only HEAD~1 HEAD -- services/ 2>/dev/null | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
           fi
 
-          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          # Handle empty services
+          if [ -z "$SERVICES" ] || [ "$SERVICES" = "[]" ] || [ "$SERVICES" = '[""]' ]; then
+            SERVICES='[]'
+            MATRIX='{"include":[]}'
+          else
+            # Create matrix with service metadata
+            MATRIX='{"include":[]}'
+            for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+              if [ -f "services/$svc/Dockerfile" ]; then
+                SLANG="unknown"
+                [ -f "services/$svc/go.mod" ] && SLANG="go"
+                [ -f "services/$svc/requirements.txt" ] && SLANG="python"
+                [ -f "services/$svc/package.json" ] && SLANG="node"
+                MATRIX=$(echo "$MATRIX" | jq -c --arg s "$svc" --arg l "$SLANG" '.include += [{"service": $s, "lang": $l}]')
+              fi
+            done
+          fi
 
-          # Create matrix with service metadata
-          MATRIX='{"include":[]}'
-          for svc in $(echo $SERVICES | jq -r '.[]'); do
-            if [ -f "services/$svc/Dockerfile" ]; then
-              # Detect language
-              LANG="unknown"
-              [ -f "services/$svc/go.mod" ] && LANG="go"
-              [ -f "services/$svc/requirements.txt" ] && LANG="python"
-              [ -f "services/$svc/package.json" ] && LANG="node"
-
-              MATRIX=$(echo $MATRIX | jq --arg s "$svc" --arg l "$LANG" '.include += [{"service": $s, "lang": $l}]')
-            fi
-          done
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          # Output as single lines (compact JSON)
+          echo "services=$(echo "$SERVICES" | jq -c .)" >> $GITHUB_OUTPUT
+          echo "matrix=$(echo "$MATRIX" | jq -c .)" >> $GITHUB_OUTPUT
 
   build:
     needs: detect

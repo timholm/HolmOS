@@ -1,0 +1,2256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Files - HolmOS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/feather-icons"></script>
+    <style>
+        :root {
+            --base: #1e1e2e;
+            --mantle: #181825;
+            --crust: #11111b;
+            --surface0: #313244;
+            --surface1: #45475a;
+            --surface2: #585b70;
+            --overlay0: #6c7086;
+            --overlay1: #7f849c;
+            --text: #cdd6f4;
+            --subtext0: #a6adc8;
+            --subtext1: #bac2de;
+            --blue: #89b4fa;
+            --lavender: #b4befe;
+            --sapphire: #74c7ec;
+            --sky: #89dceb;
+            --teal: #94e2d5;
+            --green: #a6e3a1;
+            --yellow: #f9e2af;
+            --peach: #fab387;
+            --maroon: #eba0ac;
+            --red: #f38ba8;
+            --mauve: #cba6f7;
+            --pink: #f5c2e7;
+            --flamingo: #f2cdcd;
+            --rosewater: #f5e0dc;
+            --sidebar-width: 240px;
+            --preview-width: 320px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--base);
+            color: var(--text);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: var(--mantle);
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            border-bottom: 1px solid var(--surface0);
+            z-index: 100;
+            height: 52px;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-btn {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            color: var(--text);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .nav-btn:hover { background: var(--surface0); }
+        .nav-btn:disabled { opacity: 0.4; cursor: default; }
+        .nav-btn:disabled:hover { background: transparent; }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text);
+            padding: 0 8px;
+        }
+
+        .search-container {
+            flex: 1;
+            max-width: 480px;
+            position: relative;
+            margin: 0 auto;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 8px 12px 8px 36px;
+            background: var(--surface0);
+            border: 1px solid transparent;
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 13px;
+            outline: none;
+            transition: all 0.15s;
+        }
+
+        .search-input:focus {
+            border-color: var(--blue);
+            background: var(--surface1);
+        }
+
+        .search-input::placeholder { color: var(--overlay0); }
+
+        .search-icon {
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--overlay0);
+            width: 18px;
+            height: 18px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .view-toggle {
+            display: flex;
+            background: var(--surface0);
+            border-radius: 6px;
+            padding: 2px;
+        }
+
+        .view-btn {
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            color: var(--subtext0);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .view-btn:hover { color: var(--text); }
+        .view-btn.active { background: var(--blue); color: var(--crust); }
+
+        /* Main Layout */
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: var(--mantle);
+            border-right: 1px solid var(--surface0);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        .sidebar-section { padding: 12px 8px 4px; }
+
+        .sidebar-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--overlay0);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+            padding: 0 8px;
+        }
+
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            color: var(--text);
+            text-decoration: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s;
+            font-size: 13px;
+            margin: 1px 0;
+        }
+
+        .sidebar-item:hover { background: var(--surface0); }
+        .sidebar-item.active { background: var(--blue); color: var(--crust); }
+        .sidebar-item .icon { width: 18px; height: 18px; flex-shrink: 0; }
+
+        .sidebar-divider {
+            height: 1px;
+            background: var(--surface0);
+            margin: 8px 12px;
+        }
+
+        .sidebar-storage {
+            padding: 12px 16px;
+            margin-top: auto;
+            border-top: 1px solid var(--surface0);
+        }
+
+        .storage-label {
+            font-size: 11px;
+            color: var(--subtext0);
+            margin-bottom: 6px;
+        }
+
+        .storage-bar {
+            height: 4px;
+            background: var(--surface0);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .storage-fill {
+            height: 100%;
+            background: var(--blue);
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+
+        .storage-text {
+            font-size: 11px;
+            color: var(--overlay0);
+            margin-top: 4px;
+        }
+
+        /* Content Area */
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-width: 0;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--base);
+            border-bottom: 1px solid var(--surface0);
+            min-height: 44px;
+        }
+
+        .breadcrumbs {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            flex: 1;
+            overflow-x: auto;
+            padding: 4px 0;
+        }
+
+        .breadcrumbs::-webkit-scrollbar { display: none; }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            padding: 4px 10px;
+            background: var(--surface0);
+            border-radius: 4px;
+            color: var(--text);
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+            white-space: nowrap;
+        }
+
+        .breadcrumb:hover { background: var(--surface1); }
+        .breadcrumb-sep { color: var(--overlay0); padding: 0 2px; font-size: 10px; }
+
+        .toolbar-actions { display: flex; gap: 6px; }
+
+        .toolbar-btn {
+            padding: 6px 12px;
+            background: var(--surface0);
+            border: none;
+            color: var(--text);
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.15s;
+        }
+
+        .toolbar-btn:hover { background: var(--surface1); }
+        .toolbar-btn.primary { background: var(--blue); color: var(--crust); }
+        .toolbar-btn.primary:hover { background: var(--sapphire); }
+        .toolbar-btn .icon { width: 14px; height: 14px; }
+
+        /* Sort dropdown */
+        .sort-dropdown {
+            position: relative;
+        }
+
+        .sort-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: var(--mantle);
+            border: 1px solid var(--surface0);
+            border-radius: 8px;
+            padding: 4px;
+            min-width: 160px;
+            z-index: 100;
+            display: none;
+            margin-top: 4px;
+        }
+
+        .sort-menu.visible { display: block; }
+
+        .sort-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.15s;
+        }
+
+        .sort-option:hover { background: var(--surface0); }
+        .sort-option.active { color: var(--blue); }
+
+        /* Files Container */
+        .files-wrapper {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .files-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        /* Grid View */
+        .files-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 8px;
+        }
+
+        .file-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 8px;
+            background: transparent;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+            position: relative;
+            min-width: 0;
+        }
+
+        .file-item:hover { background: var(--surface0); }
+        .file-item.selected { background: rgba(137, 180, 250, 0.15); border-color: var(--blue); }
+        .file-item.dragging { opacity: 0.5; }
+        .file-item.drag-over { background: var(--surface1); border-color: var(--green); }
+        .file-item.cut { opacity: 0.5; }
+
+        .file-icon-wrapper {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 6px;
+            position: relative;
+        }
+
+        .file-icon-wrapper .icon { width: 40px; height: 40px; }
+        .folder-icon { color: var(--yellow); }
+        .image-icon { color: var(--green); }
+        .video-icon { color: var(--red); }
+        .audio-icon { color: var(--mauve); }
+        .text-icon { color: var(--text); }
+        .code-icon { color: var(--sapphire); }
+        .archive-icon { color: var(--peach); }
+
+        .file-thumbnail {
+            width: 48px;
+            height: 48px;
+            object-fit: cover;
+            border-radius: 4px;
+        }
+
+        .file-name {
+            font-size: 11px;
+            text-align: center;
+            word-break: break-word;
+            max-width: 100%;
+            line-height: 1.3;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .file-checkbox {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: 18px;
+            height: 18px;
+            background: var(--surface0);
+            border: 2px solid var(--surface1);
+            border-radius: 4px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .file-item:hover .file-checkbox,
+        .file-item.selected .file-checkbox { display: flex; }
+        .file-item.selected .file-checkbox { background: var(--blue); border-color: var(--blue); }
+        .file-item.selected .file-checkbox .icon { color: var(--crust); }
+
+        /* List View */
+        .files-list { display: flex; flex-direction: column; }
+
+        .files-list-header {
+            display: grid;
+            grid-template-columns: 32px 1fr 100px 140px 100px;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--surface0);
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--subtext0);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .files-list-header span {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .files-list-header span:hover { color: var(--text); }
+        .files-list-header .sort-indicator { width: 12px; height: 12px; }
+
+        .files-list .file-item {
+            display: grid;
+            grid-template-columns: 32px 1fr 100px 140px 100px;
+            gap: 8px;
+            padding: 8px 12px;
+            flex-direction: row;
+            align-items: center;
+            border-radius: 0;
+            border-bottom: 1px solid var(--surface0);
+        }
+
+        .files-list .file-item:hover { background: var(--surface0); border-radius: 6px; }
+
+        .files-list .file-icon-wrapper {
+            width: 24px;
+            height: 24px;
+            margin-bottom: 0;
+        }
+
+        .files-list .file-icon-wrapper .icon { width: 20px; height: 20px; }
+
+        .files-list .file-name {
+            text-align: left;
+            font-size: 13px;
+            -webkit-line-clamp: 1;
+        }
+
+        .files-list .file-meta {
+            font-size: 12px;
+            color: var(--subtext0);
+        }
+
+        .files-list .file-checkbox {
+            position: relative;
+            top: auto;
+            left: auto;
+            display: none;
+        }
+
+        .files-list .file-item:hover .file-checkbox,
+        .files-list .file-item.selected .file-checkbox { display: flex; }
+
+        /* Preview Panel */
+        .preview-panel {
+            width: var(--preview-width);
+            background: var(--mantle);
+            border-left: 1px solid var(--surface0);
+            padding: 16px;
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        .preview-panel.visible { display: flex; }
+
+        .preview-header { text-align: center; padding-bottom: 12px; }
+
+        .preview-icon-large {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 12px;
+        }
+
+        .preview-thumbnail {
+            max-width: 100%;
+            max-height: 180px;
+            object-fit: contain;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .preview-name {
+            font-size: 14px;
+            font-weight: 600;
+            word-break: break-word;
+            margin-bottom: 4px;
+        }
+
+        .preview-type {
+            font-size: 11px;
+            color: var(--subtext0);
+        }
+
+        .preview-section {
+            border-top: 1px solid var(--surface0);
+            padding-top: 12px;
+        }
+
+        .preview-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--overlay0);
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .preview-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .preview-row .label { color: var(--subtext0); }
+
+        .preview-content {
+            background: var(--surface0);
+            padding: 10px;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 11px;
+            max-height: 180px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .preview-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: auto;
+            padding-top: 12px;
+        }
+
+        .preview-actions button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: background 0.15s;
+        }
+
+        .preview-actions .btn-primary { background: var(--blue); color: var(--crust); }
+        .preview-actions .btn-secondary { background: var(--surface0); color: var(--text); }
+        .preview-actions button:hover { filter: brightness(1.1); }
+
+        /* Context Menu */
+        .context-menu {
+            position: fixed;
+            background: var(--mantle);
+            border: 1px solid var(--surface0);
+            border-radius: 8px;
+            padding: 4px;
+            min-width: 200px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            display: none;
+        }
+
+        .context-menu.visible { display: block; }
+
+        .context-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+            font-size: 13px;
+            border-radius: 4px;
+        }
+
+        .context-menu-item:hover { background: var(--surface0); }
+        .context-menu-item.danger { color: var(--red); }
+        .context-menu-item.disabled { opacity: 0.4; pointer-events: none; }
+        .context-menu-item .icon { width: 16px; height: 16px; }
+        .context-menu-item .shortcut { margin-left: auto; font-size: 11px; color: var(--overlay0); }
+        .context-menu-divider { height: 1px; background: var(--surface0); margin: 4px 8px; }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+
+        .modal-overlay.visible { display: flex; }
+
+        .modal {
+            background: var(--mantle);
+            border-radius: 12px;
+            padding: 20px;
+            min-width: 360px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .modal-title { font-size: 16px; font-weight: 600; }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--overlay0);
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .modal-close:hover { color: var(--text); }
+
+        .modal-content { margin-bottom: 16px; }
+
+        .modal-input {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--surface0);
+            border: 1px solid var(--surface1);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+        }
+
+        .modal-input:focus { border-color: var(--blue); }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .modal-btn.secondary { background: var(--surface0); color: var(--text); }
+        .modal-btn.secondary:hover { background: var(--surface1); }
+        .modal-btn.primary { background: var(--blue); color: var(--crust); }
+        .modal-btn.primary:hover { background: var(--sapphire); }
+        .modal-btn.danger { background: var(--red); color: var(--crust); }
+
+        /* Upload */
+        .upload-area {
+            border: 2px dashed var(--surface1);
+            border-radius: 8px;
+            padding: 32px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .upload-area:hover,
+        .upload-area.drag-over { border-color: var(--blue); background: var(--surface0); }
+        .upload-icon { width: 48px; height: 48px; color: var(--overlay0); margin-bottom: 8px; }
+        .upload-text { color: var(--subtext0); font-size: 13px; }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 48px;
+            color: var(--overlay0);
+        }
+
+        .empty-state .icon { width: 48px; height: 48px; margin-bottom: 12px; }
+        .empty-state .text { font-size: 14px; }
+
+        /* Loading */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid var(--surface0);
+            border-top-color: var(--blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 3000;
+        }
+
+        .toast {
+            background: var(--mantle);
+            border: 1px solid var(--surface0);
+            padding: 10px 16px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            animation: slideIn 0.2s ease;
+        }
+
+        .toast.success { border-color: var(--green); }
+        .toast.error { border-color: var(--red); }
+        .toast .icon { width: 16px; height: 16px; }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Search Results */
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--mantle);
+            border: 1px solid var(--surface0);
+            border-radius: 8px;
+            margin-top: 4px;
+            max-height: 320px;
+            overflow-y: auto;
+            display: none;
+            z-index: 200;
+        }
+
+        .search-results.visible { display: block; }
+
+        .search-result-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+            font-size: 13px;
+        }
+
+        .search-result-item:hover { background: var(--surface0); }
+        .search-result-item .icon { width: 18px; height: 18px; flex-shrink: 0; }
+        .search-result-item .name { flex: 1; }
+        .search-result-item .path { font-size: 11px; color: var(--overlay0); }
+
+        /* Status Bar */
+        .status-bar {
+            background: var(--mantle);
+            border-top: 1px solid var(--surface0);
+            padding: 6px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: var(--subtext0);
+        }
+
+        .status-bar .selection-info { color: var(--blue); }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--surface2); }
+
+        #file-input { display: none; }
+
+        /* Selection box */
+        .selection-box {
+            position: fixed;
+            border: 1px solid var(--blue);
+            background: rgba(137, 180, 250, 0.1);
+            pointer-events: none;
+            z-index: 50;
+            display: none;
+        }
+
+        /* Drop indicator */
+        .drop-indicator {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(137, 180, 250, 0.1);
+            border: 3px dashed var(--blue);
+            pointer-events: none;
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .drop-indicator.visible { display: flex; }
+        .drop-indicator-text {
+            background: var(--mantle);
+            padding: 16px 24px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <button class="nav-btn" id="btn-back" title="Back">
+                <i data-feather="arrow-left"></i>
+            </button>
+            <button class="nav-btn" id="btn-forward" title="Forward">
+                <i data-feather="arrow-right"></i>
+            </button>
+            <div class="header-title">
+                <i data-feather="folder"></i>
+                <span>Files</span>
+            </div>
+        </div>
+        <div class="search-container">
+            <i data-feather="search" class="search-icon"></i>
+            <input type="text" class="search-input" id="search-input" placeholder="Search files and folders...">
+            <div class="search-results" id="search-results"></div>
+        </div>
+        <div class="header-actions">
+            <div class="view-toggle">
+                <button class="view-btn active" id="btn-grid" title="Grid View">
+                    <i data-feather="grid"></i>
+                </button>
+                <button class="view-btn" id="btn-list" title="List View">
+                    <i data-feather="list"></i>
+                </button>
+            </div>
+            <button class="nav-btn" id="btn-preview" title="Toggle Preview Panel">
+                <i data-feather="sidebar"></i>
+            </button>
+            <button class="nav-btn" id="btn-settings" title="Settings">
+                <i data-feather="more-vertical"></i>
+            </button>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-title">Locations</div>
+                <div id="locations-list"></div>
+            </div>
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-section">
+                <div class="sidebar-title">Bookmarks</div>
+                <div id="bookmarks-list"></div>
+            </div>
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-section">
+                <div class="sidebar-item" data-action="recent">
+                    <i data-feather="clock" class="icon"></i>
+                    Recent
+                </div>
+                <div class="sidebar-item" data-action="trash">
+                    <i data-feather="trash-2" class="icon"></i>
+                    Trash
+                </div>
+            </div>
+            <div class="sidebar-storage" id="storage-info">
+                <div class="storage-label">Storage</div>
+                <div class="storage-bar"><div class="storage-fill" style="width: 0%"></div></div>
+                <div class="storage-text">Loading...</div>
+            </div>
+        </aside>
+
+        <main class="content-area">
+            <div class="toolbar">
+                <div class="breadcrumbs" id="breadcrumbs"></div>
+                <div class="toolbar-actions">
+                    <div class="sort-dropdown">
+                        <button class="toolbar-btn" id="btn-sort">
+                            <i data-feather="arrow-down" class="icon"></i>
+                            <span id="sort-label">Name</span>
+                        </button>
+                        <div class="sort-menu" id="sort-menu">
+                            <div class="sort-option active" data-sort="name">Name</div>
+                            <div class="sort-option" data-sort="modified">Date Modified</div>
+                            <div class="sort-option" data-sort="size">Size</div>
+                            <div class="sort-option" data-sort="type">Type</div>
+                        </div>
+                    </div>
+                    <button class="toolbar-btn" id="btn-new-folder">
+                        <i data-feather="folder-plus" class="icon"></i>
+                        New Folder
+                    </button>
+                    <button class="toolbar-btn primary" id="btn-upload">
+                        <i data-feather="upload" class="icon"></i>
+                        Upload
+                    </button>
+                </div>
+            </div>
+
+            <div class="files-wrapper">
+                <div class="files-container" id="files-container">
+                    <div class="files-grid" id="files-grid"></div>
+                </div>
+                <div class="preview-panel" id="preview-panel"></div>
+            </div>
+        </main>
+    </div>
+
+    <div class="status-bar">
+        <span id="status-left">0 items</span>
+        <span id="status-selection" class="selection-info"></span>
+        <span id="status-right"></span>
+    </div>
+
+    <div class="context-menu" id="context-menu"></div>
+    <div class="selection-box" id="selection-box"></div>
+    <div class="drop-indicator" id="drop-indicator">
+        <div class="drop-indicator-text">Drop files to upload</div>
+    </div>
+
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal" id="modal"></div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+    <input type="file" id="file-input" multiple>
+
+    <script>
+        // Initialize Feather icons
+        feather.replace();
+
+        // State
+        const state = {
+            currentPath: '/',
+            items: [],
+            selected: new Set(),
+            clipboard: { items: [], action: null },
+            viewMode: 'grid',
+            showPreview: false,
+            showHidden: false,
+            sortBy: 'name',
+            sortOrder: 'asc',
+            history: ['/'],
+            historyIndex: 0,
+            locations: [],
+            bookmarks: [],
+            searchResults: [],
+            isTrash: false,
+            isRecent: false,
+        };
+
+        // DOM Elements
+        const filesGrid = document.getElementById('files-grid');
+        const filesContainer = document.getElementById('files-container');
+        const breadcrumbs = document.getElementById('breadcrumbs');
+        const previewPanel = document.getElementById('preview-panel');
+        const contextMenu = document.getElementById('context-menu');
+        const modalOverlay = document.getElementById('modal-overlay');
+        const modal = document.getElementById('modal');
+        const searchInput = document.getElementById('search-input');
+        const searchResults = document.getElementById('search-results');
+        const statusLeft = document.getElementById('status-left');
+        const statusSelection = document.getElementById('status-selection');
+        const statusRight = document.getElementById('status-right');
+        const fileInput = document.getElementById('file-input');
+        const locationsList = document.getElementById('locations-list');
+        const bookmarksList = document.getElementById('bookmarks-list');
+        const dropIndicator = document.getElementById('drop-indicator');
+
+        // API Functions
+        async function api(endpoint, options = {}) {
+            try {
+                const response = await fetch('/api' + endpoint, options);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'API Error');
+                }
+                return await response.json();
+            } catch (error) {
+                showToast(error.message, 'error');
+                throw error;
+            }
+        }
+
+        // Navigation
+        function navigateTo(path, addToHistory = true) {
+            if (path === '__recent__') {
+                loadRecent();
+            } else if (path === '__trash__') {
+                loadTrash();
+            } else {
+                loadDirectory(path, addToHistory);
+            }
+        }
+
+        async function loadDirectory(path = '/', addToHistory = true) {
+            state.currentPath = path;
+            state.isTrash = false;
+            state.isRecent = false;
+            state.selected.clear();
+            
+            if (addToHistory) {
+                state.history = state.history.slice(0, state.historyIndex + 1);
+                state.history.push(path);
+                state.historyIndex = state.history.length - 1;
+            }
+            updateNavButtons();
+            
+            filesGrid.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            
+            try {
+                const params = new URLSearchParams({
+                    path,
+                    hidden: state.showHidden,
+                    sort: state.sortBy,
+                    order: state.sortOrder
+                });
+                const data = await api('/list?' + params);
+                state.items = data.items;
+                renderBreadcrumbs(data.breadcrumbs);
+                renderFiles(data.items);
+                updateStatus();
+                updateSidebarActive(path);
+            } catch (error) {
+                filesGrid.innerHTML = '<div class="empty-state"><i data-feather="alert-circle" class="icon"></i><div class="text">Failed to load directory</div></div>';
+                feather.replace();
+            }
+        }
+
+        async function loadRecent() {
+            state.currentPath = '__recent__';
+            state.isTrash = false;
+            state.isRecent = true;
+            state.selected.clear();
+            
+            filesGrid.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            
+            try {
+                const data = await api('/recent');
+                state.items = data.items;
+                renderBreadcrumbs([{ name: 'Recent', path: '__recent__' }]);
+                renderFiles(data.items);
+                updateStatus();
+                updateSidebarActive('__recent__');
+            } catch (error) {
+                filesGrid.innerHTML = '<div class="empty-state"><i data-feather="alert-circle" class="icon"></i><div class="text">Failed to load recent files</div></div>';
+                feather.replace();
+            }
+        }
+
+        async function loadTrash() {
+            state.currentPath = '__trash__';
+            state.isTrash = true;
+            state.isRecent = false;
+            state.selected.clear();
+            
+            filesGrid.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            
+            try {
+                const data = await api('/trash');
+                state.items = data.items;
+                renderBreadcrumbs([{ name: 'Trash', path: '__trash__' }]);
+                renderFiles(data.items);
+                updateStatus();
+                updateSidebarActive('__trash__');
+            } catch (error) {
+                filesGrid.innerHTML = '<div class="empty-state"><i data-feather="alert-circle" class="icon"></i><div class="text">Failed to load trash</div></div>';
+                feather.replace();
+            }
+        }
+
+        async function loadLocations() {
+            try {
+                const data = await api('/locations');
+                state.locations = data.locations;
+                renderLocations();
+            } catch (error) {
+                console.error('Failed to load locations:', error);
+            }
+        }
+
+        async function loadBookmarks() {
+            try {
+                const data = await api('/bookmarks');
+                state.bookmarks = data.bookmarks;
+                renderBookmarks();
+            } catch (error) {
+                console.error('Failed to load bookmarks:', error);
+            }
+        }
+
+        async function loadStorageInfo() {
+            try {
+                const data = await api('/stats');
+                const storageInfo = document.getElementById('storage-info');
+                storageInfo.innerHTML = '<div class="storage-label">Storage</div><div class="storage-bar"><div class="storage-fill" style="width: ' + data.percentUsed + '%"></div></div><div class="storage-text">' + data.usedFormatted + ' of ' + data.totalFormatted + ' used</div>';
+            } catch (error) {
+                console.error('Failed to load storage info:', error);
+            }
+        }
+
+        // Render Functions
+        function renderBreadcrumbs(crumbs) {
+            breadcrumbs.innerHTML = crumbs.map((crumb, i) => {
+                const sep = i > 0 ? '<span class="breadcrumb-sep"><i data-feather="chevron-right"></i></span>' : '';
+                return sep + '<span class="breadcrumb" data-path="' + crumb.path + '">' + crumb.name + '</span>';
+            }).join('');
+
+            breadcrumbs.querySelectorAll('.breadcrumb').forEach(el => {
+                el.addEventListener('click', () => navigateTo(el.dataset.path));
+            });
+            feather.replace();
+        }
+
+        function renderLocations() {
+            const iconMap = {
+                'home': 'home',
+                'file-text': 'file-text',
+                'download': 'download',
+                'music': 'music',
+                'image': 'image',
+                'film': 'video'
+            };
+            
+            locationsList.innerHTML = state.locations.map(loc => {
+                const icon = iconMap[loc.icon] || 'folder';
+                return '<div class="sidebar-item" data-path="' + loc.path + '"><i data-feather="' + icon + '" class="icon"></i>' + loc.name + '</div>';
+            }).join('');
+
+            locationsList.querySelectorAll('.sidebar-item').forEach(el => {
+                el.addEventListener('click', () => navigateTo(el.dataset.path));
+            });
+            feather.replace();
+        }
+
+        function renderBookmarks() {
+            if (state.bookmarks.length === 0) {
+                bookmarksList.innerHTML = '<div style="font-size: 11px; color: var(--overlay0); padding: 8px 12px;">No bookmarks</div>';
+                return;
+            }
+            
+            bookmarksList.innerHTML = state.bookmarks.map(bm => {
+                return '<div class="sidebar-item" data-path="' + bm.path + '"><i data-feather="star" class="icon"></i>' + bm.name + '</div>';
+            }).join('');
+
+            bookmarksList.querySelectorAll('.sidebar-item').forEach(el => {
+                el.addEventListener('click', () => navigateTo(el.dataset.path));
+                el.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    showBookmarkContextMenu(e.clientX, e.clientY, el.dataset.path);
+                });
+            });
+            feather.replace();
+        }
+
+        function updateSidebarActive(path) {
+            document.querySelectorAll('.sidebar-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.path === path || el.dataset.action === path.replace('__', ''));
+            });
+        }
+
+        function renderFiles(items) {
+            if (items.length === 0) {
+                filesGrid.innerHTML = '<div class="empty-state"><i data-feather="folder" class="icon"></i><div class="text">This folder is empty</div></div>';
+                feather.replace();
+                return;
+            }
+
+            if (state.viewMode === 'grid') {
+                filesGrid.className = 'files-grid';
+                filesGrid.innerHTML = items.map(renderGridItem).join('');
+            } else {
+                filesGrid.className = 'files-list';
+                filesGrid.innerHTML = '<div class="files-list-header"><span></span><span data-sort="name">Name <i data-feather="chevron-down" class="sort-indicator"></i></span><span data-sort="size">Size</span><span data-sort="modified">Modified</span><span data-sort="type">Type</span></div>' + 
+                    items.map(renderListItem).join('');
+            }
+
+            setupFileEvents();
+            feather.replace();
+        }
+
+        function getIconClass(icon) {
+            const colorMap = {
+                'folder': 'folder-icon',
+                'image': 'image-icon',
+                'film': 'video-icon',
+                'music': 'audio-icon',
+                'file-text': 'text-icon',
+                'code': 'code-icon',
+                'archive': 'archive-icon',
+            };
+            return colorMap[icon] || '';
+        }
+
+        function renderGridItem(item) {
+            const isImage = item.mimeType && item.mimeType.startsWith('image/');
+            const content = isImage ? 
+                '<img class="file-thumbnail" src="/api/thumbnail?path=' + encodeURIComponent(item.path) + '&size=96" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" loading="lazy"><div class="file-icon-wrapper" style="display:none"><i data-feather="' + item.icon + '" class="icon ' + getIconClass(item.icon) + '"></i></div>' :
+                '<div class="file-icon-wrapper"><i data-feather="' + item.icon + '" class="icon ' + getIconClass(item.icon) + '"></i></div>';
+            
+            const cutClass = state.clipboard.action === 'cut' && state.clipboard.items.includes(item.path) ? ' cut' : '';
+            
+            return '<div class="file-item' + cutClass + '" data-path="' + item.path + '" data-name="' + item.name + '" data-is-dir="' + item.isDir + '" draggable="true"><div class="file-checkbox"><i data-feather="check" class="icon"></i></div>' + content + '<div class="file-name">' + item.name + '</div></div>';
+        }
+
+        function renderListItem(item) {
+            const size = item.isDir ? '--' : formatSize(item.size);
+            const modified = formatDate(item.modified);
+            const type = item.isDir ? 'Folder' : (item.extension ? item.extension.substring(1).toUpperCase() : 'File');
+            const cutClass = state.clipboard.action === 'cut' && state.clipboard.items.includes(item.path) ? ' cut' : '';
+            
+            return '<div class="file-item' + cutClass + '" data-path="' + item.path + '" data-name="' + item.name + '" data-is-dir="' + item.isDir + '" draggable="true"><div class="file-checkbox"><i data-feather="check" class="icon"></i></div><div class="file-icon-wrapper"><i data-feather="' + item.icon + '" class="icon ' + getIconClass(item.icon) + '"></i></div><div class="file-name">' + item.name + '</div><div class="file-meta">' + size + '</div><div class="file-meta">' + modified + '</div><div class="file-meta">' + type + '</div></div>';
+        }
+
+        function setupFileEvents() {
+            const fileItems = filesGrid.querySelectorAll('.file-item');
+            
+            fileItems.forEach(el => {
+                el.addEventListener('click', (e) => {
+                    if (e.target.closest('.file-checkbox')) {
+                        toggleSelect(el);
+                    } else if (e.ctrlKey || e.metaKey) {
+                        toggleSelect(el);
+                    } else if (e.shiftKey && state.selected.size > 0) {
+                        rangeSelect(el);
+                    } else {
+                        selectOnly(el);
+                    }
+                    updateSelection();
+                });
+
+                el.addEventListener('dblclick', () => {
+                    if (state.isTrash) return;
+                    openItem(el.dataset.path, el.dataset.isDir === 'true');
+                });
+
+                el.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    if (!state.selected.has(el.dataset.path)) {
+                        selectOnly(el);
+                        updateSelection();
+                    }
+                    showContextMenu(e.clientX, e.clientY);
+                });
+
+                el.addEventListener('dragstart', (e) => {
+                    if (!state.selected.has(el.dataset.path)) {
+                        selectOnly(el);
+                        updateSelection();
+                    }
+                    el.classList.add('dragging');
+                    e.dataTransfer.setData('text/plain', JSON.stringify(Array.from(state.selected)));
+                    e.dataTransfer.effectAllowed = 'move';
+                });
+
+                el.addEventListener('dragend', () => {
+                    el.classList.remove('dragging');
+                    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+                });
+
+                if (el.dataset.isDir === 'true') {
+                    el.addEventListener('dragover', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        el.classList.add('drag-over');
+                    });
+
+                    el.addEventListener('dragleave', (e) => {
+                        el.classList.remove('drag-over');
+                    });
+
+                    el.addEventListener('drop', async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        el.classList.remove('drag-over');
+                        const paths = JSON.parse(e.dataTransfer.getData('text/plain'));
+                        await moveItems(paths, el.dataset.path);
+                    });
+                }
+            });
+        }
+
+        // Selection
+        function selectOnly(el) {
+            state.selected.clear();
+            filesGrid.querySelectorAll('.file-item').forEach(item => item.classList.remove('selected'));
+            state.selected.add(el.dataset.path);
+            el.classList.add('selected');
+        }
+
+        function toggleSelect(el) {
+            if (state.selected.has(el.dataset.path)) {
+                state.selected.delete(el.dataset.path);
+                el.classList.remove('selected');
+            } else {
+                state.selected.add(el.dataset.path);
+                el.classList.add('selected');
+            }
+        }
+
+        function rangeSelect(el) {
+            const items = Array.from(filesGrid.querySelectorAll('.file-item'));
+            const lastSelected = items.find(item => state.selected.has(item.dataset.path));
+            if (!lastSelected) {
+                selectOnly(el);
+                return;
+            }
+            const currentIndex = items.indexOf(el);
+            const lastIndex = items.indexOf(lastSelected);
+            const start = Math.min(currentIndex, lastIndex);
+            const end = Math.max(currentIndex, lastIndex);
+            
+            for (let i = start; i <= end; i++) {
+                state.selected.add(items[i].dataset.path);
+                items[i].classList.add('selected');
+            }
+        }
+
+        function selectAll() {
+            filesGrid.querySelectorAll('.file-item').forEach(el => {
+                state.selected.add(el.dataset.path);
+                el.classList.add('selected');
+            });
+            updateSelection();
+        }
+
+        function clearSelection() {
+            state.selected.clear();
+            filesGrid.querySelectorAll('.file-item').forEach(el => el.classList.remove('selected'));
+            updateSelection();
+        }
+
+        function updateSelection() {
+            const count = state.selected.size;
+            if (count > 0) {
+                const items = state.items.filter(i => state.selected.has(i.path));
+                const totalSize = items.reduce((sum, i) => sum + (i.isDir ? 0 : i.size), 0);
+                statusSelection.textContent = count + ' selected' + (totalSize > 0 ? ' (' + formatSize(totalSize) + ')' : '');
+            } else {
+                statusSelection.textContent = '';
+            }
+            updatePreview();
+        }
+
+        function updateNavButtons() {
+            document.getElementById('btn-back').disabled = state.historyIndex <= 0;
+            document.getElementById('btn-forward').disabled = state.historyIndex >= state.history.length - 1;
+        }
+
+        // File Operations
+        function openItem(path, isDir) {
+            if (isDir) {
+                navigateTo(path);
+            } else {
+                window.open('/api/file?path=' + encodeURIComponent(path), '_blank');
+            }
+        }
+
+        async function deleteSelected() {
+            if (state.selected.size === 0) return;
+            
+            const count = state.selected.size;
+            const permanent = state.isTrash;
+            const message = permanent ? 
+                'This will permanently delete ' + count + ' item(s). This cannot be undone.' :
+                'Move ' + count + ' item(s) to Trash?';
+            
+            const confirmed = await showConfirmModal(permanent ? 'Delete Permanently?' : 'Move to Trash?', message, permanent);
+            
+            if (confirmed) {
+                try {
+                    await api('/delete-multiple', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ paths: Array.from(state.selected), permanent })
+                    });
+                    state.isTrash ? loadTrash() : loadDirectory(state.currentPath, false);
+                    showToast(permanent ? 'Deleted permanently' : 'Moved to Trash', 'success');
+                } catch (error) {
+                    // Error already shown by api()
+                }
+            }
+        }
+
+        async function createFolder() {
+            const name = await showInputModal('New Folder', 'Enter folder name:', 'New Folder');
+            if (name) {
+                try {
+                    await api('/mkdir', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: state.currentPath, name })
+                    });
+                    loadDirectory(state.currentPath, false);
+                    showToast('Folder created', 'success');
+                } catch (error) {
+                    // Error already shown
+                }
+            }
+        }
+
+        async function renameItem(path) {
+            const item = state.items.find(i => i.path === path);
+            const name = await showInputModal('Rename', 'Enter new name:', item.name);
+            if (name && name !== item.name) {
+                try {
+                    await api('/rename', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path, name })
+                    });
+                    loadDirectory(state.currentPath, false);
+                    showToast('Renamed successfully', 'success');
+                } catch (error) {
+                    // Error already shown
+                }
+            }
+        }
+
+        function copySelected() {
+            state.clipboard.items = Array.from(state.selected);
+            state.clipboard.action = 'copy';
+            showToast(state.clipboard.items.length + ' item(s) copied', 'success');
+            renderFiles(state.items);
+        }
+
+        function cutSelected() {
+            state.clipboard.items = Array.from(state.selected);
+            state.clipboard.action = 'cut';
+            showToast(state.clipboard.items.length + ' item(s) cut', 'success');
+            renderFiles(state.items);
+        }
+
+        async function paste() {
+            if (state.clipboard.items.length === 0) return;
+            
+            const endpoint = state.clipboard.action === 'copy' ? '/copy' : '/move';
+            
+            try {
+                for (const source of state.clipboard.items) {
+                    await api(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ source, destination: state.currentPath })
+                    });
+                }
+                
+                if (state.clipboard.action === 'cut') {
+                    state.clipboard.items = [];
+                    state.clipboard.action = null;
+                }
+                
+                loadDirectory(state.currentPath, false);
+                showToast('Items pasted', 'success');
+            } catch (error) {
+                // Error already shown
+            }
+        }
+
+        async function moveItems(paths, destination) {
+            try {
+                for (const source of paths) {
+                    if (source !== destination) {
+                        await api('/move', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ source, destination })
+                        });
+                    }
+                }
+                loadDirectory(state.currentPath, false);
+                showToast('Moved ' + paths.length + ' item(s)', 'success');
+            } catch (error) {
+                // Error already shown
+            }
+        }
+
+        async function compressSelected() {
+            if (state.selected.size === 0) return;
+            
+            const name = await showInputModal('Create Archive', 'Archive name:', 'archive.zip');
+            if (name) {
+                try {
+                    await api('/compress', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            paths: Array.from(state.selected),
+                            name: name.endsWith('.zip') ? name : name + '.zip',
+                            destination: state.currentPath
+                        })
+                    });
+                    loadDirectory(state.currentPath, false);
+                    showToast('Archive created', 'success');
+                } catch (error) {
+                    // Error already shown
+                }
+            }
+        }
+
+        async function extractArchive(path) {
+            try {
+                await api('/decompress', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path, destination: state.currentPath })
+                });
+                loadDirectory(state.currentPath, false);
+                showToast('Extracted successfully', 'success');
+            } catch (error) {
+                // Error already shown
+            }
+        }
+
+        async function addBookmark() {
+            const path = state.selected.size === 1 ? Array.from(state.selected)[0] : state.currentPath;
+            const item = state.items.find(i => i.path === path);
+            
+            if (!item || !item.isDir) {
+                showToast('Can only bookmark folders', 'error');
+                return;
+            }
+            
+            try {
+                await api('/bookmarks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path, name: item.name })
+                });
+                loadBookmarks();
+                showToast('Bookmark added', 'success');
+            } catch (error) {
+                // Error already shown
+            }
+        }
+
+        async function removeBookmark(path) {
+            try {
+                await api('/bookmarks?path=' + encodeURIComponent(path), { method: 'DELETE' });
+                loadBookmarks();
+                showToast('Bookmark removed', 'success');
+            } catch (error) {
+                // Error already shown
+            }
+        }
+
+        async function restoreFromTrash() {
+            if (state.selected.size === 0) return;
+            
+            try {
+                for (const path of state.selected) {
+                    await api('/trash/restore', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path })
+                    });
+                }
+                loadTrash();
+                showToast('Items restored', 'success');
+            } catch (error) {
+                // Error already shown
+            }
+        }
+
+        async function emptyTrash() {
+            const confirmed = await showConfirmModal('Empty Trash?', 'All items in Trash will be permanently deleted. This cannot be undone.', true);
+            if (confirmed) {
+                try {
+                    await api('/trash/empty', { method: 'DELETE' });
+                    loadTrash();
+                    showToast('Trash emptied', 'success');
+                } catch (error) {
+                    // Error already shown
+                }
+            }
+        }
+
+        // Upload
+        async function uploadFiles(files) {
+            const formData = new FormData();
+            formData.append('path', state.currentPath);
+            
+            for (let i = 0; i < files.length; i++) {
+                formData.append('file' + i, files[i]);
+            }
+            
+            showToast('Uploading ' + files.length + ' file(s)...', 'info');
+            
+            try {
+                await api('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                loadDirectory(state.currentPath, false);
+                showToast('Upload complete', 'success');
+            } catch (error) {
+                // Error already shown
+            }
+        }
+
+        // Preview
+        async function updatePreview() {
+            if (!state.showPreview) return;
+            
+            if (state.selected.size !== 1) {
+                previewPanel.innerHTML = '<div class="empty-state"><i data-feather="file" class="icon"></i><div class="text">Select a file to preview</div></div>';
+                feather.replace();
+                return;
+            }
+            
+            const path = Array.from(state.selected)[0];
+            const item = state.items.find(i => i.path === path);
+            
+            if (!item) return;
+            
+            try {
+                const preview = await api('/preview?path=' + encodeURIComponent(path));
+                renderPreview(preview);
+            } catch (error) {
+                previewPanel.innerHTML = '<div class="empty-state"><i data-feather="alert-circle" class="icon"></i><div class="text">Cannot preview this file</div></div>';
+                feather.replace();
+            }
+        }
+
+        function renderPreview(preview) {
+            const info = preview.info;
+            let contentHtml = '';
+            
+            if (preview.contentType === 'image') {
+                contentHtml = '<img class="preview-thumbnail" src="' + preview.content + '" alt="Preview">';
+            } else if (preview.contentType === 'text' && preview.content) {
+                const escaped = escapeHtml(preview.content.substring(0, 3000));
+                contentHtml = '<div class="preview-section"><div class="preview-section-title">Content</div><pre class="preview-content">' + escaped + '</pre></div>';
+            } else if (preview.contentType === 'video') {
+                contentHtml = '<div class="preview-section"><div style="text-align: center; padding: 20px; color: var(--overlay0);"><i data-feather="video" style="width: 48px; height: 48px;"></i><div style="margin-top: 8px;">Video file</div></div></div>';
+            }
+            
+            previewPanel.innerHTML = '<div class="preview-header"><div class="preview-icon-large"><i data-feather="' + info.icon + '" style="width: 100%; height: 100%;" class="' + getIconClass(info.icon) + '"></i></div><div class="preview-name">' + info.name + '</div><div class="preview-type">' + info.mimeType + '</div></div>' + contentHtml + '<div class="preview-section"><div class="preview-section-title">Information</div><div class="preview-row"><span class="label">Size</span><span>' + formatSize(info.size) + '</span></div><div class="preview-row"><span class="label">Modified</span><span>' + formatDate(info.modified) + '</span></div><div class="preview-row"><span class="label">Created</span><span>' + formatDate(info.created) + '</span></div><div class="preview-row"><span class="label">Permissions</span><span>' + info.permissions + '</span></div></div><div class="preview-actions"><button class="btn-secondary" onclick="openItem(\'' + info.path + '\', false)"><i data-feather="external-link" class="icon"></i>Open</button><button class="btn-primary" onclick="window.location.href=\'/api/file?path=' + encodeURIComponent(info.path) + '&download=true\'"><i data-feather="download" class="icon"></i>Download</button></div>';
+            feather.replace();
+        }
+
+        // Context Menu
+        function showContextMenu(x, y) {
+            const selectedCount = state.selected.size;
+            const selectedPath = Array.from(state.selected)[0];
+            const item = state.items.find(i => i.path === selectedPath);
+            
+            let menuItems = [];
+            
+            if (state.isTrash) {
+                menuItems = [
+                    { icon: 'rotate-ccw', label: 'Restore', action: restoreFromTrash },
+                    { divider: true },
+                    { icon: 'trash-2', label: 'Delete Permanently', action: deleteSelected, danger: true }
+                ];
+            } else {
+                menuItems = [
+                    { icon: 'folder', label: 'Open', action: () => openItem(selectedPath, item?.isDir), shortcut: 'Enter' },
+                    { icon: 'external-link', label: 'Open in New Tab', action: () => window.open('/api/file?path=' + encodeURIComponent(selectedPath), '_blank') },
+                    { divider: true },
+                    { icon: 'scissors', label: 'Cut', action: cutSelected, shortcut: 'Ctrl+X' },
+                    { icon: 'copy', label: 'Copy', action: copySelected, shortcut: 'Ctrl+C' },
+                    { icon: 'clipboard', label: 'Paste', action: paste, shortcut: 'Ctrl+V', disabled: state.clipboard.items.length === 0 },
+                    { divider: true },
+                    { icon: 'edit-2', label: 'Rename', action: () => renameItem(selectedPath), shortcut: 'F2', disabled: selectedCount !== 1 },
+                    { icon: 'trash-2', label: 'Move to Trash', action: deleteSelected, shortcut: 'Del', danger: true },
+                    { divider: true },
+                    { icon: 'archive', label: 'Compress', action: compressSelected, disabled: selectedCount === 0 },
+                ];
+                
+                if (item && (item.extension === '.zip' || item.extension === '.tar' || item.extension === '.gz')) {
+                    menuItems.push({ icon: 'package', label: 'Extract Here', action: () => extractArchive(selectedPath) });
+                }
+                
+                menuItems.push({ divider: true });
+                
+                if (item && item.isDir) {
+                    menuItems.push({ icon: 'star', label: 'Add to Bookmarks', action: addBookmark });
+                }
+                
+                menuItems.push({ icon: 'info', label: 'Properties', action: showProperties, disabled: selectedCount !== 1 });
+            }
+            
+            renderContextMenu(menuItems, x, y);
+        }
+
+        function showEmptyContextMenu(x, y) {
+            const menuItems = [
+                { icon: 'folder-plus', label: 'New Folder', action: createFolder },
+                { icon: 'upload', label: 'Upload Files', action: showUploadModal },
+                { divider: true },
+                { icon: 'clipboard', label: 'Paste', action: paste, shortcut: 'Ctrl+V', disabled: state.clipboard.items.length === 0 },
+                { divider: true },
+                { icon: 'check-square', label: 'Select All', action: selectAll, shortcut: 'Ctrl+A' },
+                { icon: 'refresh-cw', label: 'Refresh', action: () => loadDirectory(state.currentPath, false) },
+                { divider: true },
+                { icon: 'star', label: 'Add Current to Bookmarks', action: addBookmark }
+            ];
+            
+            renderContextMenu(menuItems, x, y);
+        }
+
+        function showBookmarkContextMenu(x, y, path) {
+            const menuItems = [
+                { icon: 'folder', label: 'Open', action: () => navigateTo(path) },
+                { divider: true },
+                { icon: 'x', label: 'Remove Bookmark', action: () => removeBookmark(path), danger: true }
+            ];
+            
+            renderContextMenu(menuItems, x, y);
+        }
+
+        function renderContextMenu(menuItems, x, y) {
+            contextMenu.innerHTML = menuItems.map(item => {
+                if (item.divider) return '<div class="context-menu-divider"></div>';
+                const className = 'context-menu-item' + (item.danger ? ' danger' : '') + (item.disabled ? ' disabled' : '');
+                const shortcut = item.shortcut ? '<span class="shortcut">' + item.shortcut + '</span>' : '';
+                return '<div class="' + className + '" data-action="' + item.label + '"><i data-feather="' + item.icon + '" class="icon"></i><span>' + item.label + '</span>' + shortcut + '</div>';
+            }).join('');
+            
+            menuItems.forEach(item => {
+                if (!item.divider && !item.disabled && item.action) {
+                    const el = contextMenu.querySelector('[data-action="' + item.label + '"]');
+                    if (el) el.addEventListener('click', () => {
+                        hideContextMenu();
+                        item.action();
+                    });
+                }
+            });
+            
+            const menuWidth = 220;
+            const menuHeight = 300;
+            contextMenu.style.left = Math.min(x, window.innerWidth - menuWidth) + 'px';
+            contextMenu.style.top = Math.min(y, window.innerHeight - menuHeight) + 'px';
+            contextMenu.classList.add('visible');
+            feather.replace();
+        }
+
+        function hideContextMenu() {
+            contextMenu.classList.remove('visible');
+        }
+
+        // Search
+        let searchTimeout;
+        async function search(query) {
+            if (!query) {
+                searchResults.classList.remove('visible');
+                return;
+            }
+            
+            try {
+                const data = await api('/search?q=' + encodeURIComponent(query) + '&limit=20');
+                state.searchResults = data.results;
+                renderSearchResults();
+            } catch (error) {
+                console.error('Search failed:', error);
+            }
+        }
+
+        function renderSearchResults() {
+            if (state.searchResults.length === 0) {
+                searchResults.innerHTML = '<div class="search-result-item"><i data-feather="search" class="icon"></i><span class="name">No results found</span></div>';
+            } else {
+                searchResults.innerHTML = state.searchResults.map(item => '<div class="search-result-item" data-path="' + item.path + '" data-is-dir="' + item.isDir + '"><i data-feather="' + item.icon + '" class="icon ' + getIconClass(item.icon) + '"></i><span class="name">' + item.name + '</span><span class="path">' + item.path + '</span></div>').join('');
+                
+                searchResults.querySelectorAll('.search-result-item').forEach(el => {
+                    el.addEventListener('click', () => {
+                        searchResults.classList.remove('visible');
+                        searchInput.value = '';
+                        if (el.dataset.isDir === 'true') {
+                            navigateTo(el.dataset.path);
+                        } else {
+                            const parentPath = el.dataset.path.substring(0, el.dataset.path.lastIndexOf('/')) || '/';
+                            navigateTo(parentPath);
+                        }
+                    });
+                });
+            }
+            searchResults.classList.add('visible');
+            feather.replace();
+        }
+
+        // Properties
+        async function showProperties() {
+            const path = Array.from(state.selected)[0];
+            const info = await api('/info?path=' + encodeURIComponent(path));
+            
+            let contents = '';
+            if (info.contents) {
+                contents = '<div style="margin-top: 8px;"><span style="color: var(--subtext0);">Contents:</span> ' + info.contents.files + ' files, ' + info.contents.folders + ' folders</div>';
+            }
+            
+            const content = '<div style="text-align: center; margin-bottom: 16px;"><i data-feather="' + info.icon + '" style="width: 48px; height: 48px;" class="' + getIconClass(info.icon) + '"></i></div><div style="display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: 13px;"><span style="color: var(--subtext0);">Name:</span><span>' + info.name + '</span><span style="color: var(--subtext0);">Type:</span><span>' + (info.isDir ? 'Folder' : info.mimeType) + '</span><span style="color: var(--subtext0);">Size:</span><span>' + info.sizeFormatted + '</span><span style="color: var(--subtext0);">Location:</span><span style="word-break: break-all;">' + info.path + '</span><span style="color: var(--subtext0);">Modified:</span><span>' + formatDate(info.modified) + '</span><span style="color: var(--subtext0);">Created:</span><span>' + formatDate(info.created) + '</span><span style="color: var(--subtext0);">Permissions:</span><span>' + info.permissions + '</span></div>' + contents;
+            
+            showModal('Properties - ' + info.name, content, [{ label: 'Close', primary: true }]);
+            feather.replace();
+        }
+
+        // Modals
+        function showModal(title, content, buttons) {
+            modal.innerHTML = '<div class="modal-header"><span class="modal-title">' + title + '</span><button class="modal-close"><i data-feather="x"></i></button></div><div class="modal-content">' + content + '</div><div class="modal-actions">' + buttons.map(btn => '<button class="modal-btn ' + (btn.primary ? 'primary' : btn.danger ? 'danger' : 'secondary') + '" data-action="' + btn.label + '">' + btn.label + '</button>').join('') + '</div>';
+            
+            modalOverlay.classList.add('visible');
+            feather.replace();
+            
+            modal.querySelector('.modal-close').addEventListener('click', hideModal);
+            
+            return new Promise(resolve => {
+                buttons.forEach(btn => {
+                    modal.querySelector('[data-action="' + btn.label + '"]').addEventListener('click', () => {
+                        hideModal();
+                        resolve(btn.label);
+                    });
+                });
+            });
+        }
+
+        function hideModal() {
+            modalOverlay.classList.remove('visible');
+        }
+
+        async function showInputModal(title, message, defaultValue = '') {
+            const content = '<p style="margin-bottom: 12px; color: var(--subtext0); font-size: 13px;">' + message + '</p><input type="text" class="modal-input" id="modal-input" value="' + escapeHtml(defaultValue) + '">';
+            
+            modal.innerHTML = '<div class="modal-header"><span class="modal-title">' + title + '</span><button class="modal-close"><i data-feather="x"></i></button></div><div class="modal-content">' + content + '</div><div class="modal-actions"><button class="modal-btn secondary" data-action="Cancel">Cancel</button><button class="modal-btn primary" data-action="OK">OK</button></div>';
+            
+            modalOverlay.classList.add('visible');
+            feather.replace();
+            
+            const input = document.getElementById('modal-input');
+            setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 100);
+            
+            modal.querySelector('.modal-close').addEventListener('click', hideModal);
+            
+            return new Promise(resolve => {
+                modal.querySelector('[data-action="Cancel"]').addEventListener('click', () => {
+                    hideModal();
+                    resolve(null);
+                });
+                modal.querySelector('[data-action="OK"]').addEventListener('click', () => {
+                    hideModal();
+                    resolve(input.value);
+                });
+                input.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        hideModal();
+                        resolve(input.value);
+                    }
+                });
+            });
+        }
+
+        async function showConfirmModal(title, message, isDanger = false) {
+            const result = await showModal(title, '<p style="color: var(--subtext0); font-size: 13px;">' + message + '</p>', [
+                { label: 'Cancel' },
+                { label: isDanger ? 'Delete' : 'Confirm', danger: isDanger, primary: !isDanger }
+            ]);
+            return result === 'Delete' || result === 'Confirm';
+        }
+
+        function showUploadModal() {
+            const content = '<div class="upload-area" id="upload-area"><i data-feather="upload-cloud" class="upload-icon"></i><div class="upload-text">Drop files here or click to browse</div></div>';
+            
+            modal.innerHTML = '<div class="modal-header"><span class="modal-title">Upload Files</span><button class="modal-close"><i data-feather="x"></i></button></div><div class="modal-content">' + content + '</div><div class="modal-actions"><button class="modal-btn secondary" data-action="Cancel">Cancel</button></div>';
+            
+            modalOverlay.classList.add('visible');
+            feather.replace();
+            
+            modal.querySelector('.modal-close').addEventListener('click', hideModal);
+            modal.querySelector('[data-action="Cancel"]').addEventListener('click', hideModal);
+            
+            const uploadArea = document.getElementById('upload-area');
+            
+            uploadArea.addEventListener('click', () => fileInput.click());
+            
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('drag-over');
+            });
+            
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('drag-over');
+            });
+            
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('drag-over');
+                hideModal();
+                uploadFiles(e.dataTransfer.files);
+            });
+        }
+
+        // Toast
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            const iconMap = { success: 'check-circle', error: 'alert-circle', info: 'info' };
+            toast.innerHTML = '<i data-feather="' + iconMap[type] + '" class="icon"></i><span>' + message + '</span>';
+            document.getElementById('toast-container').appendChild(toast);
+            feather.replace();
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.2s ease reverse';
+                setTimeout(() => toast.remove(), 200);
+            }, 3000);
+        }
+
+        // Utility
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function formatDate(isoString) {
+            const date = new Date(isoString);
+            const now = new Date();
+            const diff = now - date;
+            
+            if (diff < 60000) return 'Just now';
+            if (diff < 3600000) return Math.floor(diff / 60000) + ' min ago';
+            if (diff < 86400000) return Math.floor(diff / 3600000) + ' hours ago';
+            if (diff < 604800000) return Math.floor(diff / 86400000) + ' days ago';
+            
+            return date.toLocaleDateString();
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function updateStatus() {
+            const totalSize = state.items.reduce((sum, item) => sum + (item.isDir ? 0 : item.size), 0);
+            statusLeft.textContent = state.items.length + ' item' + (state.items.length !== 1 ? 's' : '');
+            statusRight.textContent = formatSize(totalSize);
+        }
+
+        // Event Listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            loadLocations();
+            loadBookmarks();
+            loadStorageInfo();
+            loadDirectory('/');
+            
+            // Navigation
+            document.getElementById('btn-back').addEventListener('click', () => {
+                if (state.historyIndex > 0) {
+                    state.historyIndex--;
+                    navigateTo(state.history[state.historyIndex], false);
+                }
+            });
+            
+            document.getElementById('btn-forward').addEventListener('click', () => {
+                if (state.historyIndex < state.history.length - 1) {
+                    state.historyIndex++;
+                    navigateTo(state.history[state.historyIndex], false);
+                }
+            });
+            
+            // View mode
+            document.getElementById('btn-grid').addEventListener('click', () => {
+                state.viewMode = 'grid';
+                document.getElementById('btn-grid').classList.add('active');
+                document.getElementById('btn-list').classList.remove('active');
+                renderFiles(state.items);
+            });
+            
+            document.getElementById('btn-list').addEventListener('click', () => {
+                state.viewMode = 'list';
+                document.getElementById('btn-list').classList.add('active');
+                document.getElementById('btn-grid').classList.remove('active');
+                renderFiles(state.items);
+            });
+            
+            document.getElementById('btn-preview').addEventListener('click', () => {
+                state.showPreview = !state.showPreview;
+                document.getElementById('btn-preview').classList.toggle('active');
+                previewPanel.classList.toggle('visible');
+                updatePreview();
+            });
+            
+            // Sort
+            document.getElementById('btn-sort').addEventListener('click', () => {
+                document.getElementById('sort-menu').classList.toggle('visible');
+            });
+            
+            document.querySelectorAll('.sort-option').forEach(el => {
+                el.addEventListener('click', () => {
+                    const sortBy = el.dataset.sort;
+                    if (state.sortBy === sortBy) {
+                        state.sortOrder = state.sortOrder === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        state.sortBy = sortBy;
+                        state.sortOrder = 'asc';
+                    }
+                    document.querySelectorAll('.sort-option').forEach(o => o.classList.remove('active'));
+                    el.classList.add('active');
+                    document.getElementById('sort-label').textContent = el.textContent;
+                    document.getElementById('sort-menu').classList.remove('visible');
+                    loadDirectory(state.currentPath, false);
+                });
+            });
+            
+            // Toolbar buttons
+            document.getElementById('btn-new-folder').addEventListener('click', createFolder);
+            document.getElementById('btn-upload').addEventListener('click', showUploadModal);
+            
+            // Sidebar actions
+            document.querySelector('[data-action="recent"]').addEventListener('click', loadRecent);
+            document.querySelector('[data-action="trash"]').addEventListener('click', loadTrash);
+            
+            // File input
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    hideModal();
+                    uploadFiles(e.target.files);
+                    e.target.value = '';
+                }
+            });
+            
+            // Search
+            searchInput.addEventListener('input', (e) => {
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => search(e.target.value), 300);
+            });
+            
+            searchInput.addEventListener('focus', () => {
+                if (searchInput.value) search(searchInput.value);
+            });
+            
+            // Click outside handlers
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.context-menu')) hideContextMenu();
+                if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
+                if (!e.target.closest('.sort-dropdown')) document.getElementById('sort-menu').classList.remove('visible');
+            });
+            
+            // Click on empty area
+            filesContainer.addEventListener('click', (e) => {
+                if (e.target === filesContainer || e.target === filesGrid || e.target.classList.contains('files-grid') || e.target.classList.contains('files-list')) {
+                    clearSelection();
+                }
+            });
+            
+            filesContainer.addEventListener('contextmenu', (e) => {
+                if (e.target === filesContainer || e.target === filesGrid || e.target.classList.contains('files-grid') || e.target.classList.contains('files-list')) {
+                    e.preventDefault();
+                    clearSelection();
+                    if (!state.isTrash && !state.isRecent) {
+                        showEmptyContextMenu(e.clientX, e.clientY);
+                    }
+                }
+            });
+            
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'INPUT') return;
+                
+                if (e.ctrlKey || e.metaKey) {
+                    switch(e.key.toLowerCase()) {
+                        case 'a':
+                            e.preventDefault();
+                            selectAll();
+                            break;
+                        case 'c':
+                            e.preventDefault();
+                            copySelected();
+                            break;
+                        case 'x':
+                            e.preventDefault();
+                            cutSelected();
+                            break;
+                        case 'v':
+                            e.preventDefault();
+                            paste();
+                            break;
+                        case 'f':
+                            e.preventDefault();
+                            searchInput.focus();
+                            break;
+                        case 'n':
+                            e.preventDefault();
+                            createFolder();
+                            break;
+                    }
+                } else {
+                    switch(e.key) {
+                        case 'Delete':
+                            e.preventDefault();
+                            deleteSelected();
+                            break;
+                        case 'F2':
+                            e.preventDefault();
+                            if (state.selected.size === 1) {
+                                renameItem(Array.from(state.selected)[0]);
+                            }
+                            break;
+                        case 'Enter':
+                            e.preventDefault();
+                            if (state.selected.size === 1 && !state.isTrash) {
+                                const path = Array.from(state.selected)[0];
+                                const item = state.items.find(i => i.path === path);
+                                if (item) openItem(path, item.isDir);
+                            }
+                            break;
+                        case 'Escape':
+                            clearSelection();
+                            hideContextMenu();
+                            searchResults.classList.remove('visible');
+                            document.getElementById('sort-menu').classList.remove('visible');
+                            break;
+                        case 'Backspace':
+                            e.preventDefault();
+                            if (state.historyIndex > 0) {
+                                state.historyIndex--;
+                                navigateTo(state.history[state.historyIndex], false);
+                            }
+                            break;
+                    }
+                }
+            });
+            
+            // Drag and drop for uploads
+            document.body.addEventListener('dragover', (e) => {
+                if (e.dataTransfer.types.includes('Files')) {
+                    e.preventDefault();
+                    dropIndicator.classList.add('visible');
+                }
+            });
+            
+            document.body.addEventListener('dragleave', (e) => {
+                if (e.relatedTarget === null || !document.body.contains(e.relatedTarget)) {
+                    dropIndicator.classList.remove('visible');
+                }
+            });
+            
+            document.body.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropIndicator.classList.remove('visible');
+                if (e.dataTransfer.files.length > 0 && !state.isTrash && !state.isRecent) {
+                    uploadFiles(e.dataTransfer.files);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

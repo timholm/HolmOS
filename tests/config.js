@@ -242,8 +242,40 @@ const config = {
     }
 };
 
-// Helper function to build service URL
+// NodePort mappings for external access
+config.nodePorts = {
+    'holmos-shell': 30000,
+    'app-store': 30002,
+    'chat-hub': 30003,
+    'nova': 30004,
+    'auth-gateway': 30100,
+    'file-web-nautilus': 30088,
+    'terminal-web': 30800,
+    'audiobook-web': 30700,
+    'settings-web': 30600,
+    'cluster-manager': 30502,
+    'backup-dashboard': 30850,
+    'scribe': 30860,
+    'vault': 30870,
+    'test-dashboard': 30900,
+    'metrics-dashboard': 30950,
+    'registry-ui': 31750,
+    'calculator-app': 30010,
+    'clock-app': 30011,
+    'gateway': 30080,
+    'notification-hub': 30300,
+    'cicd-controller': 30020,
+    'deploy-controller': 30021,
+    'holm-git': 30500,
+};
+
+// Helper function to build service URL (uses NodePort if available, otherwise cluster DNS)
 config.getServiceUrl = (serviceName, port = 80, path = '/health') => {
+    // Use NodePort for external access (GitHub Actions, local dev)
+    if (config.nodePorts[serviceName]) {
+        return `http://${config.cluster.host}:${config.nodePorts[serviceName]}${path}`;
+    }
+    // Fallback to cluster DNS (only works inside cluster)
     return `http://${serviceName}.${config.cluster.namespace}.svc.cluster.local:${port}${path}`;
 };
 

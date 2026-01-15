@@ -10,27 +10,19 @@ on:
         description: 'Service to deploy (or "all")'
         required: true
         default: 'all'
-      action:
-        description: 'Action'
-        required: true
-        default: 'deploy'
-        type: choice
-        options:
-          - deploy
-          - rollback
-          - restart
 
 env:
-  REGISTRY: 10.110.67.87:5000
+  REGISTRY: localhost:31500
   PI_HOST: 192.168.8.197
-  PI_USER: rpi1
 
 jobs:
   detect:
+    name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       services: ${{ steps.set-matrix.outputs.services }}
+      has_services: ${{ steps.set-matrix.outputs.has_services }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,21 +32,19 @@ jobs:
         id: set-matrix
         run: |
           if [ "${{ github.event.inputs.service }}" = "all" ]; then
-            # Build all services with Dockerfiles
             SERVICES=$(find services -name "Dockerfile" -exec dirname {} \; | xargs -I {} basename {} | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
           elif [ -n "${{ github.event.inputs.service }}" ]; then
             SERVICES="[\"${{ github.event.inputs.service }}\"]"
           else
-            # Detect changed services
             SERVICES=$(git diff --name-only HEAD~1 HEAD -- services/ 2>/dev/null | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
           fi
 
-          # Handle empty services
           if [ -z "$SERVICES" ] || [ "$SERVICES" = "[]" ] || [ "$SERVICES" = '[""]' ]; then
-            SERVICES='[]'
-            MATRIX='{"include":[]}'
+            echo "has_services=false" >> $GITHUB_OUTPUT
+            echo "services=[]" >> $GITHUB_OUTPUT
+            echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
           else
-            # Create matrix with service metadata
+            echo "has_services=true" >> $GITHUB_OUTPUT
             MATRIX='{"include":[]}'
             for svc in $(echo "$SERVICES" | jq -r '.[]'); do
               if [ -f "services/$svc/Dockerfile" ]; then
@@ -65,15 +55,14 @@ jobs:
                 MATRIX=$(echo "$MATRIX" | jq -c --arg s "$svc" --arg l "$SLANG" '.include += [{"service": $s, "lang": $l}]')
               fi
             done
+            echo "services=$(echo "$SERVICES" | jq -c .)" >> $GITHUB_OUTPUT
+            echo "matrix=$(echo "$MATRIX" | jq -c .)" >> $GITHUB_OUTPUT
           fi
 
-          # Output as single lines (compact JSON)
-          echo "services=$(echo "$SERVICES" | jq -c .)" >> $GITHUB_OUTPUT
-          echo "matrix=$(echo "$MATRIX" | jq -c .)" >> $GITHUB_OUTPUT
-
   build:
+    name: Build ${{ matrix.service }}
     needs: detect
-    if: needs.detect.outputs.services != '[]' && needs.detect.outputs.services != '[""]'
+    if: needs.detect.outputs.has_services == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
@@ -114,125 +103,37 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      - name: Upload image
+      - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
           name: image-${{ matrix.service }}
           path: /tmp/${{ matrix.service }}.tar
-          retention-days: 1
+          retention-days: 7
 
-  deploy:
+  summary:
+    name: Build Summary
     needs: [detect, build]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
-      fail-fast: false
-      max-parallel: 2
-    environment: production
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download image
-        uses: actions/download-artifact@v4
-        with:
-          name: image-${{ matrix.service }}
-          path: /tmp
-
-      - name: Deploy ${{ matrix.service }}
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y sshpass
-
-          # Copy image
-          sshpass -p "$PI_PASSWORD" scp -o StrictHostKeyChecking=no \
-            /tmp/${{ matrix.service }}.tar \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }}:/tmp/
-
-          # Deploy
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }} << 'DEPLOY'
-
-          set -e
-          SERVICE="${{ matrix.service }}"
-          TAG="${{ github.sha }}"
-          REGISTRY="${{ env.REGISTRY }}"
-
-          echo "=== Deploying $SERVICE ==="
-
-          # Load image into containerd
-          sudo ctr -n k8s.io images import /tmp/${SERVICE}.tar 2>/dev/null || true
-
-          # Check if deployment exists
-          if kubectl get deployment ${SERVICE} -n holm &>/dev/null; then
-            # Save current image for rollback
-            CURRENT=$(kubectl get deployment ${SERVICE} -n holm -o jsonpath='{.spec.template.spec.containers[0].image}')
-            kubectl annotate deployment ${SERVICE} -n holm holmos.io/previous-image="$CURRENT" --overwrite
-
-            # Update image
-            kubectl set image deployment/${SERVICE} ${SERVICE}=${REGISTRY}/${SERVICE}:${TAG} -n holm
-
-            # Wait for rollout
-            kubectl rollout status deployment/${SERVICE} -n holm --timeout=120s || {
-              echo "Rollout failed, initiating rollback"
-              kubectl rollout undo deployment/${SERVICE} -n holm
-              exit 1
-            }
-          else
-            echo "Deployment not found, creating..."
-            cat <<EOF | kubectl apply -f -
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: ${SERVICE}
-            namespace: holm
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: ${SERVICE}
-            template:
-              metadata:
-                labels:
-                  app: ${SERVICE}
-              spec:
-                containers:
-                - name: ${SERVICE}
-                  image: ${REGISTRY}/${SERVICE}:${TAG}
-                  ports:
-                  - containerPort: 8080
-          EOF
-          fi
-
-          # Cleanup
-          rm -f /tmp/${SERVICE}.tar
-
-          echo "=== $SERVICE deployed successfully ==="
-          DEPLOY
-
-      - name: Health check
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
-        run: |
-          sleep 10
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }} \
-            "kubectl get pods -n holm -l app=${{ matrix.service }} -o wide"
-
-  notify:
-    needs: [detect, deploy]
-    runs-on: ubuntu-latest
     if: always()
+    runs-on: ubuntu-latest
     steps:
-      - name: Summary
+      - name: Generate summary
         run: |
-          echo "## 🚀 HolmOS Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 HolmOS Build Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Services:** ${{ needs.detect.outputs.services }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The Pi cluster is on a private network and cannot be reached from GitHub Actions." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**To deploy manually:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Download artifacts from Actions tab, then on Pi:" >> $GITHUB_STEP_SUMMARY
+          echo "sudo ctr -n k8s.io images import <service>.tar" >> $GITHUB_STEP_SUMMARY
+          echo "kubectl rollout restart deployment/<service> -n holm" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Access Points" >> $GITHUB_STEP_SUMMARY
-          echo "- HolmOS Shell: http://192.168.8.197:30000" >> $GITHUB_STEP_SUMMARY
-          echo "- Nova Dashboard: http://192.168.8.197:30004" >> $GITHUB_STEP_SUMMARY
+          echo "- HolmOS Shell: http://${{ env.PI_HOST }}:30000" >> $GITHUB_STEP_SUMMARY
+          echo "- Nova Dashboard: http://${{ env.PI_HOST }}:30004" >> $GITHUB_STEP_SUMMARY

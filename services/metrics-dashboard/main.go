@@ -28,182 +28,182 @@ var (
 
 // Data structures
 type MetricPoint struct {
-	Timestamp time.Time \`json:"timestamp"\`
-	Value     float64   \`json:"value"\`
-	Node      string    \`json:"node,omitempty"\`
+	Timestamp time.Time `json:"timestamp"`
+	Value     float64   `json:"value"`
+	Node      string    `json:"node,omitempty"`
 }
 
 type NodeMetrics struct {
-	Name      string  \`json:"name"\`
-	CPUCores  float64 \`json:"cpu_cores"\`
-	CPUPct    float64 \`json:"cpu_pct"\`
-	MemoryMB  float64 \`json:"memory_mb"\`
-	MemoryPct float64 \`json:"memory_pct"\`
-	Pods      int     \`json:"pods"\`
-	Status    string  \`json:"status"\`
+	Name      string  `json:"name"`
+	CPUCores  float64 `json:"cpu_cores"`
+	CPUPct    float64 `json:"cpu_pct"`
+	MemoryMB  float64 `json:"memory_mb"`
+	MemoryPct float64 `json:"memory_pct"`
+	Pods      int     `json:"pods"`
+	Status    string  `json:"status"`
 }
 
 type PodMetrics struct {
-	Name       string  \`json:"name"\`
-	Namespace  string  \`json:"namespace"\`
-	Node       string  \`json:"node"\`
-	CPUm       float64 \`json:"cpu_m"\`
-	MemoryMB   float64 \`json:"memory_mb"\`
-	Status     string  \`json:"status"\`
-	Deployment string  \`json:"deployment"\`
+	Name       string  `json:"name"`
+	Namespace  string  `json:"namespace"`
+	Node       string  `json:"node"`
+	CPUm       float64 `json:"cpu_m"`
+	MemoryMB   float64 `json:"memory_mb"`
+	Status     string  `json:"status"`
+	Deployment string  `json:"deployment"`
 }
 
 type DeploymentMetrics struct {
-	Name       string       \`json:"name"\`
-	Namespace  string       \`json:"namespace"\`
-	Replicas   int          \`json:"replicas"\`
-	Ready      int          \`json:"ready"\`
-	CPUTotal   float64      \`json:"cpu_total"\`
-	MemoryMB   float64      \`json:"memory_mb"\`
-	PodMetrics []PodMetrics \`json:"pods"\`
+	Name       string       `json:"name"`
+	Namespace  string       `json:"namespace"`
+	Replicas   int          `json:"replicas"`
+	Ready      int          `json:"ready"`
+	CPUTotal   float64      `json:"cpu_total"`
+	MemoryMB   float64      `json:"memory_mb"`
+	PodMetrics []PodMetrics `json:"pods"`
 }
 
 type ClusterSummary struct {
-	TotalNodes       int     \`json:"total_nodes"\`
-	ReadyNodes       int     \`json:"ready_nodes"\`
-	TotalPods        int     \`json:"total_pods"\`
-	TotalDeployments int     \`json:"total_deployments"\`
-	TotalCPUCores    float64 \`json:"total_cpu_cores"\`
-	UsedCPUCores     float64 \`json:"used_cpu_cores"\`
-	TotalMemoryGB    float64 \`json:"total_memory_gb"\`
-	UsedMemoryGB     float64 \`json:"used_memory_gb"\`
-	CPUPct           float64 \`json:"cpu_pct"\`
-	MemoryPct        float64 \`json:"memory_pct"\`
+	TotalNodes       int     `json:"total_nodes"`
+	ReadyNodes       int     `json:"ready_nodes"`
+	TotalPods        int     `json:"total_pods"`
+	TotalDeployments int     `json:"total_deployments"`
+	TotalCPUCores    float64 `json:"total_cpu_cores"`
+	UsedCPUCores     float64 `json:"used_cpu_cores"`
+	TotalMemoryGB    float64 `json:"total_memory_gb"`
+	UsedMemoryGB     float64 `json:"used_memory_gb"`
+	CPUPct           float64 `json:"cpu_pct"`
+	MemoryPct        float64 `json:"memory_pct"`
 }
 
 type AlertRule struct {
-	ID        string    \`json:"id"\`
-	Name      string    \`json:"name"\`
-	Metric    string    \`json:"metric"\`
-	Condition string    \`json:"condition"\`
-	Threshold float64   \`json:"threshold"\`
-	Node      string    \`json:"node"\`
-	Enabled   bool      \`json:"enabled"\`
-	Created   time.Time \`json:"created"\`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Metric    string    `json:"metric"`
+	Condition string    `json:"condition"`
+	Threshold float64   `json:"threshold"`
+	Node      string    `json:"node"`
+	Enabled   bool      `json:"enabled"`
+	Created   time.Time `json:"created"`
 }
 
 type TriggeredAlert struct {
-	ID        string    \`json:"id"\`
-	RuleID    string    \`json:"rule_id"\`
-	RuleName  string    \`json:"rule_name"\`
-	Message   string    \`json:"message"\`
-	Value     float64   \`json:"value"\`
-	Threshold float64   \`json:"threshold"\`
-	Timestamp time.Time \`json:"timestamp"\`
-	Resolved  bool      \`json:"resolved"\`
+	ID        string    `json:"id"`
+	RuleID    string    `json:"rule_id"`
+	RuleName  string    `json:"rule_name"`
+	Message   string    `json:"message"`
+	Value     float64   `json:"value"`
+	Threshold float64   `json:"threshold"`
+	Timestamp time.Time `json:"timestamp"`
+	Resolved  bool      `json:"resolved"`
 }
 
 // K8s API response structures
 type K8sNodeMetricsList struct {
-	Items []K8sNodeMetric \`json:"items"\`
+	Items []K8sNodeMetric `json:"items"`
 }
 
 type K8sNodeMetric struct {
 	Metadata struct {
-		Name string \`json:"name"\`
-	} \`json:"metadata"\`
+		Name string `json:"name"`
+	} `json:"metadata"`
 	Usage struct {
-		CPU    string \`json:"cpu"\`
-		Memory string \`json:"memory"\`
-	} \`json:"usage"\`
+		CPU    string `json:"cpu"`
+		Memory string `json:"memory"`
+	} `json:"usage"`
 }
 
 type K8sPodMetricsList struct {
-	Items []K8sPodMetric \`json:"items"\`
+	Items []K8sPodMetric `json:"items"`
 }
 
 type K8sPodMetric struct {
 	Metadata struct {
-		Name      string \`json:"name"\`
-		Namespace string \`json:"namespace"\`
-	} \`json:"metadata"\`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"metadata"`
 	Containers []struct {
-		Name  string \`json:"name"\`
+		Name  string `json:"name"`
 		Usage struct {
-			CPU    string \`json:"cpu"\`
-			Memory string \`json:"memory"\`
-		} \`json:"usage"\`
-	} \`json:"containers"\`
+			CPU    string `json:"cpu"`
+			Memory string `json:"memory"`
+		} `json:"usage"`
+	} `json:"containers"`
 }
 
 type K8sNodeList struct {
-	Items []K8sNode \`json:"items"\`
+	Items []K8sNode `json:"items"`
 }
 
 type K8sNode struct {
 	Metadata struct {
-		Name string \`json:"name"\`
-	} \`json:"metadata"\`
+		Name string `json:"name"`
+	} `json:"metadata"`
 	Status struct {
 		Conditions []struct {
-			Type   string \`json:"type"\`
-			Status string \`json:"status"\`
-		} \`json:"conditions"\`
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
 		Capacity struct {
-			CPU    string \`json:"cpu"\`
-			Memory string \`json:"memory"\`
-		} \`json:"capacity"\`
+			CPU    string `json:"cpu"`
+			Memory string `json:"memory"`
+		} `json:"capacity"`
 		Allocatable struct {
-			CPU    string \`json:"cpu"\`
-			Memory string \`json:"memory"\`
-		} \`json:"allocatable"\`
-	} \`json:"status"\`
+			CPU    string `json:"cpu"`
+			Memory string `json:"memory"`
+		} `json:"allocatable"`
+	} `json:"status"`
 }
 
 type K8sPodList struct {
-	Items []K8sPod \`json:"items"\`
+	Items []K8sPod `json:"items"`
 }
 
 type K8sPod struct {
 	Metadata struct {
-		Name            string            \`json:"name"\`
-		Namespace       string            \`json:"namespace"\`
+		Name            string            `json:"name"`
+		Namespace       string            `json:"namespace"`
 		OwnerReferences []struct {
-			Kind string \`json:"kind"\`
-			Name string \`json:"name"\`
-		} \`json:"ownerReferences"\`
-	} \`json:"metadata"\`
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"ownerReferences"`
+	} `json:"metadata"`
 	Spec struct {
-		NodeName string \`json:"nodeName"\`
-	} \`json:"spec"\`
+		NodeName string `json:"nodeName"`
+	} `json:"spec"`
 	Status struct {
-		Phase string \`json:"phase"\`
-	} \`json:"status"\`
+		Phase string `json:"phase"`
+	} `json:"status"`
 }
 
 type K8sDeploymentList struct {
-	Items []K8sDeployment \`json:"items"\`
+	Items []K8sDeployment `json:"items"`
 }
 
 type K8sDeployment struct {
 	Metadata struct {
-		Name      string \`json:"name"\`
-		Namespace string \`json:"namespace"\`
-	} \`json:"metadata"\`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"metadata"`
 	Spec struct {
-		Replicas int \`json:"replicas"\`
-	} \`json:"spec"\`
+		Replicas int `json:"replicas"`
+	} `json:"spec"`
 	Status struct {
-		Replicas      int \`json:"replicas"\`
-		ReadyReplicas int \`json:"readyReplicas"\`
-	} \`json:"status"\`
+		Replicas      int `json:"replicas"`
+		ReadyReplicas int `json:"readyReplicas"`
+	} `json:"status"`
 }
 
 // PrometheusResponse for historical queries
 type PrometheusResponse struct {
-	Status string \`json:"status"\`
+	Status string `json:"status"`
 	Data   struct {
-		ResultType string \`json:"resultType"\`
+		ResultType string `json:"resultType"`
 		Result     []struct {
-			Metric map[string]string \`json:"metric"\`
-			Values [][]interface{}   \`json:"values"\`
-		} \`json:"result"\`
-	} \`json:"data"\`
+			Metric map[string]string `json:"metric"`
+			Values [][]interface{}   `json:"values"`
+		} `json:"result"`
+	} `json:"data"`
 }
 
 // K8s API client

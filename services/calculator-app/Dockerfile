@@ -1,4 +1,4 @@
-FROM registry.registry.svc.cluster.local:5000/golang:1.21-alpine AS builder
+FROM public.ecr.aws/docker/library/golang:1.21-alpine AS builder
 WORKDIR /app
 COPY go.mod ./
 COPY main.go .
@@ -6,7 +6,7 @@ COPY index.html .
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o calculator-app .
 
-FROM alpine:latest
+FROM public.ecr.aws/docker/library/alpine:3.19
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /app/calculator-app .

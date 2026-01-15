@@ -108,31 +108,42 @@ func getTags(repo string) ([]string, error) {
 }
 
 func getManifest(repo, tag string) (*ManifestResponse, string, error) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/v2/%s/manifests/%s", registryURL, repo, tag), nil)
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("manifest fetch returned status %d", resp.StatusCode)
+	// Try OCI manifest first (buildah/podman), then Docker v2
+	acceptHeaders := []string{
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
 	}
 
-	digest := resp.Header.Get("Docker-Content-Digest")
+	client := &http.Client{Timeout: 10 * time.Second}
 
-	var manifest ManifestResponse
-	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
-		return nil, digest, err
+	for _, accept := range acceptHeaders {
+		req, err := http.NewRequest("GET", fmt.Sprintf("%s/v2/%s/manifests/%s", registryURL, repo, tag), nil)
+		if err != nil {
+			return nil, "", err
+		}
+		req.Header.Set("Accept", accept)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+
+		digest := resp.Header.Get("Docker-Content-Digest")
+
+		var manifest ManifestResponse
+		if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+			return nil, digest, err
+		}
+
+		return &manifest, digest, nil
 	}
 
-	return &manifest, digest, nil
+	return nil, "", fmt.Errorf("no supported manifest format found")
 }
 
 func deleteManifest(repo, digest string) error {

@@ -14,7 +14,7 @@ func serveDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(dashboardHTML))
 }
 
-const dashboardHTML = \`<!DOCTYPE html>
+const dashboardHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -356,4 +356,4 @@ const dashboardHTML = \`<!DOCTYPE html>
         init();
     </script>
 </body>
-</html>\`
+</html>`

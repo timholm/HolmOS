@@ -7,16 +7,31 @@ import threading
 import subprocess
 import os
 import concurrent.futures
+import socket
 
 app = Flask(__name__)
 CORS(app)
 
-# Service URLs
-NODE_LIST_URL = "http://cluster-node-list.holm:8080/"
-NODE_PING_URL = "http://cluster-node-ping.holm:8080/"
-APT_UPDATE_URL = "http://cluster-apt-update.holm:8080/update"
-REBOOT_URL = "http://cluster-reboot-exec.holm:8080/reboot"
+# Terminal service URL
 TERMINAL_URL = "http://terminal-web.holm:8080"
+
+# Known cluster nodes - statically configured for HolmOS cluster
+# This can be extended to read from a config file or Kubernetes
+KNOWN_NODES = [
+    {"hostname": "rpi-1", "ip": "192.168.8.197"},
+    {"hostname": "rpi-2", "ip": "192.168.8.201"},
+    {"hostname": "rpi-3", "ip": "192.168.8.202"},
+    {"hostname": "rpi-4", "ip": "192.168.8.203"},
+    {"hostname": "rpi-5", "ip": "192.168.8.204"},
+    {"hostname": "rpi-6", "ip": "192.168.8.205"},
+    {"hostname": "rpi-7", "ip": "192.168.8.206"},
+    {"hostname": "rpi-8", "ip": "192.168.8.207"},
+    {"hostname": "rpi-9", "ip": "192.168.8.208"},
+    {"hostname": "rpi-10", "ip": "192.168.8.209"},
+    {"hostname": "rpi-11", "ip": "192.168.8.210"},
+    {"hostname": "rpi-12", "ip": "192.168.8.211"},
+    {"hostname": "openmediavault", "ip": "192.168.8.199"},
+]
 
 # Cache for node status
 node_cache = {
@@ -31,22 +46,32 @@ operations = {}
 operation_lock = threading.Lock()
 
 def get_node_list():
-    """Fetch list of all nodes from cluster-node-list service"""
-    try:
-        resp = requests.get(NODE_LIST_URL, timeout=5)
-        if resp.status_code == 200:
-            return resp.json()
-    except Exception as e:
-        print(f"Error fetching node list: {e}")
-    return []
+    """Get list of all known nodes"""
+    return KNOWN_NODES.copy()
 
 def ping_node(ip):
-    """Ping a single node to check if online"""
+    """Ping a single node to check if online using ICMP ping"""
     try:
-        resp = requests.post(NODE_PING_URL, json={"host": ip}, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("status") == "online", data.get("latency_ms", 0)
+        start_time = time.time()
+        # Use subprocess to ping - works on Linux
+        result = subprocess.run(
+            ["ping", "-c", "1", "-W", "2", ip],
+            capture_output=True,
+            timeout=3
+        )
+        latency = round((time.time() - start_time) * 1000, 1)
+        if result.returncode == 0:
+            # Try to extract actual latency from ping output
+            output = result.stdout.decode()
+            if "time=" in output:
+                try:
+                    time_part = output.split("time=")[1].split()[0]
+                    latency = float(time_part.replace("ms", ""))
+                except:
+                    pass
+            return True, latency
+    except subprocess.TimeoutExpired:
+        pass
     except Exception as e:
         print(f"Error pinging {ip}: {e}")
     return False, 0
@@ -122,6 +147,34 @@ def api_ping_node(hostname):
     online, latency = ping_node(node.get("ip", ""))
     return jsonify({"success": True, "data": {"hostname": hostname, "online": online, "latency_ms": latency}})
 
+def run_ssh_command(ip, command, timeout=60):
+    """Run a command on a remote node via SSH"""
+    ssh_user = os.environ.get("SSH_USER", "rpi1")
+    ssh_password = os.environ.get("SSH_PASSWORD", "19209746")
+
+    try:
+        # Use sshpass for password-based SSH
+        result = subprocess.run(
+            ["sshpass", "-p", ssh_password, "ssh",
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "ConnectTimeout=10",
+             f"{ssh_user}@{ip}", command],
+            capture_output=True,
+            timeout=timeout
+        )
+        return {
+            "success": result.returncode == 0,
+            "output": result.stdout.decode() if result.stdout else "",
+            "error": result.stderr.decode() if result.stderr else "",
+            "exit_code": result.returncode
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Command timed out", "exit_code": -1}
+    except FileNotFoundError:
+        return {"success": False, "error": "sshpass not installed", "exit_code": -1}
+    except Exception as e:
+        return {"success": False, "error": str(e), "exit_code": -1}
+
 @app.route("/api/v1/nodes/<hostname>/update", methods=["POST"])
 def api_update_node(hostname):
     """Trigger apt update on a specific node"""
@@ -135,19 +188,16 @@ def api_update_node(hostname):
     if not node:
         return jsonify({"success": False, "error": "Node not found"}), 404
 
-    try:
-        resp = requests.post(APT_UPDATE_URL, json={"ip": node["ip"]}, timeout=300)
-        data = resp.json()
-        return jsonify({
-            "success": data.get("status") == "success",
-            "data": {
-                "hostname": hostname,
-                "output": data.get("output", ""),
-                "exit_code": data.get("exit_code", -1)
-            }
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+    result = run_ssh_command(node["ip"], "sudo apt update && sudo apt upgrade -y", timeout=300)
+
+    return jsonify({
+        "success": result["success"],
+        "data": {
+            "hostname": hostname,
+            "output": result.get("output", "")[:2000],
+            "exit_code": result.get("exit_code", -1)
+        }
+    })
 
 @app.route("/api/v1/nodes/<hostname>/reboot", methods=["POST"])
 def api_reboot_node(hostname):
@@ -162,27 +212,19 @@ def api_reboot_node(hostname):
     if not node:
         return jsonify({"success": False, "error": "Node not found"}), 404
 
-    try:
-        # The reboot call may not return a response since the node reboots
-        resp = requests.post(REBOOT_URL, json={"ip": node["ip"]}, timeout=10)
-        return jsonify({
-            "success": True,
-            "data": {
-                "hostname": hostname,
-                "message": "Reboot initiated"
-            }
-        })
-    except requests.exceptions.Timeout:
-        # Timeout is expected for reboot
-        return jsonify({
-            "success": True,
-            "data": {
-                "hostname": hostname,
-                "message": "Reboot initiated (connection closed)"
-            }
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+    # Start reboot in background - don't wait for response
+    def do_reboot():
+        run_ssh_command(node["ip"], "sudo reboot", timeout=10)
+
+    threading.Thread(target=do_reboot, daemon=True).start()
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "hostname": hostname,
+            "message": "Reboot initiated"
+        }
+    })
 
 @app.route("/api/v1/update-all", methods=["POST"])
 def api_update_all():
@@ -191,20 +233,12 @@ def api_update_all():
     nodes = get_node_list()
 
     for node in nodes:
-        try:
-            resp = requests.post(APT_UPDATE_URL, json={"ip": node["ip"]}, timeout=300)
-            data = resp.json()
-            results.append({
-                "hostname": node["hostname"],
-                "success": data.get("status") == "success",
-                "output": data.get("output", "")[:500]  # Truncate output
-            })
-        except Exception as e:
-            results.append({
-                "hostname": node["hostname"],
-                "success": False,
-                "error": str(e)
-            })
+        result = run_ssh_command(node["ip"], "sudo apt update && sudo apt upgrade -y", timeout=300)
+        results.append({
+            "hostname": node["hostname"],
+            "success": result["success"],
+            "output": result.get("output", "")[:500]
+        })
 
     return jsonify({"success": True, "data": {"results": results}})
 
@@ -214,30 +248,23 @@ def api_reboot_workers():
     results = []
     nodes = get_node_list()
 
+    def reboot_worker(node):
+        """Reboot a single worker node"""
+        run_ssh_command(node["ip"], "sudo reboot", timeout=10)
+        return {"hostname": node["hostname"], "success": True, "message": "Reboot initiated"}
+
     for node in nodes:
         # Skip control plane and NAS
         if node.get("hostname") in ["rpi-1", "openmediavault"]:
             continue
 
-        try:
-            resp = requests.post(REBOOT_URL, json={"ip": node["ip"]}, timeout=10)
-            results.append({
-                "hostname": node["hostname"],
-                "success": True,
-                "message": "Reboot initiated"
-            })
-        except requests.exceptions.Timeout:
-            results.append({
-                "hostname": node["hostname"],
-                "success": True,
-                "message": "Reboot initiated"
-            })
-        except Exception as e:
-            results.append({
-                "hostname": node["hostname"],
-                "success": False,
-                "error": str(e)
-            })
+        # Start reboot in background
+        threading.Thread(target=reboot_worker, args=(node,), daemon=True).start()
+        results.append({
+            "hostname": node["hostname"],
+            "success": True,
+            "message": "Reboot initiated"
+        })
 
     return jsonify({"success": True, "data": {"results": results}})
 

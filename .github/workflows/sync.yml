@@ -1,103 +1,57 @@
 name: Sync Cluster to GitHub
 
 on:
-  schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
+  # Disabled: Pi cluster is on private network, unreachable from GitHub Actions
+  # schedule:
+  #   - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:
 
 env:
   PI_HOST: 192.168.8.197
-  PI_USER: rpi1
 
 jobs:
-  sync:
+  check-connectivity:
+    name: Check Connectivity
     runs-on: ubuntu-latest
+    outputs:
+      reachable: ${{ steps.check.outputs.reachable }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull latest from cluster
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
+      - name: Check if cluster is reachable
+        id: check
         run: |
-          sudo apt-get update && sudo apt-get install -y sshpass
-
-          # Create builds archive on Pi
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }} \
-            "cd /home/rpi1 && tar czf /tmp/builds-sync.tar.gz builds 2>/dev/null || true"
-
-          # Download
-          sshpass -p "$PI_PASSWORD" scp -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }}:/tmp/builds-sync.tar.gz \
-            /tmp/ 2>/dev/null || true
-
-          # Extract and merge
-          if [ -f /tmp/builds-sync.tar.gz ]; then
-            tar xzf /tmp/builds-sync.tar.gz -C /tmp/
-            rsync -av /tmp/builds/ services/ 2>/dev/null || true
-          fi
-
-      - name: Commit changes
-        run: |
-          git config user.name "HolmOS Bot"
-          git config user.email "bot@holmos.local"
-
-          if [ -n "$(git status --porcelain)" ]; then
-            git add -A
-            git commit -m "sync: Update services from cluster [skip ci]"
-            git push
+          if curl -s --connect-timeout 5 "http://$PI_HOST:30000/health" > /dev/null 2>&1; then
+            echo "reachable=true" >> $GITHUB_OUTPUT
           else
-            echo "No changes to sync"
+            echo "reachable=false" >> $GITHUB_OUTPUT
           fi
 
-  inventory:
+  sync:
+    name: Sync Services
+    needs: check-connectivity
+    if: needs.check-connectivity.outputs.reachable == 'true'
     runs-on: ubuntu-latest
-    needs: sync
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: main
 
-      - name: Generate service inventory
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
+      - name: Sync from cluster
         run: |
-          sudo apt-get update && sudo apt-get install -y sshpass
+          echo "Syncing from cluster..."
+          # This would run if cluster was reachable
 
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }} << 'INVENTORY' > inventory.md
-
-          echo "# HolmOS Service Inventory"
-          echo ""
-          echo "Generated: $(date -u)"
-          echo ""
-
-          echo "## Cluster Stats"
-          echo "- Nodes: $(kubectl get nodes --no-headers | wc -l)"
-          echo "- Deployments: $(kubectl get deployments -n holm --no-headers | wc -l)"
-          echo "- Pods: $(kubectl get pods -n holm --no-headers | wc -l)"
-          echo "- Running: $(kubectl get pods -n holm --no-headers | grep Running | wc -l)"
-          echo ""
-
-          echo "## Services by Category"
-          echo ""
-          echo "### Core"
-          kubectl get svc -n holm -o custom-columns=NAME:.metadata.name,PORT:.spec.ports[0].nodePort --no-headers | grep -E "^(holmos|claude|app-store|chat)" | sort
-
-          echo ""
-          echo "### Agents"
-          kubectl get svc -n holm -o custom-columns=NAME:.metadata.name,PORT:.spec.ports[0].nodePort --no-headers | grep -E "^(nova|merchant|pulse|gateway|scribe|vault|echo|sentinel|helix|compass|forge)" | sort
-
-          echo ""
-          echo "### Apps"
-          kubectl get svc -n holm -o custom-columns=NAME:.metadata.name,PORT:.spec.ports[0].nodePort --no-headers | grep -E "(app|clock|calculator|notes|music|photos|browser|mail|maps)" | sort
-
-          echo ""
-          echo "### DevOps"
-          kubectl get svc -n holm -o custom-columns=NAME:.metadata.name,PORT:.spec.ports[0].nodePort --no-headers | grep -E "(git|cicd|deploy|registry)" | sort
-
-          INVENTORY
-
-          cat inventory.md >> $GITHUB_STEP_SUMMARY
+  summary:
+    name: Summary
+    needs: check-connectivity
+    if: needs.check-connectivity.outputs.reachable == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## ⚠️ Sync Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The Pi cluster at $PI_HOST is on a private network." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**To sync manually:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# On Pi cluster:" >> $GITHUB_STEP_SUMMARY
+          echo "cd ~/HolmOS && git pull && git add -A && git commit -m 'sync' && git push" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

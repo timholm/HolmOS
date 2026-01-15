@@ -1,0 +1,264 @@
+name: HolmOS Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'services/**'
+      - 'tests/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/**'
+      - 'tests/**'
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run (all, e2e, integration, load, quick)'
+        required: false
+        default: 'all'
+      skip_load:
+        description: 'Skip load tests'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  HOLMOS_CLUSTER_HOST: ${{ vars.HOLMOS_CLUSTER_HOST || '192.168.8.197' }}
+  HOLMOS_INGRESS_PORT: ${{ vars.HOLMOS_INGRESS_PORT || '80' }}
+  HOLMOS_NAMESPACE: ${{ vars.HOLMOS_NAMESPACE || 'holm' }}
+  NODE_VERSION: '18'
+
+jobs:
+  quick-health-check:
+    name: Quick Health Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ./tests
+        run: npm install
+
+      - name: Run quick health check
+        working-directory: ./tests
+        run: node runner.js --quick
+        continue-on-error: true
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: quick-health-check
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ./tests
+        run: npm install
+
+      - name: Run E2E tests
+        working-directory: ./tests
+        run: node runner.js --suite e2e --save-report
+        env:
+          TEST_USERNAME: ${{ secrets.TEST_USERNAME || 'admin' }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD || 'admin123' }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: tests/reports/*.json
+          retention-days: 30
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: quick-health-check
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ./tests
+        run: npm install
+
+      - name: Run integration tests
+        working-directory: ./tests
+        run: node runner.js --suite integration --save-report
+        env:
+          TEST_USERNAME: ${{ secrets.TEST_USERNAME || 'admin' }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD || 'admin123' }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: tests/reports/*.json
+          retention-days: 30
+
+  load-tests:
+    name: Load Tests
+    runs-on: ubuntu-latest
+    needs: [e2e-tests, integration-tests]
+    if: ${{ github.event.inputs.skip_load != 'true' }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ./tests
+        run: npm install
+
+      - name: Run load tests
+        working-directory: ./tests
+        run: node load/load-test.js --users=10 --requests=50 --json > load-results.json
+
+      - name: Upload load test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-test-results
+          path: tests/load-results.json
+          retention-days: 30
+
+  full-test-suite:
+    name: Full Test Suite
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_suite == 'all' || github.event_name == 'push' }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ./tests
+        run: npm install
+
+      - name: Run full test suite
+        working-directory: ./tests
+        run: |
+          if [ "${{ github.event.inputs.skip_load }}" == "true" ]; then
+            node runner.js --skip-load --save-report
+          else
+            node runner.js --save-report
+          fi
+        env:
+          TEST_USERNAME: ${{ secrets.TEST_USERNAME || 'admin' }}
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD || 'admin123' }}
+
+      - name: Generate HTML report
+        working-directory: ./tests
+        if: always()
+        run: |
+          LATEST_REPORT=$(ls -t reports/*.json | head -1)
+          if [ -n "$LATEST_REPORT" ]; then
+            node report-generator.js "$LATEST_REPORT"
+          fi
+
+      - name: Upload all reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-test-reports
+          path: |
+            tests/reports/*.json
+            tests/reports/*.html
+          retention-days: 30
+
+  report-summary:
+    name: Generate Summary
+    runs-on: ubuntu-latest
+    needs: [e2e-tests, integration-tests]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create summary
+        run: |
+          echo "## HolmOS Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          # Check E2E results
+          if [ -f "artifacts/e2e-test-results/*.json" ]; then
+            E2E_RESULT="Completed"
+          else
+            E2E_RESULT="Pending"
+          fi
+          echo "| E2E Tests | $E2E_RESULT |" >> $GITHUB_STEP_SUMMARY
+
+          # Check Integration results
+          if [ -f "artifacts/integration-test-results/*.json" ]; then
+            INT_RESULT="Completed"
+          else
+            INT_RESULT="Pending"
+          fi
+          echo "| Integration Tests | $INT_RESULT |" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ env.HOLMOS_CLUSTER_HOST }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace:** ${{ env.HOLMOS_NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
+
+  notify-on-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [e2e-tests, integration-tests]
+    if: failure()
+    steps:
+      - name: Create failure notification
+        run: |
+          echo "Tests failed! Check the workflow run for details."
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Run: ${{ github.run_id }}"
+          echo "Commit: ${{ github.sha }}"
+
+      # Optionally send notification to a webhook
+      # - name: Send webhook notification
+      #   run: |
+      #     curl -X POST "${{ secrets.NOTIFICATION_WEBHOOK_URL }}" \
+      #       -H "Content-Type: application/json" \
+      #       -d '{
+      #         "type": "error",
+      #         "title": "HolmOS Test Failure",
+      #         "message": "Tests failed in workflow ${{ github.workflow }}, run ${{ github.run_id }}",
+      #         "priority": "high"
+      #       }'

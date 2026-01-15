@@ -26,6 +26,10 @@
         .status-NotReady { background: var(--ctp-red); color: var(--ctp-crust); }
         .status-success { background: var(--ctp-green); color: var(--ctp-crust); }
         .status-failed { background: var(--ctp-red); color: var(--ctp-crust); }
+        .status-deploying { background: var(--ctp-blue); color: var(--ctp-crust); }
+        .status-healthy { background: var(--ctp-green); color: var(--ctp-crust); }
+        .status-checking { background: var(--ctp-yellow); color: var(--ctp-crust); }
+        .status-pending { background: var(--ctp-surface2); color: var(--ctp-text); }
         .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--ctp-surface0); padding-bottom: 0.5rem; flex-wrap: wrap; }
         .tab { padding: 0.5rem 1rem; border-radius: 8px 8px 0 0; cursor: pointer; background: var(--ctp-surface0); color: var(--ctp-subtext0); border: none; font-size: 0.9rem; }
         .tab.active { background: var(--ctp-mauve); color: var(--ctp-crust); }
@@ -44,6 +48,7 @@
         .event-item { background: var(--ctp-surface0); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; border-left: 3px solid var(--ctp-mauve); }
         .event-item.success { border-left-color: var(--ctp-green); }
         .event-item.failed { border-left-color: var(--ctp-red); }
+        .event-item.deploying { border-left-color: var(--ctp-blue); }
         .event-header { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
         .event-title { font-weight: 600; }
         .event-time { font-size: 0.75rem; color: var(--ctp-subtext0); }
@@ -52,6 +57,7 @@
         .btn-primary { background: var(--ctp-mauve); color: var(--ctp-crust); }
         .btn-danger { background: var(--ctp-red); color: var(--ctp-crust); }
         .btn-secondary { background: var(--ctp-surface1); color: var(--ctp-text); }
+        .btn-success { background: var(--ctp-green); color: var(--ctp-crust); }
         .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
         .form-group { margin-bottom: 1rem; }
         .form-label { display: block; margin-bottom: 0.25rem; font-size: 0.85rem; color: var(--ctp-subtext0); }
@@ -77,7 +83,17 @@
         .trigger-badge.manual { background: var(--ctp-blue); color: var(--ctp-crust); }
         .trigger-badge.rollback { background: var(--ctp-red); color: var(--ctp-crust); }
         .trigger-badge.auto-create { background: var(--ctp-green); color: var(--ctp-crust); }
-        
+        .trigger-badge.build-webhook { background: var(--ctp-teal); color: var(--ctp-crust); }
+
+        /* Health check indicator */
+        .health-indicator { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; }
+        .health-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .health-dot.healthy { background: var(--ctp-green); }
+        .health-dot.checking { background: var(--ctp-yellow); animation: pulse 1s infinite; }
+        .health-dot.pending { background: var(--ctp-surface2); }
+        .health-dot.failed { background: var(--ctp-red); }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
         /* History timeline */
         .history-timeline { position: relative; padding-left: 2rem; }
         .history-timeline::before { content: ''; position: absolute; left: 0.5rem; top: 0; bottom: 0; width: 2px; background: var(--ctp-surface1); }
@@ -85,20 +101,42 @@
         .history-item::before { content: ''; position: absolute; left: -1.75rem; top: 1rem; width: 12px; height: 12px; border-radius: 50%; background: var(--ctp-mauve); border: 2px solid var(--ctp-base); }
         .history-item.success::before { background: var(--ctp-green); }
         .history-item.failed::before { background: var(--ctp-red); }
+        .history-item.deploying::before { background: var(--ctp-blue); }
         .history-version { font-weight: 600; color: var(--ctp-mauve); }
         .history-meta { font-size: 0.75rem; color: var(--ctp-subtext0); margin-top: 0.25rem; }
-        
+
         /* Registry events */
         .registry-event { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: var(--ctp-surface0); border-radius: 8px; margin-bottom: 0.5rem; }
         .registry-event.processed { border-left: 3px solid var(--ctp-green); }
         .registry-event.pending { border-left: 3px solid var(--ctp-yellow); }
         .digest { font-family: monospace; font-size: 0.7rem; color: var(--ctp-subtext0); }
+
+        /* Health checks panel */
+        .health-check-card { background: var(--ctp-surface0); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; }
+        .health-check-card.healthy { border-left: 3px solid var(--ctp-green); }
+        .health-check-card.checking { border-left: 3px solid var(--ctp-yellow); }
+        .health-check-card.failed { border-left: 3px solid var(--ctp-red); }
+        .health-check-card.pending { border-left: 3px solid var(--ctp-surface2); }
+        .pod-status { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.15rem 0.5rem; background: var(--ctp-surface1); border-radius: 4px; font-size: 0.7rem; margin-right: 0.5rem; margin-top: 0.5rem; }
+        .pod-status.ready { background: var(--ctp-green); color: var(--ctp-crust); }
+        .pod-status.not-ready { background: var(--ctp-yellow); color: var(--ctp-crust); }
+
+        /* Progress bar for health checks */
+        .progress-bar { height: 4px; background: var(--ctp-surface1); border-radius: 2px; margin-top: 0.5rem; overflow: hidden; }
+        .progress-fill { height: 100%; background: var(--ctp-mauve); transition: width 0.3s; }
+        .progress-fill.healthy { background: var(--ctp-green); }
+        .progress-fill.failed { background: var(--ctp-red); }
+
+        /* Scale controls */
+        .scale-controls { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+        .scale-btn { width: 24px; height: 24px; border-radius: 4px; border: none; cursor: pointer; font-weight: bold; }
+        .scale-btn:hover { filter: brightness(1.2); }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Deploy Controller v3</h1>
+            <h1>Deploy Controller v4</h1>
             <span class="status-badge status-Running" id="health-badge">Healthy</span>
         </header>
         <div class="stats" id="stats">
@@ -106,10 +144,11 @@
             <div class="stat-card"><div class="stat-value" id="running-count">0</div><div class="stat-label">Running</div></div>
             <div class="stat-card"><div class="stat-value" id="auto-count">0</div><div class="stat-label">Auto-Deploy</div></div>
             <div class="stat-card"><div class="stat-value" id="events-count">0</div><div class="stat-label">Deploy Events</div></div>
-            <div class="stat-card"><div class="stat-value" id="registry-count">0</div><div class="stat-label">Registry Events</div></div>
+            <div class="stat-card"><div class="stat-value" id="health-count">0</div><div class="stat-label">Health Checks</div></div>
         </div>
         <div class="tabs">
             <button class="tab active" data-tab="deployments">Deployments</button>
+            <button class="tab" data-tab="health-checks">Health Checks</button>
             <button class="tab" data-tab="history">History</button>
             <button class="tab" data-tab="events">Events</button>
             <button class="tab" data-tab="registry">Registry</button>
@@ -117,9 +156,13 @@
             <button class="tab" data-tab="images">Images</button>
             <button class="tab" data-tab="autodeploy">Auto-Deploy</button>
         </div>
-        
+
         <div id="deployments" class="panel active"><div class="grid" id="deps-grid"></div></div>
-        
+
+        <div id="health-checks" class="panel">
+            <div class="events-list" id="health-list"></div>
+        </div>
+
         <div id="history" class="panel">
             <div class="form-group" style="margin-bottom:1rem">
                 <select id="history-select" class="form-input" style="max-width:300px">
@@ -128,9 +171,9 @@
             </div>
             <div class="history-timeline" id="history-timeline"></div>
         </div>
-        
+
         <div id="events" class="panel"><div class="events-list" id="events-list"></div></div>
-        
+
         <div id="registry" class="panel">
             <div class="webhook-info">
                 <strong>Registry Webhook URL:</strong><br>
@@ -139,7 +182,7 @@
             </div>
             <div class="events-list" id="registry-list"></div>
         </div>
-        
+
         <div id="webhooks" class="panel">
             <div class="webhook-info">
                 <strong>Git Webhook:</strong> <code>POST /api/webhook/git</code><br>
@@ -148,9 +191,9 @@
             </div>
             <div class="events-list" id="webhook-list"></div>
         </div>
-        
+
         <div id="images" class="panel"><div class="grid" id="images-grid"></div></div>
-        
+
         <div id="autodeploy" class="panel">
             <button class="btn btn-primary" onclick="showRuleModal()" style="margin-bottom:1rem">+ Add Rule</button>
             <div class="grid" id="rules-grid"></div>
@@ -192,9 +235,27 @@
                 <input type="text" id="r-ns" class="form-input" value="holm">
             </div>
             <div class="form-group">
+                <label class="form-label">Health Check Path</label>
+                <input type="text" id="r-health-path" class="form-input" value="/health">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Health Check Port</label>
+                <input type="number" id="r-health-port" class="form-input" value="8080">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Service Port (for auto-created services)</label>
+                <input type="number" id="r-service-port" class="form-input" value="8080">
+            </div>
+            <div class="form-group">
                 <label class="form-checkbox">
                     <input type="checkbox" id="r-autocreate">
                     <span>Auto-create deployment if it doesn't exist</span>
+                </label>
+            </div>
+            <div class="form-group">
+                <label class="form-checkbox">
+                    <input type="checkbox" id="r-createservice">
+                    <span>Auto-create service for deployment</span>
                 </label>
             </div>
             <div class="modal-footer">
@@ -223,9 +284,28 @@
         </div>
     </div>
 
+    <!-- Scale Modal -->
+    <div id="scale-modal" class="modal">
+        <div class="modal-content">
+            <h2 class="modal-title">Scale Deployment</h2>
+            <div class="form-group">
+                <label class="form-label">Deployment</label>
+                <input type="text" id="s-name" class="form-input" readonly>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Replicas</label>
+                <input type="number" id="s-replicas" class="form-input" min="0" max="10">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('scale-modal')">Cancel</button>
+                <button class="btn btn-primary" onclick="doScale()">Scale</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        let deps=[], evts=[], hooks=[], imgs=[], rules={}, regEvts=[], history={};
-        
+        let deps=[], evts=[], hooks=[], imgs=[], rules={}, regEvts=[], history={}, healthChecks={};
+
         document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
             document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
             document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
@@ -235,16 +315,17 @@
 
         async function load(){
             try{
-                const [d,e,w,i,r,re,h]=await Promise.all([
+                const [d,e,w,i,r,re,h,hc]=await Promise.all([
                     fetch('/api/deployments').then(r=>r.json()),
                     fetch('/api/events').then(r=>r.json()),
                     fetch('/api/webhook').then(r=>r.json()),
                     fetch('/api/images').then(r=>r.json()),
                     fetch('/api/autodeploy').then(r=>r.json()),
                     fetch('/api/registry-events').then(r=>r.json()),
-                    fetch('/api/history').then(r=>r.json())
+                    fetch('/api/history').then(r=>r.json()),
+                    fetch('/api/health-checks').then(r=>r.json())
                 ]);
-                deps=d||[];evts=e||[];hooks=w||[];imgs=i||[];rules=r||{};regEvts=re||[];history=h||{};
+                deps=d||[];evts=e||[];hooks=w||[];imgs=i||[];rules=r||{};regEvts=re||[];history=h||{};healthChecks=hc||{};
                 render();
             }catch(e){console.error(e);}
         }
@@ -254,26 +335,66 @@
             document.getElementById('running-count').textContent=deps.filter(d=>d.status==='Running').length;
             document.getElementById('auto-count').textContent=Object.keys(rules).length;
             document.getElementById('events-count').textContent=evts.length;
-            document.getElementById('registry-count').textContent=regEvts.length;
+            document.getElementById('health-count').textContent=Object.keys(healthChecks).length;
 
             // Deployments grid
-            document.getElementById('deps-grid').innerHTML=deps.map(d=>`
+            document.getElementById('deps-grid').innerHTML=deps.map(d=>{
+                const hc = healthChecks[`${d.namespace}/${d.name}`];
+                const healthStatus = hc ? hc.status : 'none';
+                return `
                 <div class="card">
                     <div class="card-header">
                         <span class="card-title">${d.name}${d.autoDeploy?'<span class="auto-badge">AUTO</span>':''}</span>
                         <span class="status-badge status-${d.status}">${d.status}</span>
                     </div>
                     <div class="card-body">
-                        <p>${d.ready}/${d.replicas} ready</p>
+                        <p>${d.ready}/${d.replicas} ready
+                            ${hc ? `<span class="health-indicator"><span class="health-dot ${healthStatus}"></span>${healthStatus}</span>` : ''}
+                        </p>
                         <div class="image-tag">${d.image||'No image'}</div>
+                        ${hc && hc.status === 'checking' ? `
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                            </div>
+                        ` : ''}
                         <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
                             <button class="btn btn-primary btn-sm" onclick="showDeployModal('${d.name}','${d.image||''}')">Deploy</button>
                             <button class="btn btn-danger btn-sm" onclick="showRollbackModal('${d.name}')">Rollback</button>
+                            <button class="btn btn-secondary btn-sm" onclick="showScaleModal('${d.name}',${d.replicas})">Scale</button>
                             <button class="btn btn-secondary btn-sm" onclick="showHistory('${d.name}')">History</button>
                         </div>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
+
+            // Health checks list
+            const hcList = Object.entries(healthChecks);
+            document.getElementById('health-list').innerHTML = hcList.length ? hcList.map(([key, hc]) => `
+                <div class="health-check-card ${hc.status}">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <div>
+                            <strong>${hc.deployment}</strong>
+                            <span class="status-badge status-${hc.status}" style="margin-left:0.5rem">${hc.status}</span>
+                        </div>
+                        <span style="font-size:0.75rem;color:var(--ctp-subtext0)">${hc.attempts}/${hc.maxAttempts} checks</span>
+                    </div>
+                    <p style="margin-top:0.5rem;font-size:0.85rem">${hc.message}</p>
+                    <div class="image-tag">${hc.image}</div>
+                    ${hc.podStatuses && hc.podStatuses.length ? `
+                        <div style="margin-top:0.5rem">
+                            ${hc.podStatuses.map(p => `
+                                <span class="pod-status ${p.ready ? 'ready' : 'not-ready'}">${p.name.split('-').slice(-2).join('-')} (${p.phase})</span>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    <div class="progress-bar">
+                        <div class="progress-fill ${hc.status}" style="width: ${hc.status === 'healthy' ? 100 : hc.status === 'failed' ? 100 : Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                    </div>
+                    <div style="font-size:0.7rem;color:var(--ctp-subtext0);margin-top:0.5rem">
+                        Started: ${new Date(hc.startTime).toLocaleString()} | Last check: ${new Date(hc.lastCheck).toLocaleString()}
+                    </div>
+                </div>
+            `).join('') : '<p style="color:var(--ctp-subtext0)">No active health checks</p>';
 
             // Events list
             document.getElementById('events-list').innerHTML=evts.map(e=>`
@@ -336,7 +457,9 @@
                         <p><strong>Pattern:</strong> ${r.imagePattern}</p>
                         ${r.tagPattern?`<p><strong>Tag:</strong> ${r.tagPattern}</p>`:''}
                         <p><strong>Namespace:</strong> ${r.namespace}</p>
+                        <p><strong>Health:</strong> ${r.healthCheckPath||'/health'}:${r.healthCheckPort||8080}</p>
                         ${r.autoCreate?'<p><span class="auto-badge">Auto-create</span></p>':''}
+                        ${r.createService?'<p><span class="auto-badge" style="background:var(--ctp-teal)">Auto-service</span></p>':''}
                         ${r.lastTriggered?`<p style="font-size:0.75rem;color:var(--ctp-subtext0)">Last: ${new Date(r.lastTriggered).toLocaleString()}</p>`:''}
                         <button class="btn btn-danger btn-sm" style="margin-top:0.5rem" onclick="delRule('${r.deployment}')">Delete</button>
                     </div>
@@ -359,8 +482,9 @@
                     <div class="image-tag">${v.image}</div>
                     <div class="history-meta">
                         <span class="trigger-badge ${v.trigger}">${v.trigger}</span>
-                        ${v.duration?`<span>${v.duration.toFixed(2)}s</span>`:''}
-                        <span>${new Date(v.timestamp).toLocaleString()}</span>
+                        <span class="status-badge status-${v.status}" style="margin-left:0.5rem">${v.status}</span>
+                        ${v.duration?`<span style="margin-left:0.5rem">${v.duration.toFixed(2)}s</span>`:''}
+                        <span style="margin-left:0.5rem">${new Date(v.timestamp).toLocaleString()}</span>
                     </div>
                 </div>
             `).join(''):'<p style="color:var(--ctp-subtext0)">No history for this deployment</p>';
@@ -388,15 +512,25 @@
             document.getElementById('r-tag').value='';
             document.getElementById('r-deploy').value='';
             document.getElementById('r-ns').value='holm';
+            document.getElementById('r-health-path').value='/health';
+            document.getElementById('r-health-port').value='8080';
+            document.getElementById('r-service-port').value='8080';
             document.getElementById('r-autocreate').checked=false;
+            document.getElementById('r-createservice').checked=false;
             document.getElementById('rule-modal').classList.add('show');
+        }
+
+        function showScaleModal(name, replicas){
+            document.getElementById('s-name').value=name;
+            document.getElementById('s-replicas').value=replicas;
+            document.getElementById('scale-modal').classList.add('show');
         }
 
         async function showRollbackModal(name){
             document.getElementById('rb-name').value=name;
             const h=history[name]||[];
             const sel=document.getElementById('rb-version');
-            sel.innerHTML=h.filter(v=>v.status==='success').slice(1).map(v=>`<option value="${v.version}">v${v.version}: ${v.image.split('/').pop()}</option>`).join('');
+            sel.innerHTML=h.filter(v=>v.status==='success'||v.status==='healthy').slice(1).map(v=>`<option value="${v.version}">v${v.version}: ${v.image.split('/').pop()}</option>`).join('');
             if(sel.options.length===0){
                 sel.innerHTML='<option value="">No previous versions</option>';
             }
@@ -421,13 +555,25 @@
             load();
         }
 
+        async function doScale(){
+            const d=document.getElementById('s-name').value;
+            const r=parseInt(document.getElementById('s-replicas').value);
+            await fetch('/api/scale',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deployment:d,namespace:'holm',replicas:r})});
+            closeModal('scale-modal');
+            load();
+        }
+
         async function addRule(){
             const r={
                 imagePattern:document.getElementById('r-pattern').value,
                 tagPattern:document.getElementById('r-tag').value,
                 deployment:document.getElementById('r-deploy').value,
                 namespace:document.getElementById('r-ns').value,
+                healthCheckPath:document.getElementById('r-health-path').value,
+                healthCheckPort:parseInt(document.getElementById('r-health-port').value)||8080,
+                servicePort:parseInt(document.getElementById('r-service-port').value)||8080,
                 autoCreate:document.getElementById('r-autocreate').checked,
+                createService:document.getElementById('r-createservice').checked,
                 enabled:true
             };
             await fetch('/api/autodeploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r)});

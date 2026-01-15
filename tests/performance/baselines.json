@@ -1,0 +1,304 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2025-01-15",
+  "cluster": {
+    "ip": "192.168.8.197",
+    "hardware": "Raspberry Pi Cluster",
+    "nodes": 4,
+    "architecture": "arm64"
+  },
+  "description": "Performance baselines for HolmOS services running on Raspberry Pi cluster. These values represent acceptable performance under normal operating conditions.",
+  "thresholds": {
+    "global": {
+      "description": "System-wide performance requirements",
+      "http_req_duration_p95_ms": 2000,
+      "http_req_duration_p99_ms": 5000,
+      "http_req_duration_avg_ms": 500,
+      "error_rate_max_percent": 1,
+      "throughput_min_rps": 10
+    },
+    "health_checks": {
+      "description": "Health endpoint performance (must be fast)",
+      "p95_ms": 500,
+      "p99_ms": 1000,
+      "avg_ms": 100,
+      "success_rate_min_percent": 99
+    },
+    "core_services": {
+      "description": "Core entry points (shell, chat, etc.)",
+      "p95_ms": 2000,
+      "p99_ms": 4000,
+      "avg_ms": 500,
+      "success_rate_min_percent": 95
+    },
+    "ai_agents": {
+      "description": "AI agent services (may be slower due to processing)",
+      "p95_ms": 3000,
+      "p99_ms": 6000,
+      "avg_ms": 1000,
+      "success_rate_min_percent": 95
+    },
+    "apps": {
+      "description": "Application services",
+      "p95_ms": 2000,
+      "p99_ms": 4000,
+      "avg_ms": 500,
+      "success_rate_min_percent": 95
+    },
+    "infrastructure": {
+      "description": "DevOps and monitoring services (lower traffic)",
+      "p95_ms": 3000,
+      "p99_ms": 6000,
+      "avg_ms": 1000,
+      "success_rate_min_percent": 90
+    }
+  },
+  "services": {
+    "holmos-shell": {
+      "category": "core",
+      "port": 30000,
+      "expected_p95_ms": 1500,
+      "expected_avg_ms": 300,
+      "expected_rps": 20,
+      "notes": "Main UI, should be highly responsive"
+    },
+    "claude-pod": {
+      "category": "core",
+      "port": 30001,
+      "expected_p95_ms": 3000,
+      "expected_avg_ms": 1000,
+      "expected_rps": 10,
+      "notes": "AI interface, variable latency expected"
+    },
+    "app-store": {
+      "category": "core",
+      "port": 30002,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 15,
+      "notes": "App generation may be slower"
+    },
+    "chat-hub": {
+      "category": "core",
+      "port": 30003,
+      "expected_p95_ms": 1500,
+      "expected_avg_ms": 300,
+      "expected_rps": 25,
+      "notes": "Messaging hub, needs low latency"
+    },
+    "nova": {
+      "category": "agent",
+      "port": 30004,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 15,
+      "notes": "Constellation overview agent"
+    },
+    "merchant": {
+      "category": "agent",
+      "port": 30005,
+      "expected_p95_ms": 3000,
+      "expected_avg_ms": 1000,
+      "expected_rps": 10,
+      "notes": "May process complex requests"
+    },
+    "pulse": {
+      "category": "agent",
+      "port": 30006,
+      "expected_p95_ms": 1000,
+      "expected_avg_ms": 200,
+      "expected_rps": 30,
+      "notes": "Health monitoring, must be fast"
+    },
+    "gateway": {
+      "category": "agent",
+      "port": 30008,
+      "expected_p95_ms": 800,
+      "expected_avg_ms": 150,
+      "expected_rps": 50,
+      "notes": "Critical path, highest performance required"
+    },
+    "scribe": {
+      "category": "agent",
+      "port": 30860,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 15,
+      "notes": "Record keeping agent"
+    },
+    "vault": {
+      "category": "agent",
+      "port": 30870,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 15,
+      "notes": "Secrets management"
+    },
+    "clock-app": {
+      "category": "app",
+      "port": 30007,
+      "expected_p95_ms": 1000,
+      "expected_avg_ms": 200,
+      "expected_rps": 20,
+      "notes": "Simple app, should be fast"
+    },
+    "calculator-app": {
+      "category": "app",
+      "port": 30010,
+      "expected_p95_ms": 1000,
+      "expected_avg_ms": 200,
+      "expected_rps": 20,
+      "notes": "Simple app, should be fast"
+    },
+    "file-web-nautilus": {
+      "category": "app",
+      "port": 30088,
+      "expected_p95_ms": 2500,
+      "expected_avg_ms": 800,
+      "expected_rps": 10,
+      "notes": "File operations may be slower"
+    },
+    "settings-web": {
+      "category": "app",
+      "port": 30600,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 15,
+      "notes": "Settings interface"
+    },
+    "audiobook-web": {
+      "category": "app",
+      "port": 30700,
+      "expected_p95_ms": 3000,
+      "expected_avg_ms": 1000,
+      "expected_rps": 5,
+      "notes": "Audio processing is resource intensive"
+    },
+    "terminal-web": {
+      "category": "app",
+      "port": 30800,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 15,
+      "notes": "Web terminal interface"
+    },
+    "holm-git": {
+      "category": "devops",
+      "port": 30009,
+      "expected_p95_ms": 3000,
+      "expected_avg_ms": 1000,
+      "expected_rps": 10,
+      "notes": "Git operations variable"
+    },
+    "cicd-controller": {
+      "category": "devops",
+      "port": 30020,
+      "expected_p95_ms": 3000,
+      "expected_avg_ms": 1000,
+      "expected_rps": 5,
+      "notes": "CI/CD management"
+    },
+    "deploy-controller": {
+      "category": "devops",
+      "port": 30021,
+      "expected_p95_ms": 3000,
+      "expected_avg_ms": 1000,
+      "expected_rps": 5,
+      "notes": "Deployment automation"
+    },
+    "cluster-manager": {
+      "category": "admin",
+      "port": 30502,
+      "expected_p95_ms": 2500,
+      "expected_avg_ms": 800,
+      "expected_rps": 10,
+      "notes": "Admin dashboard"
+    },
+    "backup-dashboard": {
+      "category": "admin",
+      "port": 30850,
+      "expected_p95_ms": 3000,
+      "expected_avg_ms": 1000,
+      "expected_rps": 5,
+      "notes": "Backup management"
+    },
+    "test-dashboard": {
+      "category": "monitoring",
+      "port": 30900,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 10,
+      "notes": "Service health monitoring"
+    },
+    "metrics-dashboard": {
+      "category": "monitoring",
+      "port": 30950,
+      "expected_p95_ms": 2000,
+      "expected_avg_ms": 500,
+      "expected_rps": 10,
+      "notes": "Cluster metrics"
+    },
+    "registry-ui": {
+      "category": "devops",
+      "port": 31750,
+      "expected_p95_ms": 2500,
+      "expected_avg_ms": 800,
+      "expected_rps": 5,
+      "notes": "Container registry browser"
+    }
+  },
+  "load_profiles": {
+    "smoke": {
+      "description": "Basic functionality check",
+      "vus": 1,
+      "duration_seconds": 30,
+      "expected_success_rate": 100
+    },
+    "light": {
+      "description": "Light traffic simulation",
+      "vus": 5,
+      "duration_seconds": 120,
+      "expected_success_rate": 99
+    },
+    "standard": {
+      "description": "Normal operating load",
+      "vus": 10,
+      "duration_seconds": 300,
+      "expected_success_rate": 95
+    },
+    "stress": {
+      "description": "High load stress test",
+      "vus": 50,
+      "duration_seconds": 420,
+      "expected_success_rate": 80
+    },
+    "spike": {
+      "description": "Traffic burst simulation",
+      "vus_peak": 50,
+      "duration_seconds": 140,
+      "expected_success_rate": 85
+    },
+    "soak": {
+      "description": "Extended duration test",
+      "vus": 10,
+      "duration_seconds": 720,
+      "expected_success_rate": 95
+    }
+  },
+  "raspberry_pi_constraints": {
+    "description": "Hardware limitations to consider",
+    "cpu_per_pod_max_millicores": 500,
+    "memory_per_pod_max_mb": 256,
+    "recommended_max_concurrent_vus": 30,
+    "recommended_max_total_pods": 50,
+    "network_bandwidth_mbps": 100,
+    "storage_iops_limit": 1000,
+    "notes": [
+      "ARM64 architecture may have different performance characteristics",
+      "SD card I/O is limited compared to SSD",
+      "Thermal throttling may occur under sustained load",
+      "Memory is shared across all services",
+      "Network is shared across all nodes"
+    ]
+  }
+}

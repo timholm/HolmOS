@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,9 +23,10 @@ import (
 )
 
 const (
-	maxLogEntries    = 50000
+	defaultMaxLogEntries  = 50000
 	logCollectionInterval = 30 * time.Second
-	scribeTagline   = "It's all in the records"
+	scribeTagline         = "It's all in the records"
+	primaryNamespace      = "holm"
 )
 
 type LogEntry struct {
@@ -34,6 +36,7 @@ type LogEntry struct {
 	Container string    `json:"container"`
 	Message   string    `json:"message"`
 	Level     string    `json:"level"`
+	Size      int       `json:"size"` // bytes
 }
 
 type LogStore struct {
@@ -41,15 +44,43 @@ type LogStore struct {
 	entries     []LogEntry
 	subscribers []chan LogEntry
 	subMu       sync.RWMutex
+
+	// Retention settings
+	retentionMu    sync.RWMutex
+	maxEntries     int
+	retentionHours int
+
+	// Volume stats
+	statsMu        sync.RWMutex
+	totalBytes     int64
+	bytesPerPod    map[string]int64
+	bytesPerNs     map[string]int64
+	entriesPerHour map[string]int // key: "2006-01-02-15"
 }
 
 type StatsResponse struct {
-	Agent        string         `json:"agent"`
-	Tagline      string         `json:"tagline"`
-	TotalEntries int            `json:"total_entries"`
-	Namespaces   map[string]int `json:"namespaces"`
-	Pods         map[string]int `json:"pods"`
-	Levels       map[string]int `json:"levels"`
+	Agent           string            `json:"agent"`
+	Tagline         string            `json:"tagline"`
+	TotalEntries    int               `json:"total_entries"`
+	Namespaces      map[string]int    `json:"namespaces"`
+	Pods            map[string]int    `json:"pods"`
+	Levels          map[string]int    `json:"levels"`
+	VolumeStats     VolumeStats       `json:"volume_stats"`
+	RetentionConfig RetentionConfig   `json:"retention_config"`
+}
+
+type VolumeStats struct {
+	TotalBytes     int64            `json:"total_bytes"`
+	TotalBytesHR   string           `json:"total_bytes_human"`
+	BytesPerPod    map[string]int64 `json:"bytes_per_pod"`
+	BytesPerNs     map[string]int64 `json:"bytes_per_namespace"`
+	EntriesPerHour map[string]int   `json:"entries_per_hour"`
+	AvgEntrySize   int64            `json:"avg_entry_size"`
+}
+
+type RetentionConfig struct {
+	MaxEntries     int `json:"max_entries"`
+	RetentionHours int `json:"retention_hours"`
 }
 
 type LogsResponse struct {
@@ -66,27 +97,70 @@ type ChatResponse struct {
 	Response string `json:"response"`
 }
 
+type RetentionRequest struct {
+	MaxEntries     int `json:"max_entries"`
+	RetentionHours int `json:"retention_hours"`
+}
+
 var (
-	store     *LogStore
-	clientset *kubernetes.Clientset
+	store       *LogStore
+	clientset   *kubernetes.Clientset
 	podLastSeen map[string]time.Time
-	podMu     sync.RWMutex
+	podMu       sync.RWMutex
 )
 
 func NewLogStore() *LogStore {
 	return &LogStore{
-		entries:     make([]LogEntry, 0, maxLogEntries),
-		subscribers: make([]chan LogEntry, 0),
+		entries:        make([]LogEntry, 0, defaultMaxLogEntries),
+		subscribers:    make([]chan LogEntry, 0),
+		maxEntries:     defaultMaxLogEntries,
+		retentionHours: 24, // Default 24 hour retention
+		bytesPerPod:    make(map[string]int64),
+		bytesPerNs:     make(map[string]int64),
+		entriesPerHour: make(map[string]int),
 	}
 }
 
 func (ls *LogStore) Add(entry LogEntry) {
+	entry.Size = len(entry.Message)
+
 	ls.mu.Lock()
 	ls.entries = append(ls.entries, entry)
-	if len(ls.entries) > maxLogEntries {
-		ls.entries = ls.entries[len(ls.entries)-maxLogEntries:]
+
+	// Apply retention by max entries
+	ls.retentionMu.RLock()
+	maxEntries := ls.maxEntries
+	retentionHours := ls.retentionHours
+	ls.retentionMu.RUnlock()
+
+	if len(ls.entries) > maxEntries {
+		ls.entries = ls.entries[len(ls.entries)-maxEntries:]
+	}
+
+	// Apply retention by time
+	if retentionHours > 0 {
+		cutoff := time.Now().Add(-time.Duration(retentionHours) * time.Hour)
+		idx := 0
+		for i, e := range ls.entries {
+			if e.Timestamp.After(cutoff) {
+				idx = i
+				break
+			}
+		}
+		if idx > 0 {
+			ls.entries = ls.entries[idx:]
+		}
 	}
 	ls.mu.Unlock()
+
+	// Update volume stats
+	ls.statsMu.Lock()
+	ls.totalBytes += int64(entry.Size)
+	ls.bytesPerPod[entry.Pod] += int64(entry.Size)
+	ls.bytesPerNs[entry.Namespace] += int64(entry.Size)
+	hourKey := entry.Timestamp.Format("2006-01-02-15")
+	ls.entriesPerHour[hourKey]++
+	ls.statsMu.Unlock()
 
 	// Notify subscribers
 	ls.subMu.RLock()
@@ -127,11 +201,22 @@ func (ls *LogStore) GetAll() []LogEntry {
 	return result
 }
 
-func (ls *LogStore) Search(query, namespace, level, pod string, limit int) []LogEntry {
+func (ls *LogStore) Search(query, namespace, level, pod string, limit int, useRegex bool) []LogEntry {
 	ls.mu.RLock()
 	defer ls.mu.RUnlock()
 
 	var results []LogEntry
+	var regex *regexp.Regexp
+	var err error
+
+	if useRegex && query != "" {
+		regex, err = regexp.Compile("(?i)" + query)
+		if err != nil {
+			// Fall back to literal search if regex is invalid
+			regex = nil
+		}
+	}
+
 	queryLower := strings.ToLower(query)
 
 	for i := len(ls.entries) - 1; i >= 0 && (limit == 0 || len(results) < limit); i-- {
@@ -143,12 +228,23 @@ func (ls *LogStore) Search(query, namespace, level, pod string, limit int) []Log
 		if level != "" && entry.Level != level {
 			continue
 		}
-		if pod != "" && entry.Pod != pod {
+		if pod != "" && !strings.Contains(entry.Pod, pod) {
 			continue
 		}
-		if query != "" && !strings.Contains(strings.ToLower(entry.Message), queryLower) &&
-			!strings.Contains(strings.ToLower(entry.Pod), queryLower) {
-			continue
+
+		if query != "" {
+			if regex != nil {
+				// Regex search
+				if !regex.MatchString(entry.Message) && !regex.MatchString(entry.Pod) {
+					continue
+				}
+			} else {
+				// Standard case-insensitive search
+				if !strings.Contains(strings.ToLower(entry.Message), queryLower) &&
+					!strings.Contains(strings.ToLower(entry.Pod), queryLower) {
+					continue
+				}
+			}
 		}
 
 		results = append(results, entry)
@@ -171,13 +267,35 @@ func (ls *LogStore) Stats() StatsResponse {
 		levels[entry.Level]++
 	}
 
+	ls.statsMu.RLock()
+	volumeStats := VolumeStats{
+		TotalBytes:     ls.totalBytes,
+		TotalBytesHR:   formatBytes(ls.totalBytes),
+		BytesPerPod:    copyInt64Map(ls.bytesPerPod),
+		BytesPerNs:     copyInt64Map(ls.bytesPerNs),
+		EntriesPerHour: copyIntMap(ls.entriesPerHour),
+	}
+	if len(ls.entries) > 0 {
+		volumeStats.AvgEntrySize = ls.totalBytes / int64(len(ls.entries))
+	}
+	ls.statsMu.RUnlock()
+
+	ls.retentionMu.RLock()
+	retentionConfig := RetentionConfig{
+		MaxEntries:     ls.maxEntries,
+		RetentionHours: ls.retentionHours,
+	}
+	ls.retentionMu.RUnlock()
+
 	return StatsResponse{
-		Agent:        "Scribe",
-		Tagline:      scribeTagline,
-		TotalEntries: len(ls.entries),
-		Namespaces:   namespaces,
-		Pods:         pods,
-		Levels:       levels,
+		Agent:           "Scribe",
+		Tagline:         scribeTagline,
+		TotalEntries:    len(ls.entries),
+		Namespaces:      namespaces,
+		Pods:            pods,
+		Levels:          levels,
+		VolumeStats:     volumeStats,
+		RetentionConfig: retentionConfig,
 	}
 }
 
@@ -189,6 +307,90 @@ func (ls *LogStore) Namespaces() []string {
 	}
 	sort.Strings(namespaces)
 	return namespaces
+}
+
+func (ls *LogStore) Pods() []string {
+	stats := ls.Stats()
+	pods := make([]string, 0, len(stats.Pods))
+	for pod := range stats.Pods {
+		pods = append(pods, pod)
+	}
+	sort.Strings(pods)
+	return pods
+}
+
+func (ls *LogStore) SetRetention(maxEntries, retentionHours int) {
+	ls.retentionMu.Lock()
+	defer ls.retentionMu.Unlock()
+
+	if maxEntries > 0 {
+		ls.maxEntries = maxEntries
+	}
+	if retentionHours >= 0 {
+		ls.retentionHours = retentionHours
+	}
+
+	// Apply new retention immediately
+	go ls.applyRetention()
+}
+
+func (ls *LogStore) applyRetention() {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	ls.retentionMu.RLock()
+	maxEntries := ls.maxEntries
+	retentionHours := ls.retentionHours
+	ls.retentionMu.RUnlock()
+
+	// Apply max entries
+	if len(ls.entries) > maxEntries {
+		ls.entries = ls.entries[len(ls.entries)-maxEntries:]
+	}
+
+	// Apply time-based retention
+	if retentionHours > 0 {
+		cutoff := time.Now().Add(-time.Duration(retentionHours) * time.Hour)
+		idx := 0
+		for i, e := range ls.entries {
+			if e.Timestamp.After(cutoff) {
+				idx = i
+				break
+			}
+		}
+		if idx > 0 {
+			ls.entries = ls.entries[idx:]
+		}
+	}
+}
+
+func copyInt64Map(m map[string]int64) map[string]int64 {
+	result := make(map[string]int64, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+func copyIntMap(m map[string]int) map[string]int {
+	result := make(map[string]int, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 func detectLogLevel(message string) string {
@@ -223,6 +425,10 @@ func collectPodLogs(ctx context.Context) {
 }
 
 func collectAllPodLogs() {
+	// Primary focus: holm namespace
+	collectNamespacePodLogs(primaryNamespace)
+
+	// Also collect from other namespaces for completeness
 	namespaces, err := clientset.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error listing namespaces: %v", err)
@@ -230,17 +436,28 @@ func collectAllPodLogs() {
 	}
 
 	for _, ns := range namespaces.Items {
-		pods, err := clientset.CoreV1().Pods(ns.Name).List(context.Background(), metav1.ListOptions{
-			FieldSelector: "status.phase=Running",
-		})
-		if err != nil {
+		if ns.Name == primaryNamespace {
+			continue // Already collected
+		}
+		// Skip system namespaces unless they have issues
+		if ns.Name == "kube-system" || ns.Name == "kube-public" || ns.Name == "kube-node-lease" {
 			continue
 		}
+		collectNamespacePodLogs(ns.Name)
+	}
+}
 
-		for _, pod := range pods.Items {
-			for _, container := range pod.Spec.Containers {
-				go collectContainerLogs(ns.Name, pod.Name, container.Name)
-			}
+func collectNamespacePodLogs(namespace string) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		FieldSelector: "status.phase=Running",
+	})
+	if err != nil {
+		return
+	}
+
+	for _, pod := range pods.Items {
+		for _, container := range pod.Spec.Containers {
+			go collectContainerLogs(namespace, pod.Name, container.Name)
 		}
 	}
 }
@@ -341,6 +558,11 @@ func handleNamespaces(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(store.Namespaces())
 }
 
+func handlePods(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(store.Pods())
+}
+
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -351,7 +573,7 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	entries := store.Search("", "", "", "", limit)
+	entries := store.Search("", "", "", "", limit, false)
 	json.NewEncoder(w).Encode(LogsResponse{
 		Count:   len(entries),
 		Entries: entries,
@@ -365,6 +587,7 @@ func handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	level := r.URL.Query().Get("level")
 	pod := r.URL.Query().Get("pod")
+	useRegex := r.URL.Query().Get("regex") == "true"
 
 	limit := 500
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -373,7 +596,7 @@ func handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	entries := store.Search(query, namespace, level, pod, limit)
+	entries := store.Search(query, namespace, level, pod, limit, useRegex)
 
 	// Generate Scribe commentary
 	var scribeSays string
@@ -381,6 +604,8 @@ func handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		scribeSays = "The chronicles hold no such records. Perhaps the knowledge you seek lies beyond my scrolls."
 	} else if level == "ERROR" {
 		scribeSays = fmt.Sprintf("I have uncovered %d troubled entries in the annals. These errors speak of disturbances in the realm.", len(entries))
+	} else if useRegex && query != "" {
+		scribeSays = fmt.Sprintf("Your pattern '%s' yields %d records. The regex reveals what simple searches cannot.", query, len(entries))
 	} else if query != "" {
 		scribeSays = fmt.Sprintf("Your query yields %d records. It's all in the records, and I have found what you seek.", len(entries))
 	}
@@ -408,6 +633,17 @@ func handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	level := r.URL.Query().Get("level")
 	pod := r.URL.Query().Get("pod")
+	query := r.URL.Query().Get("q")
+	useRegex := r.URL.Query().Get("regex") == "true"
+
+	var regex *regexp.Regexp
+	if useRegex && query != "" {
+		var err error
+		regex, err = regexp.Compile("(?i)" + query)
+		if err != nil {
+			regex = nil
+		}
+	}
 
 	ch := store.Subscribe()
 	defer store.Unsubscribe(ch)
@@ -421,8 +657,21 @@ func handleLogsStream(w http.ResponseWriter, r *http.Request) {
 			if level != "" && entry.Level != level {
 				continue
 			}
-			if pod != "" && entry.Pod != pod {
+			if pod != "" && !strings.Contains(entry.Pod, pod) {
 				continue
+			}
+			if query != "" {
+				if regex != nil {
+					if !regex.MatchString(entry.Message) && !regex.MatchString(entry.Pod) {
+						continue
+					}
+				} else {
+					queryLower := strings.ToLower(query)
+					if !strings.Contains(strings.ToLower(entry.Message), queryLower) &&
+						!strings.Contains(strings.ToLower(entry.Pod), queryLower) {
+						continue
+					}
+				}
 			}
 
 			data, _ := json.Marshal(entry)
@@ -445,6 +694,7 @@ func handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	level := r.URL.Query().Get("level")
 	pod := r.URL.Query().Get("pod")
+	useRegex := r.URL.Query().Get("regex") == "true"
 
 	limit := 10000
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -453,7 +703,7 @@ func handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	entries := store.Search(query, namespace, level, pod, limit)
+	entries := store.Search(query, namespace, level, pod, limit, useRegex)
 
 	filename := fmt.Sprintf("scribe-logs-%s", time.Now().Format("2006-01-02-150405"))
 
@@ -492,6 +742,62 @@ func handleLogsExport(w http.ResponseWriter, r *http.Request) {
 			"entries":     entries,
 		})
 	}
+}
+
+func handleRetention(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == http.MethodGet {
+		store.retentionMu.RLock()
+		config := RetentionConfig{
+			MaxEntries:     store.maxEntries,
+			RetentionHours: store.retentionHours,
+		}
+		store.retentionMu.RUnlock()
+		json.NewEncoder(w).Encode(config)
+		return
+	}
+
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		var req RetentionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		store.SetRetention(req.MaxEntries, req.RetentionHours)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "updated",
+			"message": fmt.Sprintf("Retention set to %d entries, %d hours", req.MaxEntries, req.RetentionHours),
+		})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func handleVolumeStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	store.statsMu.RLock()
+	store.mu.RLock()
+	entryCount := len(store.entries)
+	store.mu.RUnlock()
+
+	stats := VolumeStats{
+		TotalBytes:     store.totalBytes,
+		TotalBytesHR:   formatBytes(store.totalBytes),
+		BytesPerPod:    copyInt64Map(store.bytesPerPod),
+		BytesPerNs:     copyInt64Map(store.bytesPerNs),
+		EntriesPerHour: copyIntMap(store.entriesPerHour),
+	}
+	if entryCount > 0 {
+		stats.AvgEntrySize = store.totalBytes / int64(entryCount)
+	}
+	store.statsMu.RUnlock()
+
+	json.NewEncoder(w).Encode(stats)
 }
 
 func handleChat(w http.ResponseWriter, r *http.Request) {
@@ -540,16 +846,28 @@ func generateScribeResponse(message string) string {
 		return fmt.Sprintf("I observe %d realms: %s. Each holds its own chronicles.", len(namespaces), strings.Join(namespaces, ", "))
 	}
 
+	if strings.Contains(msgLower, "retention") || strings.Contains(msgLower, "keep") || strings.Contains(msgLower, "storage") {
+		return fmt.Sprintf("I currently retain up to %d entries for %d hours. You may adjust these settings in the retention panel.", stats.RetentionConfig.MaxEntries, stats.RetentionConfig.RetentionHours)
+	}
+
+	if strings.Contains(msgLower, "volume") || strings.Contains(msgLower, "size") || strings.Contains(msgLower, "bytes") {
+		return fmt.Sprintf("The chronicles occupy %s of memory. The average entry consumes %d bytes.", stats.VolumeStats.TotalBytesHR, stats.VolumeStats.AvgEntrySize)
+	}
+
+	if strings.Contains(msgLower, "regex") || strings.Contains(msgLower, "pattern") {
+		return "Enable the regex toggle to search with patterns. For example, 'error|warn' finds both errors and warnings, while 'pod-[0-9]+' finds numbered pods."
+	}
+
 	if strings.Contains(msgLower, "help") || strings.Contains(msgLower, "what can you") {
-		return "I am Scribe, keeper of all logs. You may ask me about errors, warnings, namespaces, or the count of records. You may also search the chronicles using the search bar above. Use the filters to narrow your quest. And when you need a permanent record, export the logs to a file. It's all in the records."
+		return "I am Scribe, keeper of all logs. You may ask me about errors, warnings, namespaces, retention, volume, or the count of records. You may also search the chronicles using the search bar above. Enable regex for pattern matching. Use the filters to narrow your quest. And when you need a permanent record, export the logs to a file. It's all in the records."
 	}
 
 	if strings.Contains(msgLower, "export") || strings.Contains(msgLower, "download") {
 		return "To preserve the chronicles, click the Export button. You may choose JSON, CSV, or plain text format. The current filters will apply to your export."
 	}
 
-	if strings.Contains(msgLower, "stream") || strings.Contains(msgLower, "live") || strings.Contains(msgLower, "real-time") {
-		return "Click the Live Stream button to witness events as they unfold. The chronicles update in real-time, capturing every moment. Stop the stream when you have seen enough."
+	if strings.Contains(msgLower, "stream") || strings.Contains(msgLower, "live") || strings.Contains(msgLower, "real-time") || strings.Contains(msgLower, "tail") {
+		return "Click the Live Tail button to witness events as they unfold. The chronicles update in real-time, capturing every moment. Stop the stream when you have seen enough."
 	}
 
 	// Default responses
@@ -645,11 +963,12 @@ const uiTemplate = `<!DOCTYPE html>
             display: flex;
             align-items: center;
             gap: 15px;
+            flex-wrap: wrap;
         }
 
-        .stat-item { text-align: center; }
-        .stat-value { font-size: 1.5rem; font-weight: bold; color: var(--ctp-mauve); }
-        .stat-label { font-size: 0.75rem; color: var(--ctp-subtext0); }
+        .stat-item { text-align: center; min-width: 80px; }
+        .stat-value { font-size: 1.3rem; font-weight: bold; color: var(--ctp-mauve); }
+        .stat-label { font-size: 0.7rem; color: var(--ctp-subtext0); }
 
         .search-section {
             background: var(--ctp-mantle);
@@ -658,10 +977,11 @@ const uiTemplate = `<!DOCTYPE html>
             margin-bottom: 20px;
         }
 
-        .search-bar { display: flex; gap: 10px; margin-bottom: 15px; }
+        .search-bar { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
 
         .search-input {
             flex: 1;
+            min-width: 200px;
             padding: 12px 16px;
             background: var(--ctp-surface0);
             border: 1px solid var(--ctp-surface1);
@@ -693,8 +1013,10 @@ const uiTemplate = `<!DOCTYPE html>
         .btn-secondary:hover { background: var(--ctp-surface2); }
         .btn-export { background: var(--ctp-teal); }
         .btn-export:hover { background: var(--ctp-green); }
+        .btn-settings { background: var(--ctp-peach); }
+        .btn-settings:hover { background: var(--ctp-yellow); }
 
-        .filters { display: flex; gap: 10px; flex-wrap: wrap; }
+        .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
         .filter-select {
             padding: 10px 15px;
@@ -707,6 +1029,27 @@ const uiTemplate = `<!DOCTYPE html>
         }
 
         .filter-select:focus { outline: none; border-color: var(--ctp-mauve); }
+
+        .regex-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            background: var(--ctp-surface0);
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .regex-toggle input {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--ctp-mauve);
+        }
+
+        .regex-toggle.active {
+            background: var(--ctp-mauve);
+            color: var(--ctp-crust);
+        }
 
         .agent-section {
             background: var(--ctp-mantle);
@@ -754,6 +1097,7 @@ const uiTemplate = `<!DOCTYPE html>
             border-radius: 12px;
             border: 1px solid var(--ctp-surface0);
             overflow: hidden;
+            margin-bottom: 20px;
         }
 
         .logs-header {
@@ -762,6 +1106,8 @@ const uiTemplate = `<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
         }
 
         .logs-header h3 { color: var(--ctp-lavender); }
@@ -810,34 +1156,116 @@ const uiTemplate = `<!DOCTYPE html>
         .log-message { color: var(--ctp-text); word-break: break-word; line-height: 1.4; }
         .log-message.error { color: var(--ctp-red); }
 
-        .export-dropdown {
+        .export-dropdown, .settings-dropdown {
             position: relative;
             display: inline-block;
         }
 
-        .export-menu {
+        .export-menu, .settings-menu {
             display: none;
             position: absolute;
             right: 0;
             top: 100%;
             background: var(--ctp-surface0);
             border-radius: 8px;
-            min-width: 120px;
+            min-width: 200px;
             z-index: 100;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
 
-        .export-menu.show { display: block; }
+        .export-menu.show, .settings-menu.show { display: block; }
 
-        .export-menu a {
+        .export-menu a, .settings-menu-item {
             display: block;
             padding: 10px 15px;
             color: var(--ctp-text);
             text-decoration: none;
             transition: background 0.2s;
+            cursor: pointer;
         }
 
-        .export-menu a:hover { background: var(--ctp-surface1); }
+        .export-menu a:hover, .settings-menu-item:hover { background: var(--ctp-surface1); }
+
+        .settings-menu-content {
+            padding: 15px;
+        }
+
+        .settings-field {
+            margin-bottom: 15px;
+        }
+
+        .settings-field label {
+            display: block;
+            margin-bottom: 5px;
+            color: var(--ctp-subtext1);
+            font-size: 0.85rem;
+        }
+
+        .settings-field input {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--ctp-surface1);
+            border: 1px solid var(--ctp-surface2);
+            border-radius: 6px;
+            color: var(--ctp-text);
+            font-family: inherit;
+        }
+
+        .settings-field input:focus {
+            outline: none;
+            border-color: var(--ctp-mauve);
+        }
+
+        .volume-stats {
+            background: var(--ctp-mantle);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--ctp-surface0);
+        }
+
+        .volume-stats h3 {
+            color: var(--ctp-lavender);
+            margin-bottom: 15px;
+        }
+
+        .volume-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .volume-card {
+            background: var(--ctp-surface0);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .volume-card-title {
+            color: var(--ctp-subtext0);
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }
+
+        .volume-card-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--ctp-mauve);
+        }
+
+        .volume-bar {
+            height: 8px;
+            background: var(--ctp-surface1);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .volume-bar-fill {
+            height: 100%;
+            background: var(--ctp-mauve);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
 
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: var(--ctp-surface0); }
@@ -897,6 +1325,10 @@ const uiTemplate = `<!DOCTYPE html>
                     <div class="stat-value" id="pod-count">-</div>
                     <div class="stat-label">Pods</div>
                 </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="volume-size">-</div>
+                    <div class="stat-label">Volume</div>
+                </div>
             </div>
         </div>
     </header>
@@ -905,8 +1337,12 @@ const uiTemplate = `<!DOCTYPE html>
         <section class="search-section">
             <div class="search-bar">
                 <input type="text" class="search-input" id="search-query"
-                       placeholder="Search the chronicles... (e.g., error, warning, pod name)"
+                       placeholder="Search the chronicles... (e.g., error, warning, pod name, or regex pattern)"
                        onkeypress="if(event.key==='Enter') searchLogs()">
+                <label class="regex-toggle" id="regex-toggle">
+                    <input type="checkbox" id="use-regex" onchange="toggleRegex()">
+                    <span>Regex</span>
+                </label>
                 <button class="btn" onclick="searchLogs()">Search</button>
                 <button class="btn btn-secondary" onclick="clearSearch()">Clear</button>
             </div>
@@ -951,7 +1387,7 @@ const uiTemplate = `<!DOCTYPE html>
                 <h3>&#128203; Log Chronicle</h3>
                 <div class="logs-controls">
                     <button class="btn btn-secondary" onclick="toggleStream()" id="stream-btn">
-                        &#9654; Live Stream
+                        &#9654; Live Tail
                     </button>
                     <button class="btn btn-secondary" onclick="refreshLogs()">
                         &#8635; Refresh
@@ -966,10 +1402,53 @@ const uiTemplate = `<!DOCTYPE html>
                             <a href="#" onclick="exportLogs('txt')">Plain Text</a>
                         </div>
                     </div>
+                    <div class="settings-dropdown">
+                        <button class="btn btn-settings" onclick="toggleSettingsMenu()">
+                            &#9881; Retention
+                        </button>
+                        <div class="settings-menu" id="settings-menu">
+                            <div class="settings-menu-content">
+                                <div class="settings-field">
+                                    <label>Max Entries</label>
+                                    <input type="number" id="retention-max-entries" placeholder="50000" min="1000" max="500000">
+                                </div>
+                                <div class="settings-field">
+                                    <label>Retention Hours (0 = unlimited)</label>
+                                    <input type="number" id="retention-hours" placeholder="24" min="0" max="720">
+                                </div>
+                                <button class="btn" onclick="saveRetention()" style="width: 100%;">Save</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="logs-container" id="logs-container">
                 <div class="loading"><div class="spinner"></div></div>
+            </div>
+        </section>
+
+        <section class="volume-stats">
+            <h3>&#128202; Log Volume Statistics</h3>
+            <div class="volume-grid">
+                <div class="volume-card">
+                    <div class="volume-card-title">Total Volume</div>
+                    <div class="volume-card-value" id="vol-total">-</div>
+                </div>
+                <div class="volume-card">
+                    <div class="volume-card-title">Average Entry Size</div>
+                    <div class="volume-card-value" id="vol-avg">-</div>
+                </div>
+                <div class="volume-card">
+                    <div class="volume-card-title">Retention Limit</div>
+                    <div class="volume-card-value" id="vol-retention">-</div>
+                    <div class="volume-bar">
+                        <div class="volume-bar-fill" id="vol-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="volume-card">
+                    <div class="volume-card-title">Hours Retained</div>
+                    <div class="volume-card-value" id="vol-hours">-</div>
+                </div>
             </div>
         </section>
     </div>
@@ -982,12 +1461,16 @@ const uiTemplate = `<!DOCTYPE html>
             loadStats();
             loadNamespaces();
             loadLogs();
+            loadRetentionSettings();
         });
 
-        // Close export menu when clicking outside
+        // Close menus when clicking outside
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.export-dropdown')) {
                 document.getElementById('export-menu').classList.remove('show');
+            }
+            if (!e.target.closest('.settings-dropdown')) {
+                document.getElementById('settings-menu').classList.remove('show');
             }
         });
 
@@ -999,6 +1482,7 @@ const uiTemplate = `<!DOCTYPE html>
                 document.getElementById('error-count').textContent = formatNumber(data.levels?.ERROR || 0);
                 document.getElementById('namespace-count').textContent = Object.keys(data.namespaces || {}).length;
                 document.getElementById('pod-count').textContent = Object.keys(data.pods || {}).length;
+                document.getElementById('volume-size').textContent = data.volume_stats?.total_bytes_human || '-';
 
                 // Populate pod filter
                 const podSelect = document.getElementById('filter-pod');
@@ -1011,9 +1495,24 @@ const uiTemplate = `<!DOCTYPE html>
                     podSelect.appendChild(opt);
                 });
                 podSelect.value = currentPod;
+
+                // Update volume stats
+                updateVolumeStats(data);
             } catch (e) {
                 console.error('Stats error:', e);
             }
+        }
+
+        function updateVolumeStats(data) {
+            document.getElementById('vol-total').textContent = data.volume_stats?.total_bytes_human || '-';
+            document.getElementById('vol-avg').textContent = (data.volume_stats?.avg_entry_size || 0) + ' B';
+            document.getElementById('vol-retention').textContent = formatNumber(data.retention_config?.max_entries || 50000);
+            document.getElementById('vol-hours').textContent = (data.retention_config?.retention_hours || 24) + 'h';
+
+            const used = data.total_entries || 0;
+            const max = data.retention_config?.max_entries || 50000;
+            const pct = Math.min((used / max) * 100, 100);
+            document.getElementById('vol-bar').style.width = pct + '%';
         }
 
         function formatNumber(n) {
@@ -1038,6 +1537,36 @@ const uiTemplate = `<!DOCTYPE html>
             }
         }
 
+        async function loadRetentionSettings() {
+            try {
+                const res = await fetch('/api/retention');
+                const data = await res.json();
+                document.getElementById('retention-max-entries').value = data.max_entries;
+                document.getElementById('retention-hours').value = data.retention_hours;
+            } catch (e) {
+                console.error('Retention settings error:', e);
+            }
+        }
+
+        async function saveRetention() {
+            const maxEntries = parseInt(document.getElementById('retention-max-entries').value) || 50000;
+            const retentionHours = parseInt(document.getElementById('retention-hours').value) || 24;
+
+            try {
+                const res = await fetch('/api/retention', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ max_entries: maxEntries, retention_hours: retentionHours })
+                });
+                const data = await res.json();
+                addChatMessage('Retention settings updated: ' + data.message, 'agent');
+                document.getElementById('settings-menu').classList.remove('show');
+                loadStats();
+            } catch (e) {
+                addChatMessage('Failed to update retention settings.', 'agent');
+            }
+        }
+
         async function loadLogs() {
             const container = document.getElementById('logs-container');
             container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
@@ -1056,12 +1585,14 @@ const uiTemplate = `<!DOCTYPE html>
             const namespace = document.getElementById('filter-namespace').value;
             const level = document.getElementById('filter-level').value;
             const pod = document.getElementById('filter-pod').value;
+            const useRegex = document.getElementById('use-regex').checked;
 
             const params = new URLSearchParams();
             if (query) params.set('q', query);
             if (namespace) params.set('namespace', namespace);
             if (level) params.set('level', level);
             if (pod) params.set('pod', pod);
+            if (useRegex) params.set('regex', 'true');
 
             const container = document.getElementById('logs-container');
             container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
@@ -1076,6 +1607,16 @@ const uiTemplate = `<!DOCTYPE html>
                 }
             } catch (e) {
                 console.error('Search error:', e);
+            }
+        }
+
+        function toggleRegex() {
+            const toggle = document.getElementById('regex-toggle');
+            const checkbox = document.getElementById('use-regex');
+            if (checkbox.checked) {
+                toggle.classList.add('active');
+            } else {
+                toggle.classList.remove('active');
             }
         }
 
@@ -1116,6 +1657,8 @@ const uiTemplate = `<!DOCTYPE html>
             document.getElementById('filter-namespace').value = '';
             document.getElementById('filter-level').value = '';
             document.getElementById('filter-pod').value = '';
+            document.getElementById('use-regex').checked = false;
+            document.getElementById('regex-toggle').classList.remove('active');
             loadLogs();
         }
 
@@ -1141,18 +1684,22 @@ const uiTemplate = `<!DOCTYPE html>
                     eventSource = null;
                 }
                 streaming = false;
-                btn.innerHTML = '&#9654; Live Stream';
+                btn.innerHTML = '&#9654; Live Tail';
                 btn.style.background = '';
             } else {
                 const namespace = document.getElementById('filter-namespace').value;
                 const level = document.getElementById('filter-level').value;
                 const pod = document.getElementById('filter-pod').value;
+                const query = document.getElementById('search-query').value;
+                const useRegex = document.getElementById('use-regex').checked;
 
                 let url = '/api/logs/stream';
                 const params = new URLSearchParams();
                 if (namespace) params.set('namespace', namespace);
                 if (level) params.set('level', level);
                 if (pod) params.set('pod', pod);
+                if (query) params.set('q', query);
+                if (useRegex) params.set('regex', 'true');
                 if (params.toString()) url += '?' + params;
 
                 eventSource = new EventSource(url);
@@ -1164,9 +1711,9 @@ const uiTemplate = `<!DOCTYPE html>
                     addChatMessage('The stream has been interrupted. Attempting to reconnect...', 'agent');
                 };
                 streaming = true;
-                btn.innerHTML = '&#9632; Stop Stream';
+                btn.innerHTML = '&#9632; Stop Tail';
                 btn.style.background = 'var(--ctp-green)';
-                addChatMessage('Live stream activated. I shall now reveal events as they unfold...', 'agent');
+                addChatMessage('Live tail activated. I shall now reveal events as they unfold...', 'agent');
             }
         }
 
@@ -1193,6 +1740,13 @@ const uiTemplate = `<!DOCTYPE html>
         function toggleExportMenu() {
             const menu = document.getElementById('export-menu');
             menu.classList.toggle('show');
+            document.getElementById('settings-menu').classList.remove('show');
+        }
+
+        function toggleSettingsMenu() {
+            const menu = document.getElementById('settings-menu');
+            menu.classList.toggle('show');
+            document.getElementById('export-menu').classList.remove('show');
         }
 
         function exportLogs(format) {
@@ -1200,6 +1754,7 @@ const uiTemplate = `<!DOCTYPE html>
             const namespace = document.getElementById('filter-namespace').value;
             const level = document.getElementById('filter-level').value;
             const pod = document.getElementById('filter-pod').value;
+            const useRegex = document.getElementById('use-regex').checked;
 
             const params = new URLSearchParams();
             params.set('format', format);
@@ -1207,6 +1762,7 @@ const uiTemplate = `<!DOCTYPE html>
             if (namespace) params.set('namespace', namespace);
             if (level) params.set('level', level);
             if (pod) params.set('pod', pod);
+            if (useRegex) params.set('regex', 'true');
 
             window.location.href = '/api/logs/export?' + params;
             document.getElementById('export-menu').classList.remove('show');
@@ -1281,10 +1837,13 @@ func main() {
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/api/stats", handleStats)
 	http.HandleFunc("/api/namespaces", handleNamespaces)
+	http.HandleFunc("/api/pods", handlePods)
 	http.HandleFunc("/api/logs", handleLogs)
 	http.HandleFunc("/api/logs/search", handleLogsSearch)
 	http.HandleFunc("/api/logs/stream", handleLogsStream)
 	http.HandleFunc("/api/logs/export", handleLogsExport)
+	http.HandleFunc("/api/retention", handleRetention)
+	http.HandleFunc("/api/volume", handleVolumeStats)
 	http.HandleFunc("/api/chat", handleChat)
 
 	port := os.Getenv("PORT")

@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CI/CD Controller</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e4e4e7;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+        }
+        h1 {
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        h1 .icon {
+            font-size: 32px;
+        }
+        .status-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .status-healthy {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 12px 24px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: #a1a1aa;
+        }
+        .tab:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .tab.active {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.5);
+            color: #60a5fa;
+        }
+        .panel {
+            display: none;
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .panel.active {
+            display: block;
+        }
+        .card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        th {
+            color: #a1a1aa;
+            font-weight: 500;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        .status-pill {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-success { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .status-failed { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .status-running { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .status-queued { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+        .status-cancelled { background: rgba(113, 113, 122, 0.2); color: #71717a; }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #e4e4e7;
+        }
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.3);
+        }
+        .actions {
+            display: flex;
+            gap: 8px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #71717a;
+        }
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #a1a1aa;
+            font-size: 14px;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            color: #e4e4e7;
+            font-size: 14px;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        .modal-backdrop {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-backdrop.active {
+            display: flex;
+        }
+        .modal {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 24px;
+            width: 500px;
+            max-width: 90%;
+        }
+        .modal h2 {
+            margin-bottom: 20px;
+        }
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .log-viewer {
+            background: #0d0d14;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .log-line {
+            display: flex;
+            gap: 12px;
+            padding: 4px 0;
+        }
+        .log-time {
+            color: #71717a;
+            flex-shrink: 0;
+        }
+        .log-level {
+            flex-shrink: 0;
+            width: 50px;
+        }
+        .log-level.info { color: #60a5fa; }
+        .log-level.warn { color: #eab308; }
+        .log-level.error { color: #ef4444; }
+        .log-message {
+            color: #e4e4e7;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .stat-label {
+            color: #71717a;
+            font-size: 14px;
+        }
+        .stat-value.success { color: #22c55e; }
+        .stat-value.failed { color: #ef4444; }
+        .stat-value.running { color: #60a5fa; }
+        .webhook-url {
+            background: rgba(0,0,0,0.3);
+            padding: 12px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 13px;
+            word-break: break-all;
+            margin: 10px 0;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .running-indicator {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>
+                <span class="icon">&#9881;</span>
+                CI/CD Controller
+            </h1>
+            <span class="status-badge status-healthy" id="health-status">Healthy</span>
+        </header>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="pipelines">Pipelines</div>
+            <div class="tab" data-tab="executions">Executions</div>
+            <div class="tab" data-tab="queue">Build Queue</div>
+            <div class="tab" data-tab="webhooks">Webhooks</div>
+        </div>
+
+        <div id="pipelines" class="panel active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="total-pipelines">0</div>
+                    <div class="stat-label">Total Pipelines</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value success" id="success-count">0</div>
+                    <div class="stat-label">Successful Builds</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value failed" id="failed-count">0</div>
+                    <div class="stat-label">Failed Builds</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value running" id="running-count">0</div>
+                    <div class="stat-label">Running</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Pipelines</span>
+                    <button class="btn btn-primary" onclick="showCreatePipeline()">+ New Pipeline</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Repository</th>
+                            <th>Branch</th>
+                            <th>Last Build</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pipelines-table">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="executions" class="panel">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Pipeline Executions</span>
+                    <button class="btn btn-secondary" onclick="loadExecutions()">Refresh</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pipeline</th>
+                            <th>Build #</th>
+                            <th>Branch</th>
+                            <th>Commit</th>
+                            <th>Trigger</th>
+                            <th>Status</th>
+                            <th>Duration</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="executions-table">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="queue" class="panel">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Build Queue</span>
+                    <button class="btn btn-secondary" onclick="loadQueue()">Refresh</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pipeline</th>
+                            <th>Repository</th>
+                            <th>Branch</th>
+                            <th>Commit</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="queue-table">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="webhooks" class="panel">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Webhook Configuration</span>
+                </div>
+                <p style="color: #a1a1aa; margin-bottom: 15px;">Configure your Git repository to send webhooks to:</p>
+                <div class="webhook-url" id="webhook-url"></div>
+                <p style="color: #71717a; font-size: 13px;">Supported events: push, tag</p>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Recent Webhook Events</span>
+                    <button class="btn btn-secondary" onclick="loadWebhooks()">Refresh</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Source</th>
+                            <th>Repository</th>
+                            <th>Branch</th>
+                            <th>Event</th>
+                            <th>Processed</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="webhooks-table">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Pipeline Modal -->
+    <div class="modal-backdrop" id="create-pipeline-modal">
+        <div class="modal">
+            <h2>Create Pipeline</h2>
+            <form id="pipeline-form">
+                <div class="form-group">
+                    <label>Pipeline Name</label>
+                    <input type="text" name="name" required placeholder="my-app">
+                </div>
+                <div class="form-group">
+                    <label>Repository URL</label>
+                    <input type="text" name="repoUrl" placeholder="my-repo">
+                </div>
+                <div class="form-group">
+                    <label>Branch</label>
+                    <input type="text" name="branch" value="main" placeholder="main">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" name="description" placeholder="Build and deploy my app">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Pipeline</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Logs Modal -->
+    <div class="modal-backdrop" id="logs-modal">
+        <div class="modal" style="width: 800px;">
+            <h2>Build Logs</h2>
+            <div class="log-viewer" id="log-content">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeLogsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let pipelines = [];
+        let executions = [];
+        let queue = [];
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+
+                // Load data for tab
+                switch(tab.dataset.tab) {
+                    case 'pipelines': loadPipelines(); break;
+                    case 'executions': loadExecutions(); break;
+                    case 'queue': loadQueue(); break;
+                    case 'webhooks': loadWebhooks(); break;
+                }
+            });
+        });
+
+        async function loadPipelines() {
+            try {
+                const resp = await fetch(API_BASE + '/api/pipelines');
+                pipelines = await resp.json();
+                renderPipelines();
+                updateStats();
+            } catch (e) {
+                console.error('Failed to load pipelines:', e);
+            }
+        }
+
+        function renderPipelines() {
+            const tbody = document.getElementById('pipelines-table');
+            if (!pipelines || pipelines.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No pipelines configured</td></tr>';
+                return;
+            }
+            tbody.innerHTML = pipelines.map(p => `
+                <tr>
+                    <td><strong>${p.name || 'Unnamed'}</strong></td>
+                    <td>${p.repoUrl || '-'}</td>
+                    <td>${p.branch || 'main'}</td>
+                    <td>-</td>
+                    <td><span class="status-pill ${p.enabled ? 'status-success' : 'status-cancelled'}">${p.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                    <td class="actions">
+                        <button class="btn btn-primary" onclick="triggerPipeline('${p.id}')">Run</button>
+                        <button class="btn btn-danger" onclick="deletePipeline('${p.id}')">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadExecutions() {
+            try {
+                const resp = await fetch(API_BASE + '/api/executions');
+                executions = await resp.json();
+                renderExecutions();
+            } catch (e) {
+                console.error('Failed to load executions:', e);
+            }
+        }
+
+        function renderExecutions() {
+            const tbody = document.getElementById('executions-table');
+            if (!executions || executions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No executions yet</td></tr>';
+                return;
+            }
+            tbody.innerHTML = executions.map(e => `
+                <tr>
+                    <td>${e.pipelineName || 'Unknown'}</td>
+                    <td>#${e.buildNumber || '?'}</td>
+                    <td>${e.branch || '-'}</td>
+                    <td><code>${(e.commit || '-').substring(0, 7)}</code></td>
+                    <td>${e.trigger || 'manual'}</td>
+                    <td><span class="status-pill status-${e.status} ${e.status === 'running' ? 'running-indicator' : ''}">${e.status}</span></td>
+                    <td>${e.duration ? e.duration.toFixed(1) + 's' : '-'}</td>
+                    <td class="actions">
+                        <button class="btn btn-secondary" onclick="viewLogs('${e.id}')">Logs</button>
+                        <button class="btn btn-secondary" onclick="retryExecution('${e.id}')">Retry</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadQueue() {
+            try {
+                const resp = await fetch(API_BASE + '/api/queue');
+                queue = await resp.json();
+                renderQueue();
+            } catch (e) {
+                console.error('Failed to load queue:', e);
+            }
+        }
+
+        function renderQueue() {
+            const tbody = document.getElementById('queue-table');
+            if (!queue || queue.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Build queue is empty</td></tr>';
+                return;
+            }
+            tbody.innerHTML = queue.map(j => `
+                <tr>
+                    <td>${j.pipeline || 'Unknown'}</td>
+                    <td>${j.repo || '-'}</td>
+                    <td>${j.branch || '-'}</td>
+                    <td><code>${(j.commit || '-').substring(0, 7)}</code></td>
+                    <td><span class="status-pill status-${j.status} ${j.status === 'running' ? 'running-indicator' : ''}">${j.status}</span></td>
+                    <td>${new Date(j.createdAt).toLocaleString()}</td>
+                    <td class="actions">
+                        ${j.status === 'queued' ? `<button class="btn btn-danger" onclick="cancelBuild('${j.id}')">Cancel</button>` : ''}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadWebhooks() {
+            try {
+                const resp = await fetch(API_BASE + '/api/webhooks');
+                const webhooks = await resp.json();
+                renderWebhooks(webhooks);
+            } catch (e) {
+                console.error('Failed to load webhooks:', e);
+            }
+
+            // Set webhook URL
+            const url = window.location.origin + '/api/webhook/holmgit';
+            document.getElementById('webhook-url').textContent = url;
+        }
+
+        function renderWebhooks(webhooks) {
+            const tbody = document.getElementById('webhooks-table');
+            if (!webhooks || webhooks.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No webhook events received</td></tr>';
+                return;
+            }
+            tbody.innerHTML = webhooks.map(w => `
+                <tr>
+                    <td>${w.source || 'unknown'}</td>
+                    <td>${w.repo || '-'}</td>
+                    <td>${w.branch || '-'}</td>
+                    <td>${w.type || 'push'}</td>
+                    <td><span class="status-pill ${w.processed ? 'status-success' : 'status-queued'}">${w.processed ? 'Yes' : 'No'}</span></td>
+                    <td>${new Date(w.timestamp).toLocaleString()}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function updateStats() {
+            document.getElementById('total-pipelines').textContent = pipelines.length;
+
+            try {
+                const resp = await fetch(API_BASE + '/api/executions');
+                const execs = await resp.json();
+
+                let success = 0, failed = 0, running = 0;
+                execs.forEach(e => {
+                    if (e.status === 'success') success++;
+                    else if (e.status === 'failed') failed++;
+                    else if (e.status === 'running') running++;
+                });
+
+                document.getElementById('success-count').textContent = success;
+                document.getElementById('failed-count').textContent = failed;
+                document.getElementById('running-count').textContent = running;
+            } catch (e) {}
+        }
+
+        function showCreatePipeline() {
+            document.getElementById('create-pipeline-modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('create-pipeline-modal').classList.remove('active');
+        }
+
+        document.getElementById('pipeline-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = {
+                name: form.name.value,
+                repoUrl: form.repoUrl.value,
+                branch: form.branch.value || 'main',
+                description: form.description.value,
+                enabled: true,
+                stages: [
+                    { name: 'build', type: 'build', timeout: 600 },
+                    { name: 'deploy', type: 'deploy', dependsOn: ['build'], timeout: 300 }
+                ],
+                triggers: [
+                    { type: 'webhook', branches: ['main', 'master'], events: ['push'] }
+                ]
+            };
+
+            try {
+                await fetch(API_BASE + '/api/pipelines', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                closeModal();
+                form.reset();
+                loadPipelines();
+            } catch (e) {
+                alert('Failed to create pipeline');
+            }
+        });
+
+        async function triggerPipeline(id) {
+            try {
+                await fetch(API_BASE + `/api/pipelines/${id}/trigger`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                loadQueue();
+                loadExecutions();
+            } catch (e) {
+                alert('Failed to trigger pipeline');
+            }
+        }
+
+        async function deletePipeline(id) {
+            if (!confirm('Are you sure you want to delete this pipeline?')) return;
+            try {
+                await fetch(API_BASE + `/api/pipelines/${id}`, { method: 'DELETE' });
+                loadPipelines();
+            } catch (e) {
+                alert('Failed to delete pipeline');
+            }
+        }
+
+        async function cancelBuild(id) {
+            try {
+                await fetch(API_BASE + `/api/queue/${id}/cancel`, { method: 'POST' });
+                loadQueue();
+            } catch (e) {
+                alert('Failed to cancel build');
+            }
+        }
+
+        async function retryExecution(id) {
+            try {
+                await fetch(API_BASE + `/api/executions/${id}/retry`, { method: 'POST' });
+                loadQueue();
+                loadExecutions();
+            } catch (e) {
+                alert('Failed to retry execution');
+            }
+        }
+
+        async function viewLogs(execId) {
+            try {
+                const resp = await fetch(API_BASE + `/api/executions/${execId}/logs`);
+                const logs = await resp.json();
+
+                const content = document.getElementById('log-content');
+                let html = '';
+
+                for (const [id, log] of Object.entries(logs)) {
+                    html += `<div style="margin-bottom: 15px;"><strong>Stage: ${log.stage}</strong></div>`;
+                    log.lines.forEach(line => {
+                        const time = new Date(line.timestamp).toLocaleTimeString();
+                        html += `<div class="log-line">
+                            <span class="log-time">${time}</span>
+                            <span class="log-level ${line.level}">[${line.level.toUpperCase()}]</span>
+                            <span class="log-message">${line.message}</span>
+                        </div>`;
+                    });
+                }
+
+                if (!html) {
+                    html = '<div style="color: #71717a;">No logs available</div>';
+                }
+
+                content.innerHTML = html;
+                document.getElementById('logs-modal').classList.add('active');
+            } catch (e) {
+                alert('Failed to load logs');
+            }
+        }
+
+        function closeLogsModal() {
+            document.getElementById('logs-modal').classList.remove('active');
+        }
+
+        // Initial load
+        loadPipelines();
+
+        // Auto-refresh
+        setInterval(() => {
+            const activeTab = document.querySelector('.tab.active').dataset.tab;
+            switch(activeTab) {
+                case 'pipelines': loadPipelines(); break;
+                case 'executions': loadExecutions(); break;
+                case 'queue': loadQueue(); break;
+            }
+        }, 10000);
+    </script>
+</body>
+</html>

@@ -83,6 +83,11 @@ def update_node_cache():
 def index():
     return get_dashboard_html()
 
+@app.route("/health")
+def health():
+    """Health check endpoint"""
+    return jsonify({"success": True, "data": {"service": "cluster-manager", "status": "healthy"}})
+
 @app.route("/api/v1/nodes")
 def api_nodes():
     """Get all nodes with their status"""

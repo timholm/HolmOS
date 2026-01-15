@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -16,261 +18,219 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
-type ServiceHealth struct {
-	Name         string    `json:"name"`
-	Status       string    `json:"status"`
-	ResponseTime string    `json:"responseTime"`
-	ResponseMs   int64     `json:"responseMs"`
+// Catppuccin Mocha colors for reference
+// --base: #1e1e2e, --mantle: #181825, --crust: #11111b
+// --text: #cdd6f4, --green: #a6e3a1, --red: #f38ba8
+// --yellow: #f9e2af, --blue: #89b4fa, --mauve: #cba6f7
+
+// === Data Structures ===
+
+type ServiceConfig struct {
+	Name        string `json:"name" yaml:"name"`
+	Port        int    `json:"port" yaml:"port"`
+	Category    string `json:"category" yaml:"category"`
+	Description string `json:"description" yaml:"description"`
+	Health      string `json:"health" yaml:"health"`
+}
+
+type TestResult struct {
+	ID           string    `json:"id"`
+	ServiceName  string    `json:"serviceName"`
+	TestType     string    `json:"testType"` // health, unit, integration, e2e
+	Status       string    `json:"status"`   // pass, fail, error, running, pending
 	Message      string    `json:"message"`
+	Duration     int64     `json:"duration"` // milliseconds
+	ResponseTime string    `json:"responseTime"`
 	Endpoint     string    `json:"endpoint"`
-	LastChecked  time.Time `json:"lastChecked"`
 	Category     string    `json:"category"`
+	Timestamp    time.Time `json:"timestamp"`
+	Details      string    `json:"details,omitempty"`
+}
+
+type TestRun struct {
+	ID           string       `json:"id"`
+	StartTime    time.Time    `json:"startTime"`
+	EndTime      time.Time    `json:"endTime,omitempty"`
+	Status       string       `json:"status"` // running, completed, failed
+	Results      []TestResult `json:"results"`
+	Summary      TestSummary  `json:"summary"`
+	TriggerType  string       `json:"triggerType"` // manual, scheduled, webhook, github
+	TriggerBy    string       `json:"triggerBy"`
+}
+
+type TestSummary struct {
+	Total      int   `json:"total"`
+	Passed     int   `json:"passed"`
+	Failed     int   `json:"failed"`
+	Errors     int   `json:"errors"`
+	Running    int   `json:"running"`
+	Pending    int   `json:"pending"`
+	Skipped    int   `json:"skipped"`
+	AvgLatency int64 `json:"avgLatency"`
+	Duration   int64 `json:"duration"`
+	PassRate   float64 `json:"passRate"`
 }
 
 type TestHistory struct {
 	Timestamp   time.Time `json:"timestamp"`
+	RunID       string    `json:"runId"`
 	TotalCount  int       `json:"totalCount"`
 	PassCount   int       `json:"passCount"`
 	FailCount   int       `json:"failCount"`
 	ErrorCount  int       `json:"errorCount"`
 	AvgResponse int64     `json:"avgResponse"`
-}
-
-type HealthResponse struct {
-	Results     []ServiceHealth `json:"results"`
-	Timestamp   time.Time       `json:"timestamp"`
-	Summary     Summary         `json:"summary"`
-	History     []TestHistory   `json:"history"`
-	Alerts      []Alert         `json:"alerts"`
-}
-
-type Summary struct {
-	Total   int   `json:"total"`
-	Healthy int   `json:"healthy"`
-	Failing int   `json:"failing"`
-	Errors  int   `json:"errors"`
-	AvgMs   int64 `json:"avgMs"`
+	Duration    int64     `json:"duration"`
+	PassRate    float64   `json:"passRate"`
 }
 
 type Alert struct {
+	ID        string    `json:"id"`
 	Service   string    `json:"service"`
 	Message   string    `json:"message"`
-	Severity  string    `json:"severity"`
+	Severity  string    `json:"severity"` // critical, warning, info
 	Timestamp time.Time `json:"timestamp"`
+	Resolved  bool      `json:"resolved"`
 }
 
-type ServiceConfig struct {
-	Name     string
-	Endpoint string
-	Port     string
-	Category string
+type GitHubWorkflowRun struct {
+	ID         int64     `json:"id"`
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	Conclusion string    `json:"conclusion"`
+	HTMLURL    string    `json:"html_url"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	HeadBranch string    `json:"head_branch"`
+	HeadSHA    string    `json:"head_sha"`
 }
+
+type GitHubWorkflowsResponse struct {
+	TotalCount   int                 `json:"total_count"`
+	WorkflowRuns []GitHubWorkflowRun `json:"workflow_runs"`
+}
+
+// === Global State ===
 
 var (
-	historyMutex sync.RWMutex
-	testHistory  []TestHistory
-	alertsMutex  sync.RWMutex
-	activeAlerts []Alert
-	maxHistory   = 100
+	testRunsMutex   sync.RWMutex
+	testRuns        []TestRun
+	testHistoryMutex sync.RWMutex
+	testHistory     []TestHistory
+	alertsMutex     sync.RWMutex
+	activeAlerts    []Alert
+	currentRunMutex sync.RWMutex
+	currentRun      *TestRun
+
+	maxHistory      = 200
+	maxRuns         = 50
+	httpClient      = &http.Client{Timeout: 10 * time.Second}
+
+	// Config
+	githubRepo   = os.Getenv("GITHUB_REPO")
+	githubToken  = os.Getenv("GITHUB_TOKEN")
+	clusterHost  = getEnvOrDefault("CLUSTER_HOST", "holm.svc.cluster.local")
 )
+
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
+}
+
+// === Service Registry (from services.yaml) ===
 
 func getServices() []ServiceConfig {
 	return []ServiceConfig{
-		// Test Services
-		{"auth-test", "http://auth-test.holm.svc.cluster.local:8080/health", "8080", "test"},
-		{"files-test", "http://files-test.holm.svc.cluster.local/health", "80", "test"},
-		{"terminal-test", "http://terminal-test.holm.svc.cluster.local:8080/health", "8080", "test"},
-		{"cluster-test", "http://cluster-test.holm.svc.cluster.local:8080/health", "8080", "test"},
-		{"registry-test", "http://registry-test.holm.svc.cluster.local/health", "80", "test"},
-		{"integration-test", "http://integration-test.holm.svc.cluster.local/health", "80", "test"},
-		
-		// Core Infrastructure
-		{"api-gateway", "http://api-gateway.holm.svc.cluster.local:8080/health", "8080", "core"},
-		{"auth-gateway", "http://auth-gateway.holm.svc.cluster.local:8080/health", "8080", "core"},
-		{"gateway", "http://gateway.holm.svc.cluster.local:8080/health", "8080", "core"},
-		{"postgres", "http://postgres.holm.svc.cluster.local:5432", "5432", "core"},
-		
-		// Auth Services
-		{"auth-login", "http://auth-login.holm.svc.cluster.local/health", "80", "auth"},
-		{"auth-logout", "http://auth-logout.holm.svc.cluster.local/health", "80", "auth"},
-		{"auth-refresh", "http://auth-refresh.holm.svc.cluster.local/health", "80", "auth"},
-		{"auth-register", "http://auth-register.holm.svc.cluster.local/health", "80", "auth"},
-		{"auth-token-validate", "http://auth-token-validate.holm.svc.cluster.local:8080/health", "8080", "auth"},
-		
-		// File Services
-		{"file-list", "http://file-list.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-upload", "http://file-upload.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-download", "http://file-download.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-delete", "http://file-delete.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-copy", "http://file-copy.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-move", "http://file-move.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-mkdir", "http://file-mkdir.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-meta", "http://file-meta.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-search", "http://file-search.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-compress", "http://file-compress.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-decompress", "http://file-decompress.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-preview", "http://file-preview.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-convert", "http://file-convert.holm.svc.cluster.local/health", "80", "files"},
-		{"file-encrypt", "http://file-encrypt.holm.svc.cluster.local/health", "80", "files"},
-		{"file-share", "http://file-share.holm.svc.cluster.local/health", "80", "files"},
-		{"file-thumbnail", "http://file-thumbnail.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-watch", "http://file-watch.holm.svc.cluster.local/health", "80", "files"},
-		{"file-web", "http://file-web.holm.svc.cluster.local:8080/health", "8080", "files"},
-		{"file-web-nautilus", "http://file-web-nautilus.holm.svc.cluster.local/health", "80", "files"},
-		
-		// Terminal Services
-		{"terminal", "http://terminal.holm.svc.cluster.local:8080/health", "8080", "terminal"},
-		{"terminal-host-add", "http://terminal-host-add.holm.svc.cluster.local:8080/health", "8080", "terminal"},
-		{"terminal-host-list", "http://terminal-host-list.holm.svc.cluster.local:8080/health", "8080", "terminal"},
-		
-		// Cluster Services
-		{"cluster-manager", "http://cluster-manager.holm.svc.cluster.local:8080/health", "8080", "cluster"},
-		{"cluster-apt-update", "http://cluster-apt-update.holm.svc.cluster.local:8080/health", "8080", "cluster"},
-		{"cluster-node-list", "http://cluster-node-list.holm.svc.cluster.local:8080/health", "8080", "cluster"},
-		{"cluster-node-ping", "http://cluster-node-ping.holm.svc.cluster.local:8080/health", "8080", "cluster"},
-		{"cluster-reboot-exec", "http://cluster-reboot-exec.holm.svc.cluster.local:8080/health", "8080", "cluster"},
-		
-		// Registry Services
-		{"registry-ui", "http://registry-ui.holm.svc.cluster.local:8080/health", "8080", "registry"},
-		{"registry-list-repos", "http://registry-list-repos.holm.svc.cluster.local:8080/health", "8080", "registry"},
-		{"registry-list-tags", "http://registry-list-tags.holm.svc.cluster.local:8080/health", "8080", "registry"},
-		
-		// Settings Services
-		{"settings-web", "http://settings-web.holm.svc.cluster.local:8080/health", "8080", "settings"},
-		{"settings-theme", "http://settings-theme.holm.svc.cluster.local:8080/health", "8080", "settings"},
-		{"settings-tabs", "http://settings-tabs.holm.svc.cluster.local:8080/health", "8080", "settings"},
-		{"settings-backup", "http://settings-backup.holm.svc.cluster.local:8080/health", "8080", "settings"},
-		{"settings-restore", "http://settings-restore.holm.svc.cluster.local:8080/health", "8080", "settings"},
-		
-		// Audiobook Services
-		{"audiobook-web", "http://audiobook-web.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		{"audiobook-parse-epub", "http://audiobook-parse-epub.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		{"audiobook-chunk-text", "http://audiobook-chunk-text.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		{"audiobook-tts-convert", "http://audiobook-tts-convert.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		{"audiobook-audio-concat", "http://audiobook-audio-concat.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		{"audiobook-audio-normalize", "http://audiobook-audio-normalize.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		{"audiobook-upload-epub", "http://audiobook-upload-epub.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		{"audiobook-upload-txt", "http://audiobook-upload-txt.holm.svc.cluster.local:8080/health", "8080", "audiobook"},
-		
+		// Core Entry Points
+		{"holmos-shell", 30000, "core", "iPhone-style home screen", "/health"},
+		{"claude-pod", 30001, "core", "AI chat interface", "/health"},
+		{"app-store", 30002, "core", "AI-powered app generator", "/health"},
+		{"chat-hub", 30003, "core", "Unified agent messaging", "/health"},
+
+		// AI Agents
+		{"nova", 30004, "agent", "I see all 13 stars in our constellation", "/health"},
+		{"merchant", 30005, "agent", "Describe what you need, I'll make it happen", "/health"},
+		{"pulse", 30006, "agent", "Vital signs are looking good", "/health"},
+		{"gateway", 30008, "agent", "All roads lead through me", "/health"},
+		{"scribe", 30860, "agent", "It's all in the records", "/health"},
+		{"vault", 30870, "agent", "Your secrets are safe with me", "/health"},
+
 		// Apps
-		{"app-store", "http://app-store.holm.svc.cluster.local/health", "80", "apps"},
-		{"browser-app", "http://browser-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"calculator-app", "http://calculator-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"clock-app", "http://clock-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"contacts-app", "http://contacts-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"mail-app", "http://mail-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"maps-app", "http://maps-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"music-app", "http://music-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"notes-app", "http://notes-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"photos-app", "http://photos-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"reminders-app", "http://reminders-app.holm.svc.cluster.local/health", "80", "apps"},
-		{"video-app", "http://video-app.holm.svc.cluster.local/health", "80", "apps"},
-		
-		// Agent Services
-		{"agent-orchestrator", "http://agent-orchestrator.holm.svc.cluster.local/health", "80", "agents"},
-		{"agent-router", "http://agent-router.holm.svc.cluster.local/health", "80", "agents"},
-		{"config-agent", "http://config-agent.holm.svc.cluster.local:5000/health", "5000", "agents"},
-		{"guardian-agent", "http://guardian-agent.holm.svc.cluster.local/health", "80", "agents"},
-		
-		// Platform Services
-		{"atlas", "http://atlas.holm.svc.cluster.local/health", "80", "platform"},
-		{"chat-hub", "http://chat-hub.holm.svc.cluster.local:8080/health", "8080", "platform"},
-		{"claude-pod", "http://claude-pod.holm.svc.cluster.local/health", "80", "platform"},
-		{"compass", "http://compass.holm.svc.cluster.local/health", "80", "platform"},
-		{"echo", "http://echo.holm.svc.cluster.local/health", "80", "platform"},
-		{"forge", "http://forge.holm.svc.cluster.local/health", "80", "platform"},
-		{"harbor", "http://harbor.holm.svc.cluster.local/health", "80", "platform"},
-		{"helix", "http://helix.holm.svc.cluster.local/health", "80", "platform"},
-		{"holmos-shell", "http://holmos-shell.holm.svc.cluster.local/health", "80", "platform"},
-		{"merchant", "http://merchant.holm.svc.cluster.local/health", "80", "platform"},
-		{"nova", "http://nova.holm.svc.cluster.local/health", "80", "platform"},
-		{"pulse", "http://pulse.holm.svc.cluster.local/health", "80", "platform"},
-		{"scribe", "http://scribe.holm.svc.cluster.local/health", "80", "platform"},
-		{"sentinel", "http://sentinel.holm.svc.cluster.local/health", "80", "platform"},
-		{"vault", "http://vault.holm.svc.cluster.local/health", "80", "platform"},
-		
-		// DevOps Services
-		{"build-orchestrator", "http://build-orchestrator.holm.svc.cluster.local/health", "80", "devops"},
-		{"cicd-controller", "http://cicd-controller-service.holm.svc.cluster.local:5000/health", "5000", "devops"},
-		{"config-server", "http://config-server.holm.svc.cluster.local:8080/health", "8080", "devops"},
-		{"deploy-controller", "http://deploy-controller.holm.svc.cluster.local/health", "80", "devops"},
-		{"gitops-sync", "http://gitops-sync.holm.svc.cluster.local/health", "80", "devops"},
-		{"secret-manager", "http://secret-manager.holm.svc.cluster.local:8080/health", "8080", "devops"},
-		{"service-mesh-controller", "http://service-mesh-controller.holm.svc.cluster.local/health", "80", "devops"},
-		
-		// Monitoring Services
-		{"alerting", "http://alerting.holm.svc.cluster.local/health", "80", "monitoring"},
-		{"log-aggregator", "http://log-aggregator.holm.svc.cluster.local/health", "80", "monitoring"},
-		{"metrics-collector", "http://metrics-collector.holm.svc.cluster.local:8080/health", "8080", "monitoring"},
-		{"metrics-dashboard", "http://metrics-dashboard.holm.svc.cluster.local:8080/health", "8080", "monitoring"},
-		
-		// Backup Services
-		{"backup-scheduler", "http://backup-scheduler.holm.svc.cluster.local:8080/health", "8080", "backup"},
-		{"backup-storage", "http://backup-storage.holm.svc.cluster.local/health", "80", "backup"},
-		{"restore-manager", "http://restore-manager.holm.svc.cluster.local:8080/health", "8080", "backup"},
-		
-		// Notification Services
-		{"notification-email", "http://notification-email.holm.svc.cluster.local:8080/health", "8080", "notification"},
-		{"notification-queue", "http://notification-queue.holm.svc.cluster.local/health", "80", "notification"},
-		{"notification-webhook", "http://notification-webhook.holm.svc.cluster.local:8080/health", "8080", "notification"},
-		
-		// User Services
-		{"user-activity", "http://user-activity.holm.svc.cluster.local/health", "80", "user"},
-		{"user-preferences", "http://user-preferences.holm.svc.cluster.local/health", "80", "user"},
-		{"user-profile", "http://user-profile.holm.svc.cluster.local/health", "80", "user"},
-		
-		// Cache and Rate Limiting
-		{"cache-service", "http://cache-service.holm.svc.cluster.local:8080/health", "8080", "infra"},
-		{"rate-limiter", "http://rate-limiter.holm.svc.cluster.local:8080/health", "8080", "infra"},
-		
-		// Database Services
-		{"contacts-db", "http://contacts-db.holm.svc.cluster.local:5432", "5432", "database"},
-		{"mail-app-postgres", "http://mail-app-postgres.holm.svc.cluster.local:5432", "5432", "database"},
-		{"backup-scheduler-postgres", "http://backup-scheduler-postgres.holm.svc.cluster.local:5432", "5432", "database"},
+		{"clock-app", 30007, "app", "World clock, alarms, timer", "/health"},
+		{"calculator-app", 30010, "app", "iPhone-style calculator", "/health"},
+		{"file-web-nautilus", 30088, "app", "GNOME-style file manager", "/health"},
+		{"settings-web", 30600, "app", "Settings hub", "/health"},
+		{"audiobook-web", 30700, "app", "Audiobook TTS pipeline", "/health"},
+		{"terminal-web", 30800, "app", "Web-based terminal", "/health"},
+
+		// Infrastructure & DevOps
+		{"holm-git", 30009, "devops", "Git repository server", "/health"},
+		{"cicd-controller", 30020, "devops", "CI/CD pipeline manager", "/health"},
+		{"deploy-controller", 30021, "devops", "Auto-deployment controller", "/health"},
+
+		// Admin & Monitoring
+		{"cluster-manager", 30502, "admin", "Cluster admin dashboard", "/health"},
+		{"backup-dashboard", 30850, "admin", "Backup management", "/health"},
+		{"test-dashboard", 30900, "monitoring", "Service health monitoring", "/health"},
+		{"metrics-dashboard", 30950, "monitoring", "Cluster metrics", "/health"},
+		{"registry-ui", 31750, "devops", "Container registry browser", "/health"},
 	}
 }
 
-func checkHealth(svc ServiceConfig) ServiceHealth {
+// === Health Check Functions ===
+
+func generateID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+func checkServiceHealth(svc ServiceConfig) TestResult {
 	start := time.Now()
-	client := &http.Client{Timeout: 5 * time.Second}
-	
-	result := ServiceHealth{
-		Name:        svc.Name,
-		Endpoint:    svc.Endpoint,
+	id := generateID()
+
+	endpoint := fmt.Sprintf("http://%s.%s:%d%s", svc.Name, clusterHost, svc.Port, svc.Health)
+
+	result := TestResult{
+		ID:          id,
+		ServiceName: svc.Name,
+		TestType:    "health",
+		Endpoint:    endpoint,
 		Category:    svc.Category,
-		LastChecked: time.Now(),
+		Timestamp:   time.Now(),
 	}
-	
-	// Special handling for postgres/database services
-	if svc.Port == "5432" {
-		// TCP check for databases
-		result.Status = "pass"
-		result.Message = "Database service (TCP check skipped)"
-		result.ResponseTime = "N/A"
-		result.ResponseMs = 0
+
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		result.Status = "error"
+		result.Message = "Failed to create request"
+		result.Duration = time.Since(start).Milliseconds()
+		result.ResponseTime = fmt.Sprintf("%dms", result.Duration)
 		return result
 	}
-	
-	resp, err := client.Get(svc.Endpoint)
+
+	resp, err := httpClient.Do(req)
 	elapsed := time.Since(start)
-	result.ResponseMs = elapsed.Milliseconds()
-	result.ResponseTime = fmt.Sprintf("%dms", elapsed.Milliseconds())
-	
+	result.Duration = elapsed.Milliseconds()
+	result.ResponseTime = fmt.Sprintf("%dms", result.Duration)
+
 	if err != nil {
 		result.Status = "error"
 		if strings.Contains(err.Error(), "timeout") {
 			result.Message = "Connection timeout"
 		} else if strings.Contains(err.Error(), "connection refused") {
 			result.Message = "Connection refused"
+		} else if strings.Contains(err.Error(), "no such host") {
+			result.Message = "Service not found"
 		} else {
 			result.Message = "Connection failed"
 		}
+		result.Details = err.Error()
 		return result
 	}
 	defer resp.Body.Close()
-	
+
 	body, _ := io.ReadAll(resp.Body)
-	
+
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		result.Status = "pass"
 		result.Message = "Healthy"
@@ -282,190 +242,611 @@ func checkHealth(svc ServiceConfig) ServiceHealth {
 			}
 		}
 	} else if resp.StatusCode == 404 {
-		// 404 might mean service is up but no /health endpoint
 		result.Status = "pass"
 		result.Message = "Running (no health endpoint)"
 	} else {
 		result.Status = "fail"
 		result.Message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		result.Details = string(body)
 	}
-	
+
 	return result
 }
 
-func runAllHealthChecks() HealthResponse {
+// === Test Run Execution ===
+
+func startTestRun(triggerType, triggerBy string) *TestRun {
+	run := &TestRun{
+		ID:          generateID(),
+		StartTime:   time.Now(),
+		Status:      "running",
+		TriggerType: triggerType,
+		TriggerBy:   triggerBy,
+		Results:     []TestResult{},
+	}
+
+	currentRunMutex.Lock()
+	currentRun = run
+	currentRunMutex.Unlock()
+
+	return run
+}
+
+func completeTestRun(run *TestRun) {
+	run.EndTime = time.Now()
+	run.Status = "completed"
+
+	// Calculate summary
+	var totalLatency int64
+	var latencyCount int
+
+	for _, r := range run.Results {
+		switch r.Status {
+		case "pass":
+			run.Summary.Passed++
+		case "fail":
+			run.Summary.Failed++
+		case "error":
+			run.Summary.Errors++
+		case "running":
+			run.Summary.Running++
+		case "pending":
+			run.Summary.Pending++
+		case "skipped":
+			run.Summary.Skipped++
+		}
+		if r.Duration > 0 {
+			totalLatency += r.Duration
+			latencyCount++
+		}
+	}
+
+	run.Summary.Total = len(run.Results)
+	run.Summary.Duration = run.EndTime.Sub(run.StartTime).Milliseconds()
+
+	if latencyCount > 0 {
+		run.Summary.AvgLatency = totalLatency / int64(latencyCount)
+	}
+
+	if run.Summary.Total > 0 {
+		run.Summary.PassRate = float64(run.Summary.Passed) / float64(run.Summary.Total) * 100
+	}
+
+	// Add to history
+	historyEntry := TestHistory{
+		Timestamp:   run.EndTime,
+		RunID:       run.ID,
+		TotalCount:  run.Summary.Total,
+		PassCount:   run.Summary.Passed,
+		FailCount:   run.Summary.Failed,
+		ErrorCount:  run.Summary.Errors,
+		AvgResponse: run.Summary.AvgLatency,
+		Duration:    run.Summary.Duration,
+		PassRate:    run.Summary.PassRate,
+	}
+
+	testHistoryMutex.Lock()
+	testHistory = append(testHistory, historyEntry)
+	if len(testHistory) > maxHistory {
+		testHistory = testHistory[1:]
+	}
+	testHistoryMutex.Unlock()
+
+	// Store run
+	testRunsMutex.Lock()
+	testRuns = append([]TestRun{*run}, testRuns...)
+	if len(testRuns) > maxRuns {
+		testRuns = testRuns[:maxRuns]
+	}
+	testRunsMutex.Unlock()
+
+	// Generate alerts
+	generateAlerts(run)
+
+	// Clear current run
+	currentRunMutex.Lock()
+	currentRun = nil
+	currentRunMutex.Unlock()
+}
+
+func runAllHealthChecks(triggerType, triggerBy string) *TestRun {
+	run := startTestRun(triggerType, triggerBy)
 	services := getServices()
-	results := make([]ServiceHealth, len(services))
-	
+	results := make([]TestResult, len(services))
+
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 20) // Limit concurrent checks
-	
+
 	for i, svc := range services {
 		wg.Add(1)
 		go func(idx int, service ServiceConfig) {
 			defer wg.Done()
 			semaphore <- struct{}{}
-			results[idx] = checkHealth(service)
+			results[idx] = checkServiceHealth(service)
 			<-semaphore
 		}(i, svc)
 	}
-	
+
 	wg.Wait()
-	
+
 	// Sort by category then name
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Category != results[j].Category {
 			return results[i].Category < results[j].Category
 		}
-		return results[i].Name < results[j].Name
+		return results[i].ServiceName < results[j].ServiceName
 	})
-	
-	// Calculate summary
-	summary := Summary{Total: len(results)}
-	var totalMs int64
-	var countMs int
-	newAlerts := []Alert{}
-	
-	for _, r := range results {
+
+	run.Results = results
+	completeTestRun(run)
+
+	return run
+}
+
+func generateAlerts(run *TestRun) {
+	alertsMutex.Lock()
+	defer alertsMutex.Unlock()
+
+	// Clear old alerts
+	activeAlerts = []Alert{}
+
+	for _, r := range run.Results {
+		var alert *Alert
+
 		switch r.Status {
-		case "pass":
-			summary.Healthy++
-		case "fail":
-			summary.Failing++
-			newAlerts = append(newAlerts, Alert{
-				Service:   r.Name,
-				Message:   r.Message,
-				Severity:  "warning",
-				Timestamp: time.Now(),
-			})
 		case "error":
-			summary.Errors++
-			newAlerts = append(newAlerts, Alert{
-				Service:   r.Name,
+			alert = &Alert{
+				ID:        generateID(),
+				Service:   r.ServiceName,
 				Message:   r.Message,
 				Severity:  "critical",
 				Timestamp: time.Now(),
-			})
+			}
+		case "fail":
+			alert = &Alert{
+				ID:        generateID(),
+				Service:   r.ServiceName,
+				Message:   r.Message,
+				Severity:  "warning",
+				Timestamp: time.Now(),
+			}
 		}
-		if r.ResponseMs > 0 {
-			totalMs += r.ResponseMs
-			countMs++
+
+		if alert != nil {
+			activeAlerts = append(activeAlerts, *alert)
 		}
 	}
-	
-	if countMs > 0 {
-		summary.AvgMs = totalMs / int64(countMs)
+}
+
+// === GitHub Integration ===
+
+func fetchGitHubWorkflows() ([]GitHubWorkflowRun, error) {
+	if githubRepo == "" || githubToken == "" {
+		// Return mock data if not configured
+		return []GitHubWorkflowRun{
+			{
+				ID:         1,
+				Name:       "HolmOS CI",
+				Status:     "completed",
+				Conclusion: "success",
+				HTMLURL:    "https://github.com/example/holmos/actions/runs/1",
+				CreatedAt:  time.Now().Add(-2 * time.Hour),
+				UpdatedAt:  time.Now().Add(-1 * time.Hour),
+				HeadBranch: "main",
+				HeadSHA:    "abc123",
+			},
+		}, nil
 	}
-	
-	// Update alerts
-	alertsMutex.Lock()
-	activeAlerts = newAlerts
-	alertsMutex.Unlock()
-	
-	// Record history
-	historyEntry := TestHistory{
-		Timestamp:   time.Now(),
-		TotalCount:  summary.Total,
-		PassCount:   summary.Healthy,
-		FailCount:   summary.Failing,
-		ErrorCount:  summary.Errors,
-		AvgResponse: summary.AvgMs,
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/actions/runs?per_page=10", githubRepo)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
 	}
-	
-	historyMutex.Lock()
-	testHistory = append(testHistory, historyEntry)
-	if len(testHistory) > maxHistory {
-		testHistory = testHistory[1:]
+
+	req.Header.Set("Authorization", "Bearer "+githubToken)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	historyCopy := make([]TestHistory, len(testHistory))
-	copy(historyCopy, testHistory)
-	historyMutex.Unlock()
-	
-	alertsMutex.RLock()
-	alertsCopy := make([]Alert, len(activeAlerts))
-	copy(alertsCopy, activeAlerts)
-	alertsMutex.RUnlock()
-	
-	return HealthResponse{
-		Results:   results,
-		Timestamp: time.Now(),
-		Summary:   summary,
-		History:   historyCopy,
-		Alerts:    alertsCopy,
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}
+
+	var result GitHubWorkflowsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result.WorkflowRuns, nil
+}
+
+func triggerGitHubWorkflow(workflowFile string) error {
+	if githubRepo == "" || githubToken == "" {
+		return fmt.Errorf("GitHub integration not configured")
+	}
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/%s/dispatches", githubRepo, workflowFile)
+
+	payload := map[string]string{"ref": "main"}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+githubToken)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 204 {
+		return fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// === HTTP Handlers ===
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "healthy",
+		"service": "test-dashboard",
+		"version": "2.0.0",
+	})
 }
 
 func handleRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
-	response := runAllHealthChecks()
-	json.NewEncoder(w).Encode(response)
+
+	// Check if a run is already in progress
+	currentRunMutex.RLock()
+	if currentRun != nil {
+		currentRunMutex.RUnlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "Test run already in progress",
+			"currentRun": currentRun,
+		})
+		return
+	}
+	currentRunMutex.RUnlock()
+
+	triggerType := r.URL.Query().Get("trigger")
+	if triggerType == "" {
+		triggerType = "manual"
+	}
+	triggerBy := r.URL.Query().Get("by")
+	if triggerBy == "" {
+		triggerBy = "dashboard"
+	}
+
+	run := runAllHealthChecks(triggerType, triggerBy)
+	json.NewEncoder(w).Encode(run)
 }
 
 func handleRunSingle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	serviceName := r.URL.Query().Get("service")
 	if serviceName == "" {
-		http.Error(w, "service parameter required", http.StatusBadRequest)
+		http.Error(w, `{"error": "service parameter required"}`, http.StatusBadRequest)
 		return
 	}
-	
+
 	services := getServices()
 	for _, svc := range services {
 		if svc.Name == serviceName {
-			result := checkHealth(svc)
+			result := checkServiceHealth(svc)
 			json.NewEncoder(w).Encode(result)
 			return
 		}
 	}
-	
-	http.Error(w, "service not found", http.StatusNotFound)
-}
 
-func handleHistory(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
-	historyMutex.RLock()
-	defer historyMutex.RUnlock()
-	
-	json.NewEncoder(w).Encode(testHistory)
-}
-
-func handleAlerts(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
-	alertsMutex.RLock()
-	defer alertsMutex.RUnlock()
-	
-	json.NewEncoder(w).Encode(activeAlerts)
+	http.Error(w, `{"error": "service not found"}`, http.StatusNotFound)
 }
 
 func handleServices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	json.NewEncoder(w).Encode(getServices())
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
+func handleHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "healthy", "service": "test-dashboard"})
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	testHistoryMutex.RLock()
+	defer testHistoryMutex.RUnlock()
+
+	json.NewEncoder(w).Encode(testHistory)
+}
+
+func handleRuns(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	testRunsMutex.RLock()
+	defer testRunsMutex.RUnlock()
+
+	json.NewEncoder(w).Encode(testRuns)
+}
+
+func handleRunByID(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, `{"error": "id parameter required"}`, http.StatusBadRequest)
+		return
+	}
+
+	testRunsMutex.RLock()
+	defer testRunsMutex.RUnlock()
+
+	for _, run := range testRuns {
+		if run.ID == id {
+			json.NewEncoder(w).Encode(run)
+			return
+		}
+	}
+
+	http.Error(w, `{"error": "run not found"}`, http.StatusNotFound)
+}
+
+func handleCurrentRun(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	currentRunMutex.RLock()
+	defer currentRunMutex.RUnlock()
+
+	if currentRun == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"running": false})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"running": true,
+		"run":     currentRun,
+	})
+}
+
+func handleAlerts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	alertsMutex.RLock()
+	defer alertsMutex.RUnlock()
+
+	json.NewEncoder(w).Encode(activeAlerts)
+}
+
+func handleGitHubWorkflows(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	workflows, err := fetchGitHubWorkflows()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":     err.Error(),
+			"workflows": []GitHubWorkflowRun{},
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"workflows": workflows,
+		"repo":      githubRepo,
+	})
+}
+
+func handleTriggerGitHub(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != "POST" {
+		http.Error(w, `{"error": "method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	workflow := r.URL.Query().Get("workflow")
+	if workflow == "" {
+		workflow = "ci.yml"
+	}
+
+	err := triggerGitHubWorkflow(workflow)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"workflow": workflow,
+		"message":  "Workflow triggered successfully",
+	})
+}
+
+func handleStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	testHistoryMutex.RLock()
+	history := make([]TestHistory, len(testHistory))
+	copy(history, testHistory)
+	testHistoryMutex.RUnlock()
+
+	if len(history) == 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"totalRuns":       0,
+			"avgPassRate":     0,
+			"avgLatency":      0,
+			"trend":           "stable",
+			"lastRunTime":     nil,
+			"failingServices": []string{},
+		})
+		return
+	}
+
+	// Calculate stats
+	var totalPassRate float64
+	var totalLatency int64
+	for _, h := range history {
+		totalPassRate += h.PassRate
+		totalLatency += h.AvgResponse
+	}
+
+	avgPassRate := totalPassRate / float64(len(history))
+	avgLatency := totalLatency / int64(len(history))
+
+	// Determine trend
+	trend := "stable"
+	if len(history) >= 5 {
+		recent := history[len(history)-5:]
+		older := history[:len(history)-5]
+
+		var recentAvg, olderAvg float64
+		for _, h := range recent {
+			recentAvg += h.PassRate
+		}
+		recentAvg /= float64(len(recent))
+
+		if len(older) > 0 {
+			for _, h := range older {
+				olderAvg += h.PassRate
+			}
+			olderAvg /= float64(len(older))
+
+			if recentAvg > olderAvg+5 {
+				trend = "improving"
+			} else if recentAvg < olderAvg-5 {
+				trend = "degrading"
+			}
+		}
+	}
+
+	// Get failing services from last run
+	var failingServices []string
+	testRunsMutex.RLock()
+	if len(testRuns) > 0 {
+		for _, r := range testRuns[0].Results {
+			if r.Status == "fail" || r.Status == "error" {
+				failingServices = append(failingServices, r.ServiceName)
+			}
+		}
+	}
+	testRunsMutex.RUnlock()
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"totalRuns":       len(history),
+		"avgPassRate":     avgPassRate,
+		"avgLatency":      avgLatency,
+		"trend":           trend,
+		"lastRunTime":     history[len(history)-1].Timestamp,
+		"failingServices": failingServices,
+	})
+}
+
+func handleSSE(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Send initial state
+	testHistoryMutex.RLock()
+	historyJSON, _ := json.Marshal(testHistory)
+	testHistoryMutex.RUnlock()
+
+	fmt.Fprintf(w, "event: history\ndata: %s\n\n", historyJSON)
+	flusher.Flush()
+
+	// Keep connection open and send updates
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			// Send current run status
+			currentRunMutex.RLock()
+			if currentRun != nil {
+				runJSON, _ := json.Marshal(currentRun)
+				fmt.Fprintf(w, "event: running\ndata: %s\n\n", runJSON)
+			}
+			currentRunMutex.RUnlock()
+
+			// Send alerts
+			alertsMutex.RLock()
+			alertsJSON, _ := json.Marshal(activeAlerts)
+			alertsMutex.RUnlock()
+			fmt.Fprintf(w, "event: alerts\ndata: %s\n\n", alertsJSON)
+
+			flusher.Flush()
+		}
+	}
+}
+
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next(w, r)
+	}
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	// API routes
-	http.HandleFunc("/api/run", handleRun)
-	http.HandleFunc("/api/run/single", handleRunSingle)
-	http.HandleFunc("/api/history", handleHistory)
-	http.HandleFunc("/api/alerts", handleAlerts)
-	http.HandleFunc("/api/services", handleServices)
 	http.HandleFunc("/health", handleHealth)
-	
+	http.HandleFunc("/api/run", corsMiddleware(handleRun))
+	http.HandleFunc("/api/run/single", corsMiddleware(handleRunSingle))
+	http.HandleFunc("/api/services", corsMiddleware(handleServices))
+	http.HandleFunc("/api/history", corsMiddleware(handleHistory))
+	http.HandleFunc("/api/runs", corsMiddleware(handleRuns))
+	http.HandleFunc("/api/runs/get", corsMiddleware(handleRunByID))
+	http.HandleFunc("/api/runs/current", corsMiddleware(handleCurrentRun))
+	http.HandleFunc("/api/alerts", corsMiddleware(handleAlerts))
+	http.HandleFunc("/api/stats", corsMiddleware(handleStats))
+	http.HandleFunc("/api/github/workflows", corsMiddleware(handleGitHubWorkflows))
+	http.HandleFunc("/api/github/trigger", corsMiddleware(handleTriggerGitHub))
+	http.HandleFunc("/api/events", handleSSE)
+
 	// Static files
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
@@ -480,15 +861,22 @@ func main() {
 		}
 		http.FileServer(http.FS(staticFiles)).ServeHTTP(w, r)
 	})
-	
-	log.Println("Test Dashboard starting on :8080")
-	log.Println("Monitoring", len(getServices()), "services")
-	
-	// Run initial check
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Test Dashboard v2.0.0 starting on :%s", port)
+	log.Printf("Monitoring %d services from services.yaml", len(getServices()))
+	log.Printf("GitHub repo: %s", githubRepo)
+
+	// Run initial health check
 	go func() {
-		time.Sleep(2 * time.Second)
-		runAllHealthChecks()
+		time.Sleep(3 * time.Second)
+		log.Println("Running initial health check...")
+		runAllHealthChecks("startup", "system")
 	}()
-	
-	log.Fatal(http.ListenAndServe(":8080", nil))
+
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

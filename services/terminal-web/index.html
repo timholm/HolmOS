@@ -6,99 +6,196 @@
     <title>HolmOS Terminal</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
     <style>
+        :root {
+            --bg-base: #1e1e2e;
+            --bg-surface: #181825;
+            --bg-overlay: #313244;
+            --text: #cdd6f4;
+            --text-muted: #a6adc8;
+            --accent: #89b4fa;
+            --accent-hover: #b4befe;
+            --red: #f38ba8;
+            --green: #a6e3a1;
+            --yellow: #f9e2af;
+            --blue: #89b4fa;
+            --mauve: #cba6f7;
+            --border: #45475a;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
+            background: var(--bg-base);
+            color: var(--text);
             height: 100vh;
             display: flex;
+            overflow: hidden;
         }
         .sidebar {
-            width: 250px;
-            background: #16213e;
-            border-right: 1px solid #0f3460;
+            width: 260px;
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
             overflow: hidden;
         }
         .sidebar-header {
-            padding: 15px;
-            background: #0f3460;
-            font-weight: bold;
+            padding: 12px 15px;
+            background: var(--bg-overlay);
+            font-weight: 600;
+            font-size: 14px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .sidebar-section {
+            padding: 8px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: var(--bg-base);
         }
         .host-list {
             flex: 1;
             overflow-y: auto;
-            padding: 10px;
+            padding: 8px;
         }
         .host-item {
             padding: 10px 12px;
-            margin-bottom: 5px;
-            background: #1a1a2e;
-            border-radius: 6px;
+            margin-bottom: 4px;
+            background: var(--bg-base);
+            border-radius: 8px;
             cursor: pointer;
             display: flex;
             align-items: center;
             gap: 10px;
-            transition: background 0.2s;
-            border-left: 3px solid transparent;
+            transition: all 0.15s ease;
+            border: 1px solid transparent;
         }
-        .host-item:hover { background: #0f3460; }
-        .host-item.connected { border-left-color: #00b894; }
+        .host-item:hover {
+            background: var(--bg-overlay);
+            border-color: var(--border);
+        }
+        .host-item.connected {
+            border-left: 3px solid var(--green);
+            background: rgba(166, 227, 161, 0.1);
+        }
         .host-dot {
             width: 10px;
             height: 10px;
             border-radius: 50%;
-            background: #636e72;
+            flex-shrink: 0;
         }
-        .host-info { flex: 1; }
-        .host-name { font-weight: 500; }
-        .host-addr { font-size: 11px; color: #888; }
+        .host-icon {
+            font-size: 16px;
+            width: 24px;
+            text-align: center;
+        }
+        .host-info { flex: 1; min-width: 0; }
+        .host-name {
+            font-weight: 500;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .host-addr {
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
         .host-delete {
             opacity: 0;
-            color: #e74c3c;
+            color: var(--red);
             cursor: pointer;
-            padding: 5px;
+            padding: 4px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            transition: all 0.15s;
         }
-        .host-item:hover .host-delete { opacity: 1; }
+        .host-item:hover .host-delete { opacity: 0.7; }
+        .host-delete:hover { opacity: 1 !important; background: rgba(243, 139, 168, 0.2); }
+
         .main {
             flex: 1;
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            background: var(--bg-base);
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            padding: 6px 12px;
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            gap: 8px;
         }
         .tabs {
             display: flex;
-            background: #16213e;
-            border-bottom: 1px solid #0f3460;
+            flex: 1;
             overflow-x: auto;
+            gap: 4px;
         }
+        .tabs::-webkit-scrollbar { height: 4px; }
+        .tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
         .tab {
-            padding: 10px 20px;
+            padding: 8px 14px;
             cursor: pointer;
             display: flex;
             align-items: center;
             gap: 8px;
-            border-right: 1px solid #0f3460;
+            border-radius: 6px;
             white-space: nowrap;
-            min-width: 120px;
+            font-size: 13px;
+            transition: all 0.15s;
+            background: var(--bg-base);
+            border: 1px solid transparent;
         }
-        .tab:hover { background: #0f3460; }
-        .tab.active { background: #1a1a2e; border-bottom: 2px solid #4ecdc4; }
+        .tab:hover { background: var(--bg-overlay); }
+        .tab.active {
+            background: var(--bg-overlay);
+            border-color: var(--accent);
+        }
+        .tab-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
         .tab-close {
             opacity: 0.5;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 12px;
+            padding: 2px 4px;
+            border-radius: 3px;
+            margin-left: 4px;
         }
-        .tab-close:hover { opacity: 1; color: #e74c3c; }
+        .tab-close:hover { opacity: 1; color: var(--red); background: rgba(243, 139, 168, 0.2); }
+
+        .toolbar-btn {
+            padding: 6px 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.15s;
+            background: var(--bg-overlay);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .toolbar-btn:hover { background: var(--border); }
+        .toolbar-btn.active { background: var(--accent); color: var(--bg-base); }
+
         .terminal-container {
             flex: 1;
-            background: #000;
             position: relative;
+            overflow: hidden;
         }
         .terminal-wrapper {
             position: absolute;
@@ -107,138 +204,251 @@
             right: 0;
             bottom: 0;
             display: none;
-            padding: 5px;
+            padding: 8px;
         }
         .terminal-wrapper.active { display: block; }
+
         .empty-state {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             height: 100%;
-            color: #666;
-            gap: 15px;
+            color: var(--text-muted);
+            gap: 12px;
         }
-        .empty-state h2 { color: #888; }
+        .empty-state h2 {
+            color: var(--text);
+            font-size: 20px;
+            font-weight: 500;
+        }
+        .empty-state p { font-size: 14px; }
+        .empty-state .icon { font-size: 48px; opacity: 0.5; }
+
         .modal {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.6);
             display: none;
             align-items: center;
             justify-content: center;
             z-index: 100;
+            backdrop-filter: blur(4px);
         }
         .modal.show { display: flex; }
         .modal-content {
-            background: #16213e;
-            padding: 25px;
-            border-radius: 10px;
-            width: 400px;
+            background: var(--bg-surface);
+            padding: 24px;
+            border-radius: 12px;
+            width: 420px;
             max-width: 90%;
+            border: 1px solid var(--border);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
         }
-        .modal h3 { margin-bottom: 20px; }
+        .modal h3 {
+            margin-bottom: 20px;
+            font-size: 18px;
+            font-weight: 600;
+        }
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 16px;
         }
         .form-group label {
             display: block;
-            margin-bottom: 5px;
-            font-size: 13px;
-            color: #aaa;
+            margin-bottom: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
         }
         .form-group input, .form-group select {
             width: 100%;
-            padding: 10px;
-            background: #1a1a2e;
-            border: 1px solid #0f3460;
-            border-radius: 5px;
-            color: #fff;
+            padding: 10px 12px;
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
             font-size: 14px;
+            transition: border-color 0.15s;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: var(--accent);
         }
         .form-row {
             display: flex;
-            gap: 10px;
+            gap: 12px;
         }
         .form-row .form-group { flex: 1; }
         .btn {
-            padding: 10px 20px;
+            padding: 10px 18px;
             border: none;
-            border-radius: 5px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 14px;
-            transition: background 0.2s;
+            font-weight: 500;
+            transition: all 0.15s;
         }
-        .btn-primary { background: #4ecdc4; color: #000; }
-        .btn-primary:hover { background: #45b7d1; }
-        .btn-secondary { background: #636e72; color: #fff; }
-        .btn-secondary:hover { background: #747d80; }
-        .btn-danger { background: #e74c3c; color: #fff; }
-        .btn-danger:hover { background: #c0392b; }
-        .btn-small { padding: 5px 10px; font-size: 12px; }
+        .btn-primary { background: var(--accent); color: var(--bg-base); }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-secondary { background: var(--bg-overlay); color: var(--text); }
+        .btn-secondary:hover { background: var(--border); }
+        .btn-danger { background: var(--red); color: var(--bg-base); }
+        .btn-small { padding: 6px 12px; font-size: 12px; }
         .modal-actions {
             display: flex;
             gap: 10px;
             justify-content: flex-end;
-            margin-top: 20px;
+            margin-top: 24px;
         }
-        .history-panel {
-            padding: 10px;
-            background: #0f3460;
-            border-top: 1px solid #16213e;
-            max-height: 150px;
-            overflow-y: auto;
+
+        .theme-selector {
+            position: relative;
         }
-        .history-panel h4 { margin-bottom: 10px; font-size: 12px; color: #888; }
-        .history-item {
-            padding: 5px 10px;
-            font-family: monospace;
-            font-size: 12px;
+        .theme-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px;
+            min-width: 180px;
+            display: none;
+            z-index: 50;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+        }
+        .theme-dropdown.show { display: block; }
+        .theme-option {
+            padding: 8px 12px;
+            border-radius: 6px;
             cursor: pointer;
-            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
         }
-        .history-item:hover { background: #16213e; }
+        .theme-option:hover { background: var(--bg-overlay); }
+        .theme-option.active { background: var(--accent); color: var(--bg-base); }
+        .theme-preview {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+        }
+
         .status-bar {
-            padding: 5px 15px;
-            background: #0f3460;
-            font-size: 12px;
-            color: #888;
+            padding: 6px 15px;
+            background: var(--bg-surface);
+            font-size: 11px;
+            color: var(--text-muted);
             display: flex;
             justify-content: space-between;
+            border-top: 1px solid var(--border);
         }
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--green);
+        }
+        .status-dot.disconnected { background: var(--text-muted); }
+
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 60px;
+            right: 20px;
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            background: var(--bg-overlay);
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        .toast.success { border-color: var(--green); }
+        .toast.error { border-color: var(--red); }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
     </style>
 </head>
 <body>
     <div class="sidebar">
         <div class="sidebar-header">
-            <span>SSH Hosts</span>
-            <div>
-                <button class="btn btn-small btn-primary" onclick="initHosts()">Init Pi</button>
-                <button class="btn btn-small btn-secondary" onclick="showAddModal()">+ Add</button>
+            <span>Terminal</span>
+            <div style="display: flex; gap: 6px;">
+                <button class="btn btn-small btn-secondary" onclick="initHosts()" title="Initialize Pi cluster hosts">Init Pi</button>
+                <button class="btn btn-small btn-primary" onclick="showAddModal()">+ Add</button>
             </div>
         </div>
+        <div class="sidebar-section">Quick Access</div>
+        <div class="host-list" id="builtinList"></div>
+        <div class="sidebar-section">SSH Hosts</div>
         <div class="host-list" id="hostList"></div>
     </div>
+
     <div class="main">
-        <div class="tabs" id="tabs"></div>
+        <div class="toolbar">
+            <div class="tabs" id="tabs"></div>
+            <div class="theme-selector">
+                <button class="toolbar-btn" onclick="toggleThemeDropdown()">
+                    <span id="themeIcon">Theme</span>
+                </button>
+                <div class="theme-dropdown" id="themeDropdown"></div>
+            </div>
+            <button class="toolbar-btn" onclick="copySelection()" title="Copy selection (Ctrl+Shift+C)">Copy</button>
+            <button class="toolbar-btn" onclick="pasteClipboard()" title="Paste (Ctrl+Shift+V)">Paste</button>
+        </div>
+
         <div class="terminal-container" id="terminalContainer">
             <div class="empty-state" id="emptyState">
+                <div class="icon">></div>
                 <h2>No Terminal Open</h2>
                 <p>Click a host in the sidebar to connect</p>
+                <p style="font-size: 12px; margin-top: 10px;">
+                    Keyboard shortcuts:<br>
+                    Ctrl+Shift+T: New connection<br>
+                    Ctrl+Shift+C: Copy | Ctrl+Shift+V: Paste<br>
+                    Ctrl+W: Close tab
+                </p>
             </div>
         </div>
-        <div class="history-panel" id="historyPanel" style="display: none;">
-            <h4>Command History (Click to paste)</h4>
-            <div id="historyList"></div>
-        </div>
+
         <div class="status-bar">
-            <span id="statusText">Ready</span>
+            <div class="status-item">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Ready</span>
+            </div>
             <span id="connectionCount">0 connections</span>
         </div>
     </div>
+
+    <div class="toast-container" id="toastContainer"></div>
 
     <div class="modal" id="addModal">
         <div class="modal-content">
@@ -269,7 +479,7 @@
             </div>
             <div class="form-group">
                 <label>Color</label>
-                <input type="color" id="hostColor" value="#4ecdc4">
+                <input type="color" id="hostColor" value="#89b4fa">
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="hideAddModal()">Cancel</button>
@@ -285,7 +495,122 @@
         const hosts = [];
         const terminals = {};
         let activeTabId = null;
-        let commandHistory = JSON.parse(localStorage.getItem('terminalHistory') || '[]');
+        let themes = [];
+        let currentTheme = localStorage.getItem('terminalTheme') || 'catppuccin-mocha';
+
+        // Default Catppuccin Mocha theme
+        const defaultTheme = {
+            background: '#1e1e2e',
+            foreground: '#cdd6f4',
+            cursor: '#f5e0dc',
+            selectionBackground: 'rgba(88, 91, 112, 0.5)',
+            black: '#45475a',
+            red: '#f38ba8',
+            green: '#a6e3a1',
+            yellow: '#f9e2af',
+            blue: '#89b4fa',
+            magenta: '#f5c2e7',
+            cyan: '#94e2d5',
+            white: '#bac2de',
+            brightBlack: '#585b70',
+            brightRed: '#f38ba8',
+            brightGreen: '#a6e3a1',
+            brightYellow: '#f9e2af',
+            brightBlue: '#89b4fa',
+            brightMagenta: '#f5c2e7',
+            brightCyan: '#94e2d5',
+            brightWhite: '#a6adc8'
+        };
+
+        async function loadThemes() {
+            try {
+                const res = await fetch('/api/themes');
+                themes = await res.json();
+                renderThemeDropdown();
+            } catch (e) {
+                console.error('Failed to load themes:', e);
+            }
+        }
+
+        function renderThemeDropdown() {
+            const dropdown = document.getElementById('themeDropdown');
+            dropdown.innerHTML = themes.map(t => `
+                <div class="theme-option ${t.id === currentTheme ? 'active' : ''}" onclick="selectTheme('${t.id}')">
+                    <div class="theme-preview" style="background: ${t.background}; border-color: ${t.foreground}"></div>
+                    <span>${t.name}</span>
+                </div>
+            `).join('');
+        }
+
+        function toggleThemeDropdown() {
+            document.getElementById('themeDropdown').classList.toggle('show');
+        }
+
+        function selectTheme(themeId) {
+            currentTheme = themeId;
+            localStorage.setItem('terminalTheme', themeId);
+            renderThemeDropdown();
+
+            // Apply to all terminals
+            Object.values(terminals).forEach(t => {
+                applyTheme(t.term, themeId);
+            });
+
+            document.getElementById('themeDropdown').classList.remove('show');
+            showToast('Theme changed to ' + themes.find(t => t.id === themeId)?.name);
+        }
+
+        function applyTheme(term, themeId) {
+            const theme = themes.find(t => t.id === themeId) || defaultTheme;
+            term.options.theme = {
+                background: theme.background,
+                foreground: theme.foreground,
+                cursor: theme.cursor,
+                selectionBackground: theme.selection,
+                black: theme.black,
+                red: theme.red,
+                green: theme.green,
+                yellow: theme.yellow,
+                blue: theme.blue,
+                magenta: theme.magenta,
+                cyan: theme.cyan,
+                white: theme.white,
+                brightBlack: theme.brightBlack,
+                brightRed: theme.brightRed,
+                brightGreen: theme.brightGreen,
+                brightYellow: theme.brightYellow,
+                brightBlue: theme.brightBlue,
+                brightMagenta: theme.brightMagenta,
+                brightCyan: theme.brightCyan,
+                brightWhite: theme.brightWhite
+            };
+        }
+
+        function getThemeOptions() {
+            const theme = themes.find(t => t.id === currentTheme) || defaultTheme;
+            return {
+                background: theme.background,
+                foreground: theme.foreground,
+                cursor: theme.cursor,
+                selectionBackground: theme.selection,
+                black: theme.black,
+                red: theme.red,
+                green: theme.green,
+                yellow: theme.yellow,
+                blue: theme.blue,
+                magenta: theme.magenta,
+                cyan: theme.cyan,
+                white: theme.white,
+                brightBlack: theme.brightBlack,
+                brightRed: theme.brightRed,
+                brightGreen: theme.brightGreen,
+                brightYellow: theme.brightYellow,
+                brightBlue: theme.brightBlue,
+                brightMagenta: theme.brightMagenta,
+                brightCyan: theme.brightCyan,
+                brightWhite: theme.brightWhite
+            };
+        }
 
         async function loadHosts() {
             try {
@@ -299,16 +624,39 @@
             }
         }
 
+        function getHostIcon(type) {
+            switch(type) {
+                case 'kubectl': return 'K8s';
+                case 'local': return '~';
+                default: return 'SSH';
+            }
+        }
+
         function renderHosts() {
-            const list = document.getElementById('hostList');
-            list.innerHTML = hosts.map(h => `
+            const builtinList = document.getElementById('builtinList');
+            const hostList = document.getElementById('hostList');
+
+            const builtinHosts = hosts.filter(h => h.id < 0);
+            const sshHosts = hosts.filter(h => h.id > 0);
+
+            builtinList.innerHTML = builtinHosts.map(h => `
                 <div class="host-item ${terminals[h.id] ? 'connected' : ''}" onclick="connectHost(${h.id})">
-                    <div class="host-dot" style="background: ${h.color || '#636e72'}"></div>
+                    <div class="host-icon" style="color: ${h.color || '#89b4fa'}">${getHostIcon(h.type)}</div>
+                    <div class="host-info">
+                        <div class="host-name">${h.name}</div>
+                        <div class="host-addr">${h.hostname}</div>
+                    </div>
+                </div>
+            `).join('');
+
+            hostList.innerHTML = sshHosts.map(h => `
+                <div class="host-item ${terminals[h.id] ? 'connected' : ''}" onclick="connectHost(${h.id})">
+                    <div class="host-dot" style="background: ${h.color || '#89b4fa'}"></div>
                     <div class="host-info">
                         <div class="host-name">${h.name}</div>
                         <div class="host-addr">${h.username}@${h.hostname}:${h.port}</div>
                     </div>
-                    <span class="host-delete" onclick="event.stopPropagation(); deleteHost(${h.id})">✕</span>
+                    <span class="host-delete" onclick="event.stopPropagation(); deleteHost(${h.id})">x</span>
                 </div>
             `).join('');
         }
@@ -316,92 +664,89 @@
         function connectHost(hostId) {
             const host = hosts.find(h => h.id === hostId);
             if (!host) return;
-            
+
             // If already connected, just switch to tab
             if (terminals[hostId]) {
                 switchTab(hostId);
                 return;
             }
-            
+
             // Create new terminal
             const wrapper = document.createElement('div');
             wrapper.className = 'terminal-wrapper';
             wrapper.id = 'term-' + hostId;
             document.getElementById('terminalContainer').appendChild(wrapper);
-            
+
             const term = new Terminal({
                 cursorBlink: true,
                 fontSize: 14,
-                fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-                theme: {
-                    background: '#1a1a2e',
-                    foreground: '#eee',
-                    cursor: '#4ecdc4',
-                    selection: 'rgba(78, 205, 196, 0.3)'
-                }
+                fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Monaco, "Courier New", monospace',
+                theme: getThemeOptions(),
+                allowProposedApi: true
             });
-            
+
             const fitAddon = new FitAddon.FitAddon();
             const webLinksAddon = new WebLinksAddon.WebLinksAddon();
             term.loadAddon(fitAddon);
             term.loadAddon(webLinksAddon);
-            
+
             term.open(wrapper);
             fitAddon.fit();
-            
+
+            // Determine WebSocket endpoint based on host type
+            let wsPath;
+            if (host.type === 'kubectl') {
+                wsPath = '/ws/kubectl';
+            } else if (host.type === 'local') {
+                wsPath = '/ws/local';
+            } else {
+                wsPath = '/ws/terminal?host=' + hostId;
+            }
+
             // Connect WebSocket
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const ws = new WebSocket(wsProtocol + '//' + window.location.host + '/ws/terminal?host=' + hostId);
+            const ws = new WebSocket(wsProtocol + '//' + window.location.host + wsPath);
             ws.binaryType = 'arraybuffer';
-            
+
             ws.onopen = () => {
-                term.write('\r\n*** Connected to ' + host.name + ' ***\r\n\r\n');
-                updateStatus('Connected to ' + host.name);
-                
+                term.write('\r\n\x1b[1;32m*** Connected to ' + host.name + ' ***\x1b[0m\r\n\r\n');
+                updateStatus('Connected to ' + host.name, true);
+
                 // Send initial size
                 sendResize(ws, term.cols, term.rows);
             };
-            
+
             ws.onmessage = (e) => {
                 const data = new Uint8Array(e.data);
                 term.write(data);
             };
-            
+
             ws.onclose = () => {
-                term.write('\r\n*** Connection closed ***\r\n');
-                updateStatus('Disconnected from ' + host.name);
+                term.write('\r\n\x1b[1;31m*** Connection closed ***\x1b[0m\r\n');
+                updateStatus('Disconnected from ' + host.name, false);
             };
-            
+
             ws.onerror = (e) => {
-                term.write('\r\n*** Connection error ***\r\n');
+                term.write('\r\n\x1b[1;31m*** Connection error ***\x1b[0m\r\n');
+                showToast('Connection error', 'error');
             };
-            
+
             // Handle input
-            let currentLine = '';
             term.onData(data => {
-                // Track command for history
-                if (data === '\r') {
-                    if (currentLine.trim()) {
-                        addToHistory(currentLine);
-                    }
-                    currentLine = '';
-                } else if (data === '\x7f') {
-                    currentLine = currentLine.slice(0, -1);
-                } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-                    currentLine += data;
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(new TextEncoder().encode(data));
                 }
-                ws.send(new TextEncoder().encode(data));
             });
-            
+
             // Handle resize
             const resizeObserver = new ResizeObserver(() => {
                 fitAddon.fit();
                 sendResize(ws, term.cols, term.rows);
             });
             resizeObserver.observe(wrapper);
-            
+
             terminals[hostId] = { term, ws, fitAddon, wrapper, resizeObserver, host };
-            
+
             addTab(hostId, host);
             switchTab(hostId);
             renderHosts();
@@ -421,9 +766,9 @@
             tab.className = 'tab';
             tab.id = 'tab-' + hostId;
             tab.innerHTML = `
-                <span style="width:8px;height:8px;border-radius:50%;background:${host.color || '#636e72'}"></span>
+                <span class="tab-dot" style="background:${host.color || '#89b4fa'}"></span>
                 <span>${host.name}</span>
-                <span class="tab-close" onclick="event.stopPropagation(); closeTab(${hostId})">✕</span>
+                <span class="tab-close" onclick="event.stopPropagation(); closeTab(${hostId})">x</span>
             `;
             tab.onclick = () => switchTab(hostId);
             tabs.appendChild(tab);
@@ -435,7 +780,7 @@
                 t.wrapper.classList.remove('active');
             });
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            
+
             // Show selected terminal
             if (terminals[hostId]) {
                 terminals[hostId].wrapper.classList.add('active');
@@ -444,7 +789,7 @@
                 terminals[hostId].fitAddon.fit();
                 activeTabId = hostId;
             }
-            
+
             document.getElementById('emptyState').style.display = Object.keys(terminals).length === 0 ? 'flex' : 'none';
         }
 
@@ -456,9 +801,9 @@
                 terminals[hostId].wrapper.remove();
                 delete terminals[hostId];
             }
-            
+
             document.getElementById('tab-' + hostId)?.remove();
-            
+
             // Switch to another tab if available
             const remaining = Object.keys(terminals);
             if (remaining.length > 0) {
@@ -466,47 +811,42 @@
             } else {
                 activeTabId = null;
                 document.getElementById('emptyState').style.display = 'flex';
+                updateStatus('Ready', false);
             }
-            
+
             renderHosts();
             updateConnectionCount();
         }
 
-        function addToHistory(cmd) {
-            if (commandHistory[0] !== cmd) {
-                commandHistory.unshift(cmd);
-                if (commandHistory.length > 100) commandHistory.pop();
-                localStorage.setItem('terminalHistory', JSON.stringify(commandHistory));
-                renderHistory();
-            }
-        }
-
-        function renderHistory() {
-            const panel = document.getElementById('historyPanel');
-            const list = document.getElementById('historyList');
-            
-            if (commandHistory.length === 0) {
-                panel.style.display = 'none';
-                return;
-            }
-            
-            panel.style.display = 'block';
-            list.innerHTML = commandHistory.slice(0, 20).map(cmd => `
-                <div class="history-item" onclick="pasteCommand('${cmd.replace(/'/g, "\\'")}')">${cmd}</div>
-            `).join('');
-        }
-
-        function pasteCommand(cmd) {
+        // Copy/Paste support
+        function copySelection() {
             if (activeTabId && terminals[activeTabId]) {
-                const ws = terminals[activeTabId].ws;
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(new TextEncoder().encode(cmd));
+                const selection = terminals[activeTabId].term.getSelection();
+                if (selection) {
+                    navigator.clipboard.writeText(selection).then(() => {
+                        showToast('Copied to clipboard');
+                    });
+                }
+            }
+        }
+
+        async function pasteClipboard() {
+            if (activeTabId && terminals[activeTabId]) {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    const ws = terminals[activeTabId].ws;
+                    if (ws.readyState === WebSocket.OPEN && text) {
+                        ws.send(new TextEncoder().encode(text));
+                    }
+                } catch (e) {
+                    showToast('Clipboard access denied', 'error');
                 }
             }
         }
 
         function showAddModal() {
             document.getElementById('addModal').classList.add('show');
+            document.getElementById('hostName').focus();
         }
 
         function hideAddModal() {
@@ -521,9 +861,15 @@
                 username: document.getElementById('hostUsername').value,
                 password: document.getElementById('hostPassword').value,
                 color: document.getElementById('hostColor').value,
-                auth_type: 'password'
+                auth_type: 'password',
+                type: 'ssh'
             };
-            
+
+            if (!host.name || !host.hostname || !host.username) {
+                showToast('Name, hostname and username are required', 'error');
+                return;
+            }
+
             try {
                 const res = await fetch('/api/hosts/add', {
                     method: 'POST',
@@ -534,27 +880,29 @@
                 if (data.success) {
                     hideAddModal();
                     loadHosts();
+                    showToast('Host added successfully');
                     // Clear form
                     ['hostName', 'hostHostname', 'hostUsername', 'hostPassword'].forEach(id => {
                         document.getElementById(id).value = '';
                     });
                 } else {
-                    alert(data.message);
+                    showToast(data.message, 'error');
                 }
             } catch (e) {
-                alert('Failed to add host');
+                showToast('Failed to add host', 'error');
             }
         }
 
         async function deleteHost(id) {
             if (!confirm('Delete this host?')) return;
-            
+
             try {
                 await fetch('/api/hosts/delete?id=' + id, { method: 'DELETE' });
                 closeTab(id);
                 loadHosts();
+                showToast('Host deleted');
             } catch (e) {
-                alert('Failed to delete host');
+                showToast('Failed to delete host', 'error');
             }
         }
 
@@ -562,15 +910,16 @@
             try {
                 const res = await fetch('/api/hosts/init', { method: 'POST' });
                 const data = await res.json();
-                alert(data.message);
+                showToast(data.message);
                 loadHosts();
             } catch (e) {
-                alert('Failed to initialize hosts');
+                showToast('Failed to initialize hosts', 'error');
             }
         }
 
-        function updateStatus(text) {
+        function updateStatus(text, connected) {
             document.getElementById('statusText').textContent = text;
+            document.getElementById('statusDot').classList.toggle('disconnected', !connected);
         }
 
         function updateConnectionCount() {
@@ -578,10 +927,22 @@
             document.getElementById('connectionCount').textContent = count + ' connection' + (count !== 1 ? 's' : '');
         }
 
-        // Initialize
-        loadHosts();
-        renderHistory();
-        
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.innerHTML = `<span>${type === 'error' ? '!' : '>'}</span> ${message}`;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.theme-selector')) {
+                document.getElementById('themeDropdown').classList.remove('show');
+            }
+        });
+
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             // Ctrl+Shift+T: New connection dialog
@@ -589,12 +950,31 @@
                 showAddModal();
                 e.preventDefault();
             }
+            // Ctrl+Shift+C: Copy
+            if (e.ctrlKey && e.shiftKey && e.key === 'C') {
+                copySelection();
+                e.preventDefault();
+            }
+            // Ctrl+Shift+V: Paste
+            if (e.ctrlKey && e.shiftKey && e.key === 'V') {
+                pasteClipboard();
+                e.preventDefault();
+            }
             // Ctrl+W: Close current tab
             if (e.ctrlKey && e.key === 'w' && activeTabId) {
                 closeTab(activeTabId);
                 e.preventDefault();
             }
+            // Escape: Close modals
+            if (e.key === 'Escape') {
+                hideAddModal();
+                document.getElementById('themeDropdown').classList.remove('show');
+            }
         });
+
+        // Initialize
+        loadThemes();
+        loadHosts();
     </script>
 </body>
 </html>

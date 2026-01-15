@@ -1919,7 +1919,7 @@ var settingsHTML = `<!DOCTYPE html>
 
                     const nodeList = document.getElementById("node-list");
                     if (data.nodes?.length > 0) {
-                        nodeList.innerHTML = data.nodes.map(node => '
+                        nodeList.innerHTML = data.nodes.map(node => ` + "`" + `
                             <div class="list-item">
                                 <div class="item-info">
                                     <span class="item-name">${node.name}</span>
@@ -1927,7 +1927,7 @@ var settingsHTML = `<!DOCTYPE html>
                                 </div>
                                 <span class="status-badge status-${node.status.toLowerCase()}">${node.status}</span>
                             </div>
-                        ').join("");
+                        ` + "`" + `).join("");
                     }
 
                     const storageList = document.getElementById("storage-list");
@@ -1935,7 +1935,7 @@ var settingsHTML = `<!DOCTYPE html>
                         storageList.innerHTML = data.storage.map(s => {
                             const pct = parseInt(s.percent) || 0;
                             const cls = pct > 90 ? "danger" : pct > 70 ? "warning" : "";
-                            return '
+                            return ` + "`" + `
                                 <div class="list-item">
                                     <div class="item-info">
                                         <span class="item-name">${s.mount}</span>
@@ -1945,7 +1945,7 @@ var settingsHTML = `<!DOCTYPE html>
                                         <div class="progress-fill ${cls}" style="width: ${pct}%"></div>
                                     </div>
                                 </div>
-                            ';
+                            ` + "`" + `;
                         }).join("");
                     }
                     showToast("System info updated", "success");
@@ -1970,7 +1970,7 @@ var settingsHTML = `<!DOCTYPE html>
 
                     const servicesList = document.getElementById("services-list");
                     if (data.services?.length > 0) {
-                        servicesList.innerHTML = data.services.map(s => '
+                        servicesList.innerHTML = data.services.map(s => ` + "`" + `
                             <div class="list-item">
                                 <div class="item-info">
                                     <span class="item-name">${s.name}</span>
@@ -1978,7 +1978,7 @@ var settingsHTML = `<!DOCTYPE html>
                                 </div>
                                 <span class="status-badge status-${s.status}">${s.status}</span>
                             </div>
-                        ').join("");
+                        ` + "`" + `).join("");
                     }
                 }
             } catch (e) {
@@ -1993,7 +1993,7 @@ var settingsHTML = `<!DOCTYPE html>
                     const data = await resp.json();
                     if (data.theme) {
                         document.querySelectorAll(".theme-option").forEach(o => o.classList.remove("selected"));
-                        document.querySelector('[data-theme="${data.theme}"]')?.classList.add("selected");
+                        document.querySelector(` + "`" + `[data-theme="${data.theme}"]` + "`" + `)?.classList.add("selected");
                         applyTheme(data.theme);
                     }
                     if (data.compactMode) document.querySelector("[data-setting='compact-mode']")?.classList.add("active");

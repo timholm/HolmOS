@@ -18,15 +18,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
 var (
-	registryURL = os.Getenv("REGISTRY_URL")
-	forgeURL    = os.Getenv("FORGE_URL")
-	port        = os.Getenv("PORT")
-	clientset   *kubernetes.Clientset
+	registryURL    = os.Getenv("REGISTRY_URL")
+	forgeURL       = os.Getenv("FORGE_URL")
+	holmGitURL     = os.Getenv("HOLMGIT_URL")
+	port           = os.Getenv("PORT")
+	rulesConfigMap = os.Getenv("RULES_CONFIGMAP")
+	clientset      *kubernetes.Clientset
 
 	deployments       = make(map[string]*DeploymentInfo)
 	deploymentsMu     sync.RWMutex
@@ -42,6 +45,8 @@ var (
 	historyMu         sync.RWMutex
 	registryEvents    []RegistryEvent
 	registryEventsMu  sync.RWMutex
+	pendingHealthChecks = make(map[string]*HealthCheckStatus)
+	healthCheckMu     sync.RWMutex
 )
 
 type DeploymentInfo struct {
@@ -103,13 +108,37 @@ type RegistryEvent struct {
 }
 
 type AutoDeployRule struct {
-	ImagePattern   string `json:"imagePattern"`
-	Deployment     string `json:"deployment"`
-	Namespace      string `json:"namespace"`
-	Enabled        bool   `json:"enabled"`
-	AutoCreate     bool   `json:"autoCreate"`
-	TagPattern     string `json:"tagPattern"`
-	LastTriggered  string `json:"lastTriggered"`
+	ImagePattern    string `json:"imagePattern"`
+	Deployment      string `json:"deployment"`
+	Namespace       string `json:"namespace"`
+	Enabled         bool   `json:"enabled"`
+	AutoCreate      bool   `json:"autoCreate"`
+	TagPattern      string `json:"tagPattern"`
+	LastTriggered   string `json:"lastTriggered"`
+	HealthCheckPath string `json:"healthCheckPath"`
+	HealthCheckPort int    `json:"healthCheckPort"`
+	ServicePort     int    `json:"servicePort"`
+	CreateService   bool   `json:"createService"`
+}
+
+type HealthCheckStatus struct {
+	Deployment    string    `json:"deployment"`
+	Namespace     string    `json:"namespace"`
+	Image         string    `json:"image"`
+	Status        string    `json:"status"`
+	StartTime     time.Time `json:"startTime"`
+	LastCheck     time.Time `json:"lastCheck"`
+	Attempts      int       `json:"attempts"`
+	MaxAttempts   int       `json:"maxAttempts"`
+	Message       string    `json:"message"`
+	PodStatuses   []PodStatus `json:"podStatuses"`
+}
+
+type PodStatus struct {
+	Name    string `json:"name"`
+	Ready   bool   `json:"ready"`
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
 }
 
 type RegistryImage struct {
@@ -142,18 +171,25 @@ type RegistryNotification struct {
 
 func main() {
 	if registryURL == "" {
-		registryURL = "10.110.67.87:5000"
+		registryURL = "192.168.8.197:30500"
 	}
 	if forgeURL == "" {
 		forgeURL = "http://forge.holm.svc.cluster.local"
 	}
+	if holmGitURL == "" {
+		holmGitURL = "http://holm-git.holm.svc.cluster.local"
+	}
 	if port == "" {
 		port = "8080"
 	}
+	if rulesConfigMap == "" {
+		rulesConfigMap = "deploy-controller-rules"
+	}
 
-	log.Printf("Deploy Controller v3 starting on port %s", port)
+	log.Printf("Deploy Controller v4 starting on port %s", port)
 	log.Printf("Registry URL: %s", registryURL)
 	log.Printf("Forge URL: %s", forgeURL)
+	log.Printf("HolmGit URL: %s", holmGitURL)
 
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -165,11 +201,13 @@ func main() {
 		}
 	}
 
-	// Load existing deployment history
+	// Load existing deployment history and rules
 	loadDeploymentHistory()
+	loadAutoDeployRules()
 
 	go watchRegistry()
 	go syncDeployments()
+	go healthCheckWorker()
 
 	http.HandleFunc("/", handleUI)
 	http.HandleFunc("/health", handleHealth)
@@ -187,6 +225,8 @@ func main() {
 	http.HandleFunc("/api/registry-events", handleRegistryEvents)
 	http.HandleFunc("/api/forge/builds", handleForgeBuilds)
 	http.HandleFunc("/api/trigger-build", handleTriggerBuild)
+	http.HandleFunc("/api/health-checks", handleHealthChecks)
+	http.HandleFunc("/api/scale", handleScale)
 
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
@@ -358,6 +398,22 @@ func ensureDeploymentExists(namespace, name, image string) {
 		return
 	}
 
+	// Get rule configuration for this deployment
+	autoDeployMu.RLock()
+	rule, hasRule := autoDeployRules[name]
+	autoDeployMu.RUnlock()
+
+	port := int32(8080)
+	healthPath := "/health"
+	if hasRule {
+		if rule.HealthCheckPort > 0 {
+			port = int32(rule.HealthCheckPort)
+		}
+		if rule.HealthCheckPath != "" {
+			healthPath = rule.HealthCheckPath
+		}
+	}
+
 	// Create new deployment
 	log.Printf("Auto-creating deployment %s/%s with image %s", namespace, name, image)
 	replicas := int32(1)
@@ -366,7 +422,7 @@ func ensureDeploymentExists(namespace, name, image string) {
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app":                          name,
+				"app":                             name,
 				"deploy-controller/auto-created": "true",
 			},
 		},
@@ -388,7 +444,27 @@ func ensureDeploymentExists(namespace, name, image string) {
 							Name:  name,
 							Image: image,
 							Ports: []corev1.ContainerPort{
-								{ContainerPort: 8080},
+								{ContainerPort: port},
+							},
+							LivenessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: healthPath,
+										Port: intstr.FromInt(int(port)),
+									},
+								},
+								InitialDelaySeconds: 10,
+								PeriodSeconds:       10,
+							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: healthPath,
+										Port: intstr.FromInt(int(port)),
+									},
+								},
+								InitialDelaySeconds: 5,
+								PeriodSeconds:       5,
 							},
 						},
 					},
@@ -405,6 +481,16 @@ func ensureDeploymentExists(namespace, name, image string) {
 
 	addDeployEvent(name, namespace, image, "", "auto-create", "success", "Deployment auto-created", 0)
 	log.Printf("Created deployment %s/%s", namespace, name)
+
+	// Create service if configured
+	if hasRule && rule.CreateService && rule.ServicePort > 0 {
+		if err := ensureServiceExists(namespace, name, rule.ServicePort); err != nil {
+			log.Printf("Failed to create service for %s: %v", name, err)
+		}
+	}
+
+	// Start health check
+	startHealthCheck(name, namespace, image)
 }
 
 func watchRegistry() {
@@ -588,8 +674,12 @@ func deployImage(namespace, deployment, image, trigger string) error {
 	}
 
 	duration := time.Since(start).Seconds()
-	addDeployEvent(deployment, namespace, image, oldImage, trigger, "success", "Deployment updated", duration)
-	addToHistory(deployment, image, oldImage, trigger, "success", duration, "")
+	addDeployEvent(deployment, namespace, image, oldImage, trigger, "deploying", "Deployment updated, starting health checks", duration)
+	addToHistory(deployment, image, oldImage, trigger, "deploying", duration, "")
+
+	// Start health check monitoring
+	startHealthCheck(deployment, namespace, image)
+
 	log.Printf("Deployed %s to %s/%s (trigger: %s)", image, namespace, deployment, trigger)
 	return nil
 }
@@ -643,7 +733,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "healthy",
 		"time":    time.Now().UTC().Format(time.RFC3339),
-		"version": "3.0.0",
+		"version": "4.0.0",
 	})
 }
 
@@ -886,16 +976,24 @@ func handleAutoDeploy(w http.ResponseWriter, r *http.Request) {
 		if rule.Namespace == "" {
 			rule.Namespace = "holm"
 		}
+		if rule.HealthCheckPath == "" {
+			rule.HealthCheckPath = "/health"
+		}
+		if rule.HealthCheckPort == 0 {
+			rule.HealthCheckPort = 8080
+		}
 		autoDeployMu.Lock()
 		autoDeployRules[rule.Deployment] = rule
 		autoDeployMu.Unlock()
-		log.Printf("Auto-deploy rule added: %s -> %s/%s (autoCreate: %v)", rule.ImagePattern, rule.Namespace, rule.Deployment, rule.AutoCreate)
+		go saveAutoDeployRules()
+		log.Printf("Auto-deploy rule added: %s -> %s/%s (autoCreate: %v, createService: %v)", rule.ImagePattern, rule.Namespace, rule.Deployment, rule.AutoCreate, rule.CreateService)
 		json.NewEncoder(w).Encode(map[string]string{"status": "added"})
 	case "DELETE":
 		deployment := r.URL.Query().Get("deployment")
 		autoDeployMu.Lock()
 		delete(autoDeployRules, deployment)
 		autoDeployMu.Unlock()
+		go saveAutoDeployRules()
 		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -972,4 +1070,285 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Write(html)
+}
+
+// Health check worker - monitors deployment rollouts
+func healthCheckWorker() {
+	log.Println("Starting health check worker")
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		healthCheckMu.Lock()
+		for key, hc := range pendingHealthChecks {
+			if hc.Status == "pending" || hc.Status == "checking" {
+				go checkDeploymentHealth(key, hc)
+			}
+		}
+		healthCheckMu.Unlock()
+	}
+}
+
+func checkDeploymentHealth(key string, hc *HealthCheckStatus) {
+	if clientset == nil {
+		return
+	}
+
+	ctx := context.Background()
+	dep, err := clientset.AppsV1().Deployments(hc.Namespace).Get(ctx, hc.Deployment, metav1.GetOptions{})
+	if err != nil {
+		updateHealthCheckStatus(key, "failed", fmt.Sprintf("Failed to get deployment: %v", err), nil)
+		return
+	}
+
+	// Get pod statuses
+	pods, err := clientset.CoreV1().Pods(hc.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", hc.Deployment),
+	})
+
+	var podStatuses []PodStatus
+	if err == nil {
+		for _, pod := range pods.Items {
+			ready := false
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					ready = true
+					break
+				}
+			}
+			podStatuses = append(podStatuses, PodStatus{
+				Name:    pod.Name,
+				Ready:   ready,
+				Phase:   string(pod.Status.Phase),
+				Message: pod.Status.Message,
+			})
+		}
+	}
+
+	healthCheckMu.Lock()
+	hc.Attempts++
+	hc.LastCheck = time.Now()
+	hc.PodStatuses = podStatuses
+	healthCheckMu.Unlock()
+
+	// Check if deployment is ready
+	if dep.Status.ReadyReplicas >= *dep.Spec.Replicas && dep.Status.UpdatedReplicas >= *dep.Spec.Replicas {
+		updateHealthCheckStatus(key, "healthy", "Deployment is healthy and ready", podStatuses)
+		addToHistory(hc.Deployment, hc.Image, "", "health-check", "success", time.Since(hc.StartTime).Seconds(), "")
+		log.Printf("Health check passed for %s/%s", hc.Namespace, hc.Deployment)
+		return
+	}
+
+	// Check if max attempts reached
+	if hc.Attempts >= hc.MaxAttempts {
+		updateHealthCheckStatus(key, "failed", "Max health check attempts reached", podStatuses)
+		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, "", "health-check", "failed", "Health check timed out", time.Since(hc.StartTime).Seconds())
+		log.Printf("Health check failed for %s/%s: max attempts reached", hc.Namespace, hc.Deployment)
+		return
+	}
+
+	updateHealthCheckStatus(key, "checking", fmt.Sprintf("Waiting for rollout (%d/%d ready)", dep.Status.ReadyReplicas, *dep.Spec.Replicas), podStatuses)
+}
+
+func updateHealthCheckStatus(key, status, message string, podStatuses []PodStatus) {
+	healthCheckMu.Lock()
+	defer healthCheckMu.Unlock()
+	if hc, ok := pendingHealthChecks[key]; ok {
+		hc.Status = status
+		hc.Message = message
+		if podStatuses != nil {
+			hc.PodStatuses = podStatuses
+		}
+		if status == "healthy" || status == "failed" {
+			// Remove from pending after a delay
+			go func(k string) {
+				time.Sleep(5 * time.Minute)
+				healthCheckMu.Lock()
+				delete(pendingHealthChecks, k)
+				healthCheckMu.Unlock()
+			}(key)
+		}
+	}
+}
+
+func startHealthCheck(deployment, namespace, image string) {
+	key := fmt.Sprintf("%s/%s", namespace, deployment)
+	healthCheckMu.Lock()
+	pendingHealthChecks[key] = &HealthCheckStatus{
+		Deployment:  deployment,
+		Namespace:   namespace,
+		Image:       image,
+		Status:      "pending",
+		StartTime:   time.Now(),
+		LastCheck:   time.Now(),
+		Attempts:    0,
+		MaxAttempts: 60, // 5 minutes with 5-second intervals
+		Message:     "Waiting for deployment to start",
+	}
+	healthCheckMu.Unlock()
+	log.Printf("Started health check for %s/%s", namespace, deployment)
+}
+
+func handleHealthChecks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	healthCheckMu.RLock()
+	defer healthCheckMu.RUnlock()
+	json.NewEncoder(w).Encode(pendingHealthChecks)
+}
+
+func handleScale(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Deployment string `json:"deployment"`
+		Namespace  string `json:"namespace"`
+		Replicas   int32  `json:"replicas"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Namespace == "" {
+		req.Namespace = "holm"
+	}
+	if clientset == nil {
+		http.Error(w, "Kubernetes client not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := context.Background()
+	dep, err := clientset.AppsV1().Deployments(req.Namespace).Get(ctx, req.Deployment, metav1.GetOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	dep.Spec.Replicas = &req.Replicas
+	_, err = clientset.AppsV1().Deployments(req.Namespace).Update(ctx, dep, metav1.UpdateOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "scaled", "replicas": req.Replicas})
+}
+
+// Load auto-deploy rules from ConfigMap
+func loadAutoDeployRules() {
+	if clientset == nil {
+		log.Println("Kubernetes client not available, skipping rules load")
+		return
+	}
+
+	ctx := context.Background()
+	cm, err := clientset.CoreV1().ConfigMaps("holm").Get(ctx, rulesConfigMap, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			log.Printf("ConfigMap %s not found, will create on first rule", rulesConfigMap)
+			return
+		}
+		log.Printf("Failed to load rules: %v", err)
+		return
+	}
+
+	if data, ok := cm.Data["rules"]; ok {
+		autoDeployMu.Lock()
+		if err := json.Unmarshal([]byte(data), &autoDeployRules); err != nil {
+			log.Printf("Failed to parse rules: %v", err)
+		} else {
+			log.Printf("Loaded %d auto-deploy rules", len(autoDeployRules))
+		}
+		autoDeployMu.Unlock()
+	}
+}
+
+// Save auto-deploy rules to ConfigMap
+func saveAutoDeployRules() {
+	if clientset == nil {
+		return
+	}
+
+	autoDeployMu.RLock()
+	data, err := json.Marshal(autoDeployRules)
+	autoDeployMu.RUnlock()
+	if err != nil {
+		log.Printf("Failed to marshal rules: %v", err)
+		return
+	}
+
+	ctx := context.Background()
+	cm, err := clientset.CoreV1().ConfigMaps("holm").Get(ctx, rulesConfigMap, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Create new ConfigMap
+			cm = &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      rulesConfigMap,
+					Namespace: "holm",
+				},
+				Data: map[string]string{"rules": string(data)},
+			}
+			_, err = clientset.CoreV1().ConfigMaps("holm").Create(ctx, cm, metav1.CreateOptions{})
+			if err != nil {
+				log.Printf("Failed to create ConfigMap: %v", err)
+			}
+			return
+		}
+		log.Printf("Failed to get ConfigMap: %v", err)
+		return
+	}
+
+	cm.Data["rules"] = string(data)
+	_, err = clientset.CoreV1().ConfigMaps("holm").Update(ctx, cm, metav1.UpdateOptions{})
+	if err != nil {
+		log.Printf("Failed to update ConfigMap: %v", err)
+	}
+}
+
+// Create Service for deployment
+func ensureServiceExists(namespace, name string, port int) error {
+	if clientset == nil || port == 0 {
+		return nil
+	}
+
+	ctx := context.Background()
+	_, err := clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return nil // Service exists
+	}
+	if !errors.IsNotFound(err) {
+		return err
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":                             name,
+				"deploy-controller/auto-created": "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"app": name},
+			Ports: []corev1.ServicePort{
+				{
+					Port:       int32(port),
+					TargetPort: intstr.FromInt(port),
+					Protocol:   corev1.ProtocolTCP,
+				},
+			},
+		},
+	}
+
+	_, err = clientset.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{})
+	if err != nil {
+		log.Printf("Failed to create service %s: %v", name, err)
+		return err
+	}
+	log.Printf("Created service %s/%s on port %d", namespace, name, port)
+	return nil
 }

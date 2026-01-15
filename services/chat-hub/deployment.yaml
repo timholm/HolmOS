@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-hub
+  namespace: holm
+  labels:
+    app: chat-hub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chat-hub
+  template:
+    metadata:
+      labels:
+        app: chat-hub
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - rpi-2
+                - rpi-3
+                - rpi-4
+                - rpi-5
+                - rpi-6
+                - rpi-7
+                - rpi-8
+      containers:
+      - name: chat-hub
+        image: 192.168.8.197:30500/chat-hub:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-hub
+  namespace: holm
+  labels:
+    app: chat-hub
+spec:
+  selector:
+    app: chat-hub
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30003
+    protocol: TCP
+  type: NodePort

@@ -3,252 +3,654 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Test Dashboard - HolmOS Service Health</title>
+    <title>Test Dashboard - HolmOS Testing Hub</title>
     <style>
+        /* Catppuccin Mocha Theme */
         :root {
-            --base: #1e1e2e;
-            --mantle: #181825;
-            --crust: #11111b;
-            --text: #cdd6f4;
-            --subtext0: #a6adc8;
-            --subtext1: #bac2de;
-            --surface0: #313244;
-            --surface1: #45475a;
-            --surface2: #585b70;
-            --overlay0: #6c7086;
-            --green: #a6e3a1;
-            --red: #f38ba8;
-            --yellow: #f9e2af;
-            --blue: #89b4fa;
-            --mauve: #cba6f7;
-            --peach: #fab387;
-            --teal: #94e2d5;
-            --pink: #f5c2e7;
+            --ctp-rosewater: #f5e0dc;
+            --ctp-flamingo: #f2cdcd;
+            --ctp-pink: #f5c2e7;
+            --ctp-mauve: #cba6f7;
+            --ctp-red: #f38ba8;
+            --ctp-maroon: #eba0ac;
+            --ctp-peach: #fab387;
+            --ctp-yellow: #f9e2af;
+            --ctp-green: #a6e3a1;
+            --ctp-teal: #94e2d5;
+            --ctp-sky: #89dceb;
+            --ctp-sapphire: #74c7ec;
+            --ctp-blue: #89b4fa;
+            --ctp-lavender: #b4befe;
+            --ctp-text: #cdd6f4;
+            --ctp-subtext1: #bac2de;
+            --ctp-subtext0: #a6adc8;
+            --ctp-overlay2: #9399b2;
+            --ctp-overlay1: #7f849c;
+            --ctp-overlay0: #6c7086;
+            --ctp-surface2: #585b70;
+            --ctp-surface1: #45475a;
+            --ctp-surface0: #313244;
+            --ctp-base: #1e1e2e;
+            --ctp-mantle: #181825;
+            --ctp-crust: #11111b;
         }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: var(--base);
-            color: var(--text);
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--ctp-base);
+            color: var(--ctp-text);
             min-height: 100vh;
+            line-height: 1.5;
         }
-        .container { max-width: 1800px; margin: 0 auto; padding: 1.5rem; }
-        
-        /* Header */
-        header { 
-            text-align: center; 
-            margin-bottom: 1.5rem;
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
             padding: 1.5rem;
-            background: linear-gradient(135deg, var(--surface0), var(--mantle));
-            border-radius: 16px;
-            border: 1px solid var(--surface1);
         }
-        h1 { font-size: 2rem; color: var(--mauve); margin-bottom: 0.5rem; }
-        .subtitle { color: var(--subtext0); font-size: 0.95rem; }
-        
-        /* Controls */
-        .controls {
+
+        /* Header */
+        header {
+            background: linear-gradient(135deg, var(--ctp-surface0), var(--ctp-mantle));
+            border-radius: 16px;
+            padding: 1.5rem 2rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--ctp-surface1);
             display: flex;
-            justify-content: center;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
             gap: 1rem;
+        }
+
+        .header-left h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--ctp-mauve);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .header-left h1::before {
+            content: '';
+            width: 12px;
+            height: 12px;
+            background: var(--ctp-green);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.9); }
+        }
+
+        .header-left .subtitle {
+            color: var(--ctp-subtext0);
+            font-size: 0.9rem;
+            margin-top: 0.25rem;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        /* Navigation Tabs */
+        .nav-tabs {
+            display: flex;
+            gap: 0.5rem;
             margin-bottom: 1.5rem;
             flex-wrap: wrap;
         }
-        .btn {
-            background-color: var(--blue);
-            color: var(--crust);
-            border: none;
+
+        .nav-tab {
             padding: 0.6rem 1.2rem;
+            background: var(--ctp-surface0);
+            border: 1px solid var(--ctp-surface1);
+            border-radius: 8px;
+            color: var(--ctp-subtext0);
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .nav-tab:hover {
+            border-color: var(--ctp-blue);
+            color: var(--ctp-text);
+        }
+
+        .nav-tab.active {
+            background: var(--ctp-blue);
+            color: var(--ctp-crust);
+            border-color: var(--ctp-blue);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border: none;
             border-radius: 8px;
             font-size: 0.9rem;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: var(--ctp-blue);
+            color: var(--ctp-crust);
+        }
+
+        .btn-primary:hover {
+            background: var(--ctp-sapphire);
+            transform: translateY(-1px);
+        }
+
+        .btn-primary:disabled {
+            background: var(--ctp-surface1);
+            color: var(--ctp-overlay0);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: var(--ctp-surface1);
+            color: var(--ctp-text);
+        }
+
+        .btn-secondary:hover {
+            background: var(--ctp-surface2);
+        }
+
+        .btn-success {
+            background: var(--ctp-green);
+            color: var(--ctp-crust);
+        }
+
+        .btn-danger {
+            background: var(--ctp-red);
+            color: var(--ctp-crust);
+        }
+
+        /* Summary Cards */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .summary-card {
+            background: var(--ctp-surface0);
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid var(--ctp-surface1);
+            text-align: center;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .summary-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--ctp-surface2);
+        }
+
+        .summary-card .value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+
+        .summary-card .label {
+            font-size: 0.85rem;
+            color: var(--ctp-subtext0);
+            margin-top: 0.5rem;
+        }
+
+        .summary-card.total .value { color: var(--ctp-blue); }
+        .summary-card.passed .value { color: var(--ctp-green); }
+        .summary-card.failed .value { color: var(--ctp-red); }
+        .summary-card.errors .value { color: var(--ctp-yellow); }
+        .summary-card.latency .value { color: var(--ctp-teal); font-size: 1.8rem; }
+        .summary-card.rate .value { color: var(--ctp-mauve); font-size: 2rem; }
+
+        /* Panels */
+        .panel {
+            background: var(--ctp-surface0);
+            border-radius: 12px;
+            border: 1px solid var(--ctp-surface1);
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--ctp-surface1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .panel-header h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--ctp-mauve);
+        }
+
+        .panel-body {
+            padding: 1.25rem;
+        }
+
+        /* Controls Row */
+        .controls-row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 200px;
+            max-width: 400px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 0.6rem 1rem;
+            background: var(--ctp-surface0);
+            border: 1px solid var(--ctp-surface1);
+            border-radius: 8px;
+            color: var(--ctp-text);
+            font-size: 0.9rem;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: var(--ctp-blue);
+        }
+
+        .search-box input::placeholder {
+            color: var(--ctp-overlay0);
+        }
+
+        /* Category Filters */
+        .category-filters {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .category-chip {
+            padding: 0.4rem 0.8rem;
+            background: var(--ctp-surface1);
+            border-radius: 16px;
+            font-size: 0.8rem;
+            color: var(--ctp-subtext0);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .category-chip:hover {
+            background: var(--ctp-surface2);
+            color: var(--ctp-text);
+        }
+
+        .category-chip.active {
+            background: var(--ctp-blue);
+            color: var(--ctp-crust);
+        }
+
+        /* Alert Banner */
+        .alert-banner {
+            background: rgba(243, 139, 168, 0.1);
+            border: 1px solid var(--ctp-red);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1.5rem;
+            display: none;
+        }
+
+        .alert-banner.visible {
+            display: block;
+        }
+
+        .alert-banner h3 {
+            color: var(--ctp-red);
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
             display: flex;
             align-items: center;
             gap: 0.5rem;
         }
-        .btn:hover { background-color: var(--mauve); transform: translateY(-2px); }
-        .btn:disabled { background-color: var(--surface1); cursor: not-allowed; transform: none; }
-        .btn.secondary { background-color: var(--surface1); color: var(--text); }
-        .btn.secondary:hover { background-color: var(--surface2); }
-        
-        /* Summary Cards */
-        .summary-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 1rem;
-            margin-bottom: 1.5rem;
+
+        .alert-list {
+            list-style: none;
         }
-        .summary-card {
-            background: var(--surface0);
-            border-radius: 12px;
-            padding: 1.2rem;
-            text-align: center;
-            border: 1px solid var(--surface1);
-        }
-        .summary-card .count {
-            font-size: 2.5rem;
-            font-weight: 700;
-            line-height: 1;
-        }
-        .summary-card .label {
-            font-size: 0.85rem;
-            color: var(--subtext0);
-            margin-top: 0.5rem;
-        }
-        .summary-card.healthy .count { color: var(--green); }
-        .summary-card.failing .count { color: var(--red); }
-        .summary-card.errors .count { color: var(--yellow); }
-        .summary-card.total .count { color: var(--blue); }
-        .summary-card.avgms .count { color: var(--teal); font-size: 1.8rem; }
-        
-        /* Tabs */
-        .tabs {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-            flex-wrap: wrap;
-        }
-        .tab {
-            padding: 0.5rem 1rem;
-            background: var(--surface0);
-            border: 1px solid var(--surface1);
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            color: var(--subtext0);
-            transition: all 0.2s;
-        }
-        .tab:hover { border-color: var(--blue); color: var(--text); }
-        .tab.active { background: var(--blue); color: var(--crust); border-color: var(--blue); }
-        
-        /* Alert Banner */
-        .alert-banner {
-            background: rgba(243, 139, 168, 0.15);
-            border: 1px solid var(--red);
-            border-radius: 12px;
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            display: none;
-        }
-        .alert-banner.visible { display: block; }
-        .alert-banner h3 { color: var(--red); margin-bottom: 0.5rem; font-size: 1rem; }
-        .alert-list { list-style: none; }
-        .alert-list li {
-            padding: 0.4rem 0;
-            border-bottom: 1px solid rgba(243, 139, 168, 0.2);
-            font-size: 0.9rem;
+
+        .alert-item {
             display: flex;
             justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(243, 139, 168, 0.2);
+            font-size: 0.9rem;
         }
-        .alert-list li:last-child { border-bottom: none; }
-        .alert-severity { 
-            padding: 0.15rem 0.5rem; 
-            border-radius: 4px; 
+
+        .alert-item:last-child {
+            border-bottom: none;
+        }
+
+        .severity-badge {
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
             font-size: 0.75rem;
             font-weight: 600;
+            text-transform: uppercase;
         }
-        .alert-severity.critical { background: var(--red); color: var(--crust); }
-        .alert-severity.warning { background: var(--yellow); color: var(--crust); }
-        
+
+        .severity-badge.critical {
+            background: var(--ctp-red);
+            color: var(--ctp-crust);
+        }
+
+        .severity-badge.warning {
+            background: var(--ctp-yellow);
+            color: var(--ctp-crust);
+        }
+
         /* Services Grid */
         .services-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 1rem;
         }
+
         .service-card {
-            background: var(--surface0);
+            background: var(--ctp-mantle);
             border-radius: 10px;
             padding: 1rem;
-            border: 1px solid var(--surface1);
+            border: 1px solid var(--ctp-surface1);
             transition: all 0.2s;
         }
-        .service-card:hover { transform: translateY(-2px); border-color: var(--blue); }
-        .service-card.pass { border-left: 4px solid var(--green); }
-        .service-card.fail { border-left: 4px solid var(--red); }
-        .service-card.error { border-left: 4px solid var(--yellow); }
-        
+
+        .service-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--ctp-blue);
+        }
+
+        .service-card.pass { border-left: 4px solid var(--ctp-green); }
+        .service-card.fail { border-left: 4px solid var(--ctp-red); }
+        .service-card.error { border-left: 4px solid var(--ctp-yellow); }
+
         .service-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 0.5rem;
         }
+
         .service-name {
             font-weight: 600;
             font-size: 0.95rem;
-            color: var(--text);
+            color: var(--ctp-text);
         }
-        .service-status {
+
+        .status-badge {
             padding: 0.2rem 0.6rem;
             border-radius: 12px;
             font-size: 0.75rem;
             font-weight: 600;
             text-transform: uppercase;
         }
-        .service-status.pass { background: rgba(166, 227, 161, 0.2); color: var(--green); }
-        .service-status.fail { background: rgba(243, 139, 168, 0.2); color: var(--red); }
-        .service-status.error { background: rgba(249, 226, 175, 0.2); color: var(--yellow); }
-        
-        .service-details {
-            font-size: 0.8rem;
-            color: var(--subtext0);
+
+        .status-badge.pass {
+            background: rgba(166, 227, 161, 0.2);
+            color: var(--ctp-green);
         }
-        .service-details .message { margin-bottom: 0.3rem; }
-        .service-details .meta {
+
+        .status-badge.fail {
+            background: rgba(243, 139, 168, 0.2);
+            color: var(--ctp-red);
+        }
+
+        .status-badge.error {
+            background: rgba(249, 226, 175, 0.2);
+            color: var(--ctp-yellow);
+        }
+
+        .service-details {
+            font-size: 0.85rem;
+            color: var(--ctp-subtext0);
+        }
+
+        .service-message {
+            margin-bottom: 0.4rem;
+        }
+
+        .service-meta {
             display: flex;
             justify-content: space-between;
-            color: var(--overlay0);
+            align-items: center;
+            font-size: 0.8rem;
+            color: var(--ctp-overlay0);
+        }
+
+        .category-tag {
+            padding: 0.15rem 0.5rem;
+            background: var(--ctp-surface1);
+            border-radius: 4px;
             font-size: 0.75rem;
         }
+
         .response-time {
-            color: var(--teal);
+            font-weight: 600;
+            color: var(--ctp-teal);
+        }
+
+        .response-time.slow { color: var(--ctp-yellow); }
+        .response-time.very-slow { color: var(--ctp-red); }
+
+        /* Category Section */
+        .category-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .category-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 0.75rem;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--ctp-surface1);
+        }
+
+        .category-title {
+            font-size: 1rem;
+            color: var(--ctp-lavender);
             font-weight: 600;
         }
-        .response-time.slow { color: var(--yellow); }
-        .response-time.very-slow { color: var(--red); }
-        
-        .category-badge {
-            font-size: 0.7rem;
-            padding: 0.15rem 0.4rem;
-            background: var(--surface1);
-            border-radius: 4px;
-            color: var(--subtext0);
+
+        .category-stats {
+            font-size: 0.85rem;
+            color: var(--ctp-subtext0);
         }
-        
+
         /* History Chart */
-        .history-section {
-            background: var(--surface0);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-top: 1.5rem;
-            border: 1px solid var(--surface1);
-        }
-        .history-section h3 { margin-bottom: 1rem; color: var(--mauve); font-size: 1.1rem; }
         .history-chart {
-            height: 150px;
+            height: 120px;
             display: flex;
             align-items: flex-end;
-            gap: 4px;
+            gap: 3px;
+            padding: 0.5rem 0;
             overflow-x: auto;
-            padding-bottom: 1rem;
         }
+
         .history-bar {
-            min-width: 8px;
             flex: 1;
-            max-width: 20px;
-            border-radius: 4px 4px 0 0;
+            min-width: 6px;
+            max-width: 16px;
+            border-radius: 3px 3px 0 0;
             transition: all 0.2s;
+            cursor: pointer;
             position: relative;
         }
-        .history-bar:hover { opacity: 0.8; }
-        .history-bar.good { background: var(--green); }
-        .history-bar.warn { background: var(--yellow); }
-        .history-bar.bad { background: var(--red); }
-        
-        /* Loading */
+
+        .history-bar:hover {
+            opacity: 0.8;
+        }
+
+        .history-bar.good { background: var(--ctp-green); }
+        .history-bar.warn { background: var(--ctp-yellow); }
+        .history-bar.bad { background: var(--ctp-red); }
+
+        .history-bar::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--ctp-surface2);
+            color: var(--ctp-text);
+            padding: 0.3rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+        }
+
+        .history-bar:hover::after {
+            opacity: 1;
+        }
+
+        /* Test Runs List */
+        .runs-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .run-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--ctp-surface1);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .run-item:hover {
+            background: var(--ctp-surface1);
+        }
+
+        .run-item:last-child {
+            border-bottom: none;
+        }
+
+        .run-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .run-id {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: var(--ctp-text);
+        }
+
+        .run-meta {
+            font-size: 0.8rem;
+            color: var(--ctp-subtext0);
+        }
+
+        .run-stats {
+            text-align: right;
+        }
+
+        .run-pass-rate {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .run-pass-rate.good { color: var(--ctp-green); }
+        .run-pass-rate.warn { color: var(--ctp-yellow); }
+        .run-pass-rate.bad { color: var(--ctp-red); }
+
+        .run-duration {
+            font-size: 0.8rem;
+            color: var(--ctp-overlay0);
+        }
+
+        /* GitHub Actions Panel */
+        .workflow-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .workflow-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            background: var(--ctp-mantle);
+            border-radius: 8px;
+            border: 1px solid var(--ctp-surface1);
+        }
+
+        .workflow-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .workflow-name {
+            font-weight: 600;
+            color: var(--ctp-text);
+        }
+
+        .workflow-meta {
+            font-size: 0.8rem;
+            color: var(--ctp-subtext0);
+        }
+
+        .workflow-status {
+            padding: 0.3rem 0.8rem;
+            border-radius: 16px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .workflow-status.success {
+            background: rgba(166, 227, 161, 0.2);
+            color: var(--ctp-green);
+        }
+
+        .workflow-status.failure {
+            background: rgba(243, 139, 168, 0.2);
+            color: var(--ctp-red);
+        }
+
+        .workflow-status.pending {
+            background: rgba(249, 226, 175, 0.2);
+            color: var(--ctp-yellow);
+        }
+
+        /* Loading State */
         .loading {
             display: none;
             justify-content: center;
@@ -256,340 +658,854 @@
             gap: 0.75rem;
             padding: 2rem;
         }
-        .loading.active { display: flex; }
+
+        .loading.active {
+            display: flex;
+        }
+
         .spinner {
             width: 24px;
             height: 24px;
-            border: 3px solid var(--surface1);
-            border-top-color: var(--blue);
+            border: 3px solid var(--ctp-surface1);
+            border-top-color: var(--ctp-blue);
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        
-        /* Filter */
-        .filter-bar {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-            flex-wrap: wrap;
-            align-items: center;
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
-        .filter-bar input {
-            background: var(--surface0);
-            border: 1px solid var(--surface1);
-            border-radius: 8px;
-            padding: 0.5rem 1rem;
-            color: var(--text);
-            font-size: 0.9rem;
-            flex: 1;
-            min-width: 200px;
-        }
-        .filter-bar input:focus { outline: none; border-color: var(--blue); }
-        .filter-bar input::placeholder { color: var(--overlay0); }
-        
-        /* Status indicator */
+
+        /* Status Indicator */
         .status-indicator {
             display: flex;
             align-items: center;
             gap: 0.5rem;
             font-size: 0.85rem;
-            color: var(--subtext0);
+            color: var(--ctp-subtext0);
         }
-        .pulse-dot {
+
+        .status-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: var(--green);
-            animation: pulse 2s infinite;
+            background: var(--ctp-green);
         }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+        .status-dot.running {
+            animation: pulse 1s infinite;
         }
-        
+
+        /* Trend Indicator */
+        .trend-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.85rem;
+        }
+
+        .trend-indicator.improving { color: var(--ctp-green); }
+        .trend-indicator.degrading { color: var(--ctp-red); }
+        .trend-indicator.stable { color: var(--ctp-subtext0); }
+
+        /* Tab Content */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Two Column Layout */
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 1200px) {
+            .two-column {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Timestamp */
         .timestamp {
             text-align: center;
-            color: var(--overlay0);
+            color: var(--ctp-overlay0);
             font-size: 0.8rem;
-            margin-top: 1.5rem;
             padding: 1rem;
         }
-        
-        /* Category sections */
-        .category-section {
-            margin-bottom: 1.5rem;
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--ctp-subtext0);
         }
-        .category-header {
-            font-size: 1rem;
-            color: var(--mauve);
-            margin-bottom: 0.75rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid var(--surface1);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+
+        .empty-state h3 {
+            margin-bottom: 0.5rem;
+            color: var(--ctp-text);
         }
-        .category-count {
-            font-size: 0.8rem;
-            color: var(--subtext0);
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .stat-card {
+            background: var(--ctp-mantle);
+            border-radius: 10px;
+            padding: 1.25rem;
+            border: 1px solid var(--ctp-surface1);
+        }
+
+        .stat-card .label {
+            font-size: 0.85rem;
+            color: var(--ctp-subtext0);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-card .value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--ctp-text);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--ctp-mantle);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--ctp-surface2);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--ctp-overlay0);
         }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>HolmOS Service Health</h1>
-            <p class="subtitle">Real-time health monitoring for all cluster services</p>
+            <div class="header-left">
+                <h1>Test Dashboard</h1>
+                <p class="subtitle">HolmOS Comprehensive Testing Hub</p>
+            </div>
+            <div class="header-right">
+                <div class="status-indicator">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="lastUpdate">Initializing...</span>
+                </div>
+                <button class="btn btn-primary" id="runAllBtn" onclick="runAllTests()">
+                    Run All Tests
+                </button>
+            </div>
         </header>
-        
-        <div class="summary-grid" id="summaryGrid">
+
+        <!-- Navigation Tabs -->
+        <div class="nav-tabs">
+            <div class="nav-tab active" onclick="showTab('overview')">Overview</div>
+            <div class="nav-tab" onclick="showTab('services')">Services</div>
+            <div class="nav-tab" onclick="showTab('history')">History</div>
+            <div class="nav-tab" onclick="showTab('github')">GitHub Actions</div>
+            <div class="nav-tab" onclick="showTab('trends')">Trends</div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-grid">
             <div class="summary-card total">
-                <div class="count" id="totalCount">0</div>
+                <div class="value" id="totalCount">0</div>
                 <div class="label">Total Services</div>
             </div>
-            <div class="summary-card healthy">
-                <div class="count" id="healthyCount">0</div>
-                <div class="label">Healthy</div>
+            <div class="summary-card passed">
+                <div class="value" id="passedCount">0</div>
+                <div class="label">Passed</div>
             </div>
-            <div class="summary-card failing">
-                <div class="count" id="failingCount">0</div>
-                <div class="label">Failing</div>
+            <div class="summary-card failed">
+                <div class="value" id="failedCount">0</div>
+                <div class="label">Failed</div>
             </div>
             <div class="summary-card errors">
-                <div class="count" id="errorsCount">0</div>
+                <div class="value" id="errorsCount">0</div>
                 <div class="label">Errors</div>
             </div>
-            <div class="summary-card avgms">
-                <div class="count" id="avgMs">0ms</div>
-                <div class="label">Avg Response</div>
+            <div class="summary-card latency">
+                <div class="value" id="avgLatency">0ms</div>
+                <div class="label">Avg Latency</div>
+            </div>
+            <div class="summary-card rate">
+                <div class="value" id="passRate">0%</div>
+                <div class="label">Pass Rate</div>
             </div>
         </div>
-        
-        <div class="controls">
-            <button class="btn" id="runAllBtn" onclick="runAllTests()">
-                <span>Run Health Check</span>
-            </button>
-            <button class="btn secondary" onclick="toggleAutoRefresh()">
-                <span id="autoRefreshLabel">Auto: ON (30s)</span>
-            </button>
-            <div class="status-indicator">
-                <div class="pulse-dot"></div>
-                <span id="lastUpdate">Waiting...</span>
-            </div>
-        </div>
-        
+
+        <!-- Alert Banner -->
         <div class="alert-banner" id="alertBanner">
             <h3>Active Alerts</h3>
             <ul class="alert-list" id="alertList"></ul>
         </div>
-        
-        <div class="filter-bar">
-            <input type="text" id="searchFilter" placeholder="Search services..." oninput="filterServices()">
-            <div class="tabs" id="categoryTabs"></div>
-        </div>
-        
+
+        <!-- Loading -->
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <span>Running health checks...</span>
+            <span>Running tests...</span>
         </div>
-        
-        <div id="servicesContainer"></div>
-        
-        <div class="history-section">
-            <h3>Health History (Last 100 checks)</h3>
-            <div class="history-chart" id="historyChart"></div>
+
+        <!-- Overview Tab -->
+        <div class="tab-content active" id="tab-overview">
+            <div class="two-column">
+                <div>
+                    <!-- Quick Health -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Service Health Overview</h2>
+                            <div class="category-filters" id="categoryFilters"></div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="search-box">
+                                <input type="text" id="searchFilter" placeholder="Search services..." oninput="filterServices()">
+                            </div>
+                            <div id="servicesContainer" style="margin-top: 1rem;"></div>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <!-- History Chart -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Health Trend</h2>
+                            <span class="trend-indicator" id="trendIndicator">
+                                <span id="trendIcon"></span>
+                                <span id="trendText">Stable</span>
+                            </span>
+                        </div>
+                        <div class="panel-body">
+                            <div class="history-chart" id="historyChart"></div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Runs -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h2>Recent Test Runs</h2>
+                        </div>
+                        <div class="panel-body">
+                            <div class="runs-list" id="runsList"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-        
-        <div class="timestamp" id="timestamp">Initializing...</div>
+
+        <!-- Services Tab -->
+        <div class="tab-content" id="tab-services">
+            <div class="controls-row">
+                <div class="search-box">
+                    <input type="text" id="servicesSearch" placeholder="Search services..." oninput="filterServicesTab()">
+                </div>
+                <div class="category-filters" id="servicesCategories"></div>
+            </div>
+            <div id="servicesFullContainer"></div>
+        </div>
+
+        <!-- History Tab -->
+        <div class="tab-content" id="tab-history">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Test Run History</h2>
+                    <span id="historyCount">0 runs</span>
+                </div>
+                <div class="panel-body">
+                    <div class="history-chart" id="fullHistoryChart" style="height: 200px;"></div>
+                    <div class="runs-list" id="fullRunsList" style="max-height: 600px; margin-top: 1.5rem;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- GitHub Actions Tab -->
+        <div class="tab-content" id="tab-github">
+            <div class="two-column">
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Workflow Runs</h2>
+                        <button class="btn btn-secondary" onclick="fetchGitHubWorkflows()">Refresh</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="workflow-list" id="workflowList">
+                            <div class="empty-state">
+                                <h3>No workflows loaded</h3>
+                                <p>Click refresh to load GitHub Actions workflows</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2>Trigger Workflow</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div style="display: flex; flex-direction: column; gap: 1rem;">
+                            <button class="btn btn-primary" onclick="triggerWorkflow('ci.yml')">
+                                Run CI Pipeline
+                            </button>
+                            <button class="btn btn-secondary" onclick="triggerWorkflow('health.yml')">
+                                Run Health Check
+                            </button>
+                            <button class="btn btn-secondary" onclick="triggerWorkflow('deploy.yml')">
+                                Run Deploy
+                            </button>
+                        </div>
+                        <div id="triggerStatus" style="margin-top: 1rem; font-size: 0.9rem;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trends Tab -->
+        <div class="tab-content" id="tab-trends">
+            <div class="stats-grid" id="statsGrid">
+                <div class="stat-card">
+                    <div class="label">Total Runs</div>
+                    <div class="value" id="statTotalRuns">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Average Pass Rate</div>
+                    <div class="value" id="statAvgPassRate">0%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Average Latency</div>
+                    <div class="value" id="statAvgLatency">0ms</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Health Trend</div>
+                    <div class="value" id="statTrend">Stable</div>
+                </div>
+            </div>
+
+            <div class="panel" style="margin-top: 1.5rem;">
+                <div class="panel-header">
+                    <h2>Currently Failing Services</h2>
+                </div>
+                <div class="panel-body">
+                    <div id="failingServicesList"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="timestamp" id="timestamp">Ready</div>
     </div>
-    
+
     <script>
-        let autoRefresh = true;
-        let refreshInterval = null;
+        // State
+        let currentData = null;
         let allResults = [];
-        let activeCategory = "all";
-        
+        let activeCategory = 'all';
+        let testRuns = [];
+        let testHistory = [];
+        let activeTab = 'overview';
+        let autoRefreshEnabled = true;
+        let refreshInterval = null;
+
         const categoryNames = {
-            test: "Test Services",
-            core: "Core Infrastructure",
-            auth: "Authentication",
-            files: "File Services",
-            terminal: "Terminal",
-            cluster: "Cluster Management",
-            registry: "Container Registry",
-            settings: "Settings",
-            audiobook: "Audiobook",
-            apps: "Applications",
-            agents: "AI Agents",
-            platform: "Platform Services",
-            devops: "DevOps",
-            monitoring: "Monitoring",
-            backup: "Backup & Restore",
-            notification: "Notifications",
-            user: "User Services",
-            infra: "Infrastructure",
-            database: "Databases"
+            core: 'Core Services',
+            agent: 'AI Agents',
+            app: 'Applications',
+            devops: 'DevOps',
+            admin: 'Admin',
+            monitoring: 'Monitoring'
         };
-        
-        function updateUI(data) {
-            allResults = data.results || [];
-            
-            // Update summary
-            document.getElementById("totalCount").textContent = data.summary.total;
-            document.getElementById("healthyCount").textContent = data.summary.healthy;
-            document.getElementById("failingCount").textContent = data.summary.failing;
-            document.getElementById("errorsCount").textContent = data.summary.errors;
-            document.getElementById("avgMs").textContent = data.summary.avgMs + "ms";
-            
-            // Update alerts
-            const alertBanner = document.getElementById("alertBanner");
-            const alertList = document.getElementById("alertList");
-            if (data.alerts && data.alerts.length > 0) {
-                alertBanner.classList.add("visible");
-                alertList.innerHTML = data.alerts.map(a => 
-                    "<li><span>" + a.service + ": " + a.message + "</span>" +
-                    "<span class=\"alert-severity " + a.severity + "\">" + a.severity + "</span></li>"
-                ).join("");
-            } else {
-                alertBanner.classList.remove("visible");
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            runAllTests();
+            startAutoRefresh();
+            fetchStats();
+        });
+
+        // Tab Navigation
+        function showTab(tabId) {
+            activeTab = tabId;
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById('tab-' + tabId).classList.add('active');
+
+            if (tabId === 'github') {
+                fetchGitHubWorkflows();
+            } else if (tabId === 'trends') {
+                fetchStats();
+            } else if (tabId === 'history') {
+                renderFullHistory();
             }
-            
-            // Build category tabs
+        }
+
+        // Run All Tests
+        async function runAllTests() {
+            const btn = document.getElementById('runAllBtn');
+            const loading = document.getElementById('loading');
+            const statusDot = document.getElementById('statusDot');
+
+            btn.disabled = true;
+            loading.classList.add('active');
+            statusDot.classList.add('running');
+
+            try {
+                const response = await fetch('/api/run');
+                const data = await response.json();
+
+                if (data.error) {
+                    console.log('Run in progress:', data.error);
+                    return;
+                }
+
+                currentData = data;
+                allResults = data.results || [];
+                updateUI(data);
+
+                // Add to local runs
+                testRuns.unshift(data);
+                if (testRuns.length > 50) testRuns = testRuns.slice(0, 50);
+
+                renderRecentRuns();
+
+            } catch (err) {
+                console.error('Error running tests:', err);
+                document.getElementById('timestamp').textContent = 'Error: ' + err.message;
+            } finally {
+                btn.disabled = false;
+                loading.classList.remove('active');
+                statusDot.classList.remove('running');
+            }
+        }
+
+        // Update UI
+        function updateUI(data) {
+            const summary = data.summary;
+
+            // Summary cards
+            document.getElementById('totalCount').textContent = summary.total;
+            document.getElementById('passedCount').textContent = summary.passed;
+            document.getElementById('failedCount').textContent = summary.failed;
+            document.getElementById('errorsCount').textContent = summary.errors;
+            document.getElementById('avgLatency').textContent = summary.avgLatency + 'ms';
+            document.getElementById('passRate').textContent = summary.passRate.toFixed(1) + '%';
+
+            // Alerts
+            const alerts = data.results.filter(r => r.status === 'fail' || r.status === 'error');
+            const alertBanner = document.getElementById('alertBanner');
+            const alertList = document.getElementById('alertList');
+
+            if (alerts.length > 0) {
+                alertBanner.classList.add('visible');
+                alertList.innerHTML = alerts.slice(0, 10).map(a => `
+                    <li class="alert-item">
+                        <span>${a.serviceName}: ${a.message}</span>
+                        <span class="severity-badge ${a.status === 'error' ? 'critical' : 'warning'}">
+                            ${a.status === 'error' ? 'critical' : 'warning'}
+                        </span>
+                    </li>
+                `).join('');
+            } else {
+                alertBanner.classList.remove('visible');
+            }
+
+            // Category filters
             const categories = [...new Set(allResults.map(r => r.category))].sort();
-            const tabsHtml = "<div class=\"tab " + (activeCategory === "all" ? "active" : "") + "\" onclick=\"setCategory(\"all\")\">All</div>" +
-                categories.map(c => 
-                    "<div class=\"tab " + (activeCategory === c ? "active" : "") + "\" onclick=\"setCategory(\"" + c + "\")\"" +
-                    ">" + (categoryNames[c] || c) + "</div>"
-                ).join("");
-            document.getElementById("categoryTabs").innerHTML = tabsHtml;
-            
+            document.getElementById('categoryFilters').innerHTML = `
+                <span class="category-chip ${activeCategory === 'all' ? 'active' : ''}" onclick="setCategory('all')">All</span>
+                ${categories.map(c => `
+                    <span class="category-chip ${activeCategory === c ? 'active' : ''}" onclick="setCategory('${c}')">
+                        ${categoryNames[c] || c}
+                    </span>
+                `).join('')}
+            `;
+
             // Render services
             renderServices();
-            
-            // Update history chart
-            if (data.history && data.history.length > 0) {
-                const maxTotal = Math.max(...data.history.map(h => h.totalCount));
-                document.getElementById("historyChart").innerHTML = data.history.map(h => {
-                    const healthPercent = (h.passCount / h.totalCount) * 100;
-                    const barClass = healthPercent >= 90 ? "good" : healthPercent >= 70 ? "warn" : "bad";
-                    const height = (h.passCount / maxTotal) * 100;
-                    return "<div class=\"history-bar " + barClass + "\" style=\"height: " + Math.max(height, 5) + "%\" " +
-                        "title=\"" + h.passCount + "/" + h.totalCount + " healthy\"></div>";
-                }).join("");
-            }
-            
-            // Update timestamp
-            const time = new Date(data.timestamp).toLocaleString();
-            document.getElementById("timestamp").textContent = "Last updated: " + time;
-            document.getElementById("lastUpdate").textContent = "Updated " + new Date().toLocaleTimeString();
+            renderHistory(data.history || []);
+
+            // Timestamp
+            const time = new Date().toLocaleString();
+            document.getElementById('timestamp').textContent = 'Last updated: ' + time;
+            document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
         }
-        
+
+        // Set Category Filter
+        function setCategory(cat) {
+            activeCategory = cat;
+            renderServices();
+            document.querySelectorAll('.category-chip').forEach(c => {
+                c.classList.toggle('active', c.textContent.trim().toLowerCase().includes(cat === 'all' ? 'all' : ''));
+            });
+        }
+
+        // Render Services
         function renderServices() {
-            const filter = document.getElementById("searchFilter").value.toLowerCase();
+            const filter = document.getElementById('searchFilter').value.toLowerCase();
             let filtered = allResults;
-            
-            if (activeCategory !== "all") {
+
+            if (activeCategory !== 'all') {
                 filtered = filtered.filter(r => r.category === activeCategory);
             }
-            
+
             if (filter) {
-                filtered = filtered.filter(r => 
-                    r.name.toLowerCase().includes(filter) || 
+                filtered = filtered.filter(r =>
+                    r.serviceName.toLowerCase().includes(filter) ||
                     r.message.toLowerCase().includes(filter) ||
                     r.category.toLowerCase().includes(filter)
                 );
             }
-            
+
             // Group by category
             const grouped = {};
             filtered.forEach(r => {
                 if (!grouped[r.category]) grouped[r.category] = [];
                 grouped[r.category].push(r);
             });
-            
-            let html = "";
+
+            let html = '';
             Object.keys(grouped).sort().forEach(cat => {
                 const services = grouped[cat];
-                const healthy = services.filter(s => s.status === "pass").length;
-                html += "<div class=\"category-section\">" +
-                    "<div class=\"category-header\">" +
-                    "<span>" + (categoryNames[cat] || cat) + "</span>" +
-                    "<span class=\"category-count\">" + healthy + "/" + services.length + " healthy</span>" +
-                    "</div>" +
-                    "<div class=\"services-grid\">" +
-                    services.map(r => renderServiceCard(r)).join("") +
-                    "</div></div>";
+                const healthy = services.filter(s => s.status === 'pass').length;
+
+                html += `
+                    <div class="category-section">
+                        <div class="category-header">
+                            <span class="category-title">${categoryNames[cat] || cat}</span>
+                            <span class="category-stats">${healthy}/${services.length} healthy</span>
+                        </div>
+                        <div class="services-grid">
+                            ${services.map(r => renderServiceCard(r)).join('')}
+                        </div>
+                    </div>
+                `;
             });
-            
-            document.getElementById("servicesContainer").innerHTML = html;
+
+            document.getElementById('servicesContainer').innerHTML = html || '<div class="empty-state"><p>No services found</p></div>';
         }
-        
+
+        // Render Service Card
         function renderServiceCard(r) {
-            const rtClass = r.responseMs > 1000 ? "very-slow" : r.responseMs > 500 ? "slow" : "";
-            return "<div class=\"service-card " + r.status + "\">" +
-                "<div class=\"service-header\">" +
-                "<span class=\"service-name\">" + r.name + "</span>" +
-                "<span class=\"service-status " + r.status + "\">" + r.status + "</span>" +
-                "</div>" +
-                "<div class=\"service-details\">" +
-                "<div class=\"message\">" + r.message + "</div>" +
-                "<div class=\"meta\">" +
-                "<span class=\"category-badge\">" + r.category + "</span>" +
-                "<span class=\"response-time " + rtClass + "\">" + r.responseTime + "</span>" +
-                "</div></div></div>";
+            const rtClass = r.duration > 1000 ? 'very-slow' : r.duration > 500 ? 'slow' : '';
+            return `
+                <div class="service-card ${r.status}" onclick="testSingleService('${r.serviceName}')">
+                    <div class="service-header">
+                        <span class="service-name">${r.serviceName}</span>
+                        <span class="status-badge ${r.status}">${r.status}</span>
+                    </div>
+                    <div class="service-details">
+                        <div class="service-message">${r.message}</div>
+                        <div class="service-meta">
+                            <span class="category-tag">${r.category}</span>
+                            <span class="response-time ${rtClass}">${r.responseTime}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
         }
-        
-        function setCategory(cat) {
-            activeCategory = cat;
-            renderServices();
-            document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-            event.target.classList.add("active");
-        }
-        
+
+        // Filter Services
         function filterServices() {
             renderServices();
         }
-        
-        async function runAllTests() {
-            const btn = document.getElementById("runAllBtn");
-            const loading = document.getElementById("loading");
-            btn.disabled = true;
-            loading.classList.add("active");
-            
+
+        function filterServicesTab() {
+            // Similar filter for services tab
+            const filter = document.getElementById('servicesSearch').value.toLowerCase();
+            let filtered = allResults;
+
+            if (filter) {
+                filtered = filtered.filter(r =>
+                    r.serviceName.toLowerCase().includes(filter) ||
+                    r.category.toLowerCase().includes(filter)
+                );
+            }
+
+            renderServicesTab(filtered);
+        }
+
+        function renderServicesTab(results) {
+            const grouped = {};
+            results.forEach(r => {
+                if (!grouped[r.category]) grouped[r.category] = [];
+                grouped[r.category].push(r);
+            });
+
+            let html = '';
+            Object.keys(grouped).sort().forEach(cat => {
+                const services = grouped[cat];
+                const healthy = services.filter(s => s.status === 'pass').length;
+
+                html += `
+                    <div class="category-section">
+                        <div class="category-header">
+                            <span class="category-title">${categoryNames[cat] || cat}</span>
+                            <span class="category-stats">${healthy}/${services.length} healthy</span>
+                        </div>
+                        <div class="services-grid">
+                            ${services.map(r => renderServiceCard(r)).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+
+            document.getElementById('servicesFullContainer').innerHTML = html;
+        }
+
+        // Test Single Service
+        async function testSingleService(serviceName) {
             try {
-                const response = await fetch("/api/run");
-                const data = await response.json();
-                updateUI(data);
+                const response = await fetch(`/api/run/single?service=${serviceName}`);
+                const result = await response.json();
+
+                // Update the service in the results
+                const idx = allResults.findIndex(r => r.serviceName === serviceName);
+                if (idx !== -1) {
+                    allResults[idx] = result;
+                    renderServices();
+                }
             } catch (err) {
-                console.error("Error:", err);
-                document.getElementById("timestamp").textContent = "Error: " + err.message;
-            } finally {
-                btn.disabled = false;
-                loading.classList.remove("active");
+                console.error('Error testing service:', err);
             }
         }
-        
-        function toggleAutoRefresh() {
-            autoRefresh = !autoRefresh;
-            const label = document.getElementById("autoRefreshLabel");
-            if (autoRefresh) {
-                label.textContent = "Auto: ON (30s)";
-                startAutoRefresh();
-            } else {
-                label.textContent = "Auto: OFF";
-                if (refreshInterval) clearInterval(refreshInterval);
+
+        // Render History Chart
+        function renderHistory(history) {
+            testHistory = history;
+            if (!history || history.length === 0) {
+                document.getElementById('historyChart').innerHTML = '<div class="empty-state"><p>No history data</p></div>';
+                return;
+            }
+
+            const maxTotal = Math.max(...history.map(h => h.totalCount || 1));
+
+            document.getElementById('historyChart').innerHTML = history.slice(-50).map(h => {
+                const passRate = h.passRate || (h.passCount / h.totalCount * 100);
+                const barClass = passRate >= 90 ? 'good' : passRate >= 70 ? 'warn' : 'bad';
+                const height = Math.max((h.passCount / maxTotal) * 100, 5);
+                const time = new Date(h.timestamp).toLocaleTimeString();
+
+                return `<div class="history-bar ${barClass}" style="height: ${height}%"
+                    data-tooltip="${h.passCount}/${h.totalCount} (${passRate.toFixed(0)}%) - ${time}"></div>`;
+            }).join('');
+        }
+
+        // Render Full History
+        function renderFullHistory() {
+            document.getElementById('historyCount').textContent = testRuns.length + ' runs';
+
+            // Chart
+            if (testHistory.length > 0) {
+                const maxTotal = Math.max(...testHistory.map(h => h.totalCount || 1));
+                document.getElementById('fullHistoryChart').innerHTML = testHistory.map(h => {
+                    const passRate = h.passRate || (h.passCount / h.totalCount * 100);
+                    const barClass = passRate >= 90 ? 'good' : passRate >= 70 ? 'warn' : 'bad';
+                    const height = Math.max((h.passCount / maxTotal) * 100, 5);
+                    const time = new Date(h.timestamp).toLocaleTimeString();
+
+                    return `<div class="history-bar ${barClass}" style="height: ${height}%"
+                        data-tooltip="${h.passCount}/${h.totalCount} (${passRate.toFixed(0)}%) - ${time}"></div>`;
+                }).join('');
+            }
+
+            // Runs list
+            document.getElementById('fullRunsList').innerHTML = testRuns.map(run => {
+                const passRate = run.summary.passRate;
+                const rateClass = passRate >= 90 ? 'good' : passRate >= 70 ? 'warn' : 'bad';
+                const time = new Date(run.startTime).toLocaleString();
+
+                return `
+                    <div class="run-item">
+                        <div class="run-info">
+                            <span class="run-id">Run #${run.id.slice(-6)}</span>
+                            <span class="run-meta">${time} | ${run.triggerType} by ${run.triggerBy}</span>
+                        </div>
+                        <div class="run-stats">
+                            <span class="run-pass-rate ${rateClass}">${passRate.toFixed(1)}%</span>
+                            <span class="run-duration">${run.summary.duration}ms</span>
+                        </div>
+                    </div>
+                `;
+            }).join('') || '<div class="empty-state"><p>No runs recorded</p></div>';
+        }
+
+        // Render Recent Runs
+        function renderRecentRuns() {
+            document.getElementById('runsList').innerHTML = testRuns.slice(0, 10).map(run => {
+                const passRate = run.summary.passRate;
+                const rateClass = passRate >= 90 ? 'good' : passRate >= 70 ? 'warn' : 'bad';
+                const time = new Date(run.startTime).toLocaleTimeString();
+
+                return `
+                    <div class="run-item">
+                        <div class="run-info">
+                            <span class="run-id">Run #${run.id.slice(-6)}</span>
+                            <span class="run-meta">${time}</span>
+                        </div>
+                        <div class="run-stats">
+                            <span class="run-pass-rate ${rateClass}">${passRate.toFixed(1)}%</span>
+                            <span class="run-duration">${run.summary.duration}ms</span>
+                        </div>
+                    </div>
+                `;
+            }).join('') || '<div class="empty-state"><p>No runs yet</p></div>';
+        }
+
+        // GitHub Integration
+        async function fetchGitHubWorkflows() {
+            try {
+                const response = await fetch('/api/github/workflows');
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('workflowList').innerHTML = `
+                        <div class="empty-state">
+                            <h3>GitHub not configured</h3>
+                            <p>${data.error}</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                const workflows = data.workflows || [];
+                document.getElementById('workflowList').innerHTML = workflows.map(w => {
+                    const statusClass = w.conclusion === 'success' ? 'success' :
+                                       w.conclusion === 'failure' ? 'failure' : 'pending';
+                    const time = new Date(w.updated_at).toLocaleString();
+
+                    return `
+                        <div class="workflow-item">
+                            <div class="workflow-info">
+                                <span class="workflow-name">${w.name}</span>
+                                <span class="workflow-meta">${w.head_branch} - ${time}</span>
+                            </div>
+                            <span class="workflow-status ${statusClass}">${w.conclusion || w.status}</span>
+                        </div>
+                    `;
+                }).join('') || '<div class="empty-state"><p>No workflow runs found</p></div>';
+
+            } catch (err) {
+                console.error('Error fetching workflows:', err);
             }
         }
-        
+
+        async function triggerWorkflow(workflow) {
+            const statusEl = document.getElementById('triggerStatus');
+            statusEl.innerHTML = '<span style="color: var(--ctp-yellow)">Triggering workflow...</span>';
+
+            try {
+                const response = await fetch(`/api/github/trigger?workflow=${workflow}`, { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    statusEl.innerHTML = '<span style="color: var(--ctp-green)">Workflow triggered successfully!</span>';
+                    setTimeout(fetchGitHubWorkflows, 3000);
+                } else {
+                    statusEl.innerHTML = `<span style="color: var(--ctp-red)">Error: ${data.error}</span>`;
+                }
+            } catch (err) {
+                statusEl.innerHTML = `<span style="color: var(--ctp-red)">Error: ${err.message}</span>`;
+            }
+        }
+
+        // Fetch Stats
+        async function fetchStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+
+                document.getElementById('statTotalRuns').textContent = stats.totalRuns;
+                document.getElementById('statAvgPassRate').textContent = stats.avgPassRate.toFixed(1) + '%';
+                document.getElementById('statAvgLatency').textContent = stats.avgLatency + 'ms';
+
+                const trendEl = document.getElementById('statTrend');
+                trendEl.textContent = stats.trend.charAt(0).toUpperCase() + stats.trend.slice(1);
+                trendEl.style.color = stats.trend === 'improving' ? 'var(--ctp-green)' :
+                                     stats.trend === 'degrading' ? 'var(--ctp-red)' : 'var(--ctp-text)';
+
+                // Update trend indicator
+                const trendIndicator = document.getElementById('trendIndicator');
+                trendIndicator.className = 'trend-indicator ' + stats.trend;
+                document.getElementById('trendText').textContent = stats.trend.charAt(0).toUpperCase() + stats.trend.slice(1);
+
+                // Failing services
+                const failingList = document.getElementById('failingServicesList');
+                if (stats.failingServices && stats.failingServices.length > 0) {
+                    failingList.innerHTML = `
+                        <div class="services-grid">
+                            ${stats.failingServices.map(s => `
+                                <div class="service-card error" onclick="testSingleService('${s}')">
+                                    <div class="service-header">
+                                        <span class="service-name">${s}</span>
+                                        <span class="status-badge error">failing</span>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } else {
+                    failingList.innerHTML = '<div class="empty-state" style="color: var(--ctp-green);">All services are healthy!</div>';
+                }
+
+            } catch (err) {
+                console.error('Error fetching stats:', err);
+            }
+        }
+
+        // Auto Refresh
         function startAutoRefresh() {
             if (refreshInterval) clearInterval(refreshInterval);
-            refreshInterval = setInterval(runAllTests, 30000);
+            refreshInterval = setInterval(() => {
+                if (autoRefreshEnabled) {
+                    runAllTests();
+                }
+            }, 30000);
         }
-        
-        // Initialize
-        runAllTests();
-        startAutoRefresh();
+
+        function toggleAutoRefresh() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+        }
+
+        // Server-Sent Events for real-time updates
+        function connectSSE() {
+            const eventSource = new EventSource('/api/events');
+
+            eventSource.addEventListener('history', (e) => {
+                const history = JSON.parse(e.data);
+                renderHistory(history);
+            });
+
+            eventSource.addEventListener('alerts', (e) => {
+                const alerts = JSON.parse(e.data);
+                // Update alerts UI if needed
+            });
+
+            eventSource.addEventListener('running', (e) => {
+                const run = JSON.parse(e.data);
+                document.getElementById('statusDot').classList.add('running');
+            });
+
+            eventSource.onerror = () => {
+                eventSource.close();
+                setTimeout(connectSSE, 5000);
+            };
+        }
+
+        // Connect SSE on load
+        connectSSE();
     </script>
 </body>
 </html>

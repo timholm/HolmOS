@@ -1,0 +1,13 @@
+# Results directory contents (keep structure)
+results/*.json
+results/*.html
+results/*.csv
+!results/.gitkeep
+
+# k6 output files
+*.json.gz
+*.log
+
+# Temporary files
+*.tmp
+.DS_Store

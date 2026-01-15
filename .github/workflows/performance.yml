@@ -1,0 +1,257 @@
+name: Performance Testing
+
+on:
+  # Run on schedule (weekly)
+  schedule:
+    - cron: '0 6 * * 0'  # Every Sunday at 6 AM UTC
+
+  # Manual trigger with options
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Test type to run'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - smoke
+          - health
+          - core
+          - agents
+          - apps
+          - infrastructure
+          - stress
+          - spike
+          - full
+          - all
+      load_profile:
+        description: 'Load profile'
+        required: true
+        default: 'standard'
+        type: choice
+        options:
+          - smoke
+          - light
+          - standard
+          - stress
+          - spike
+          - soak
+
+  # Run on PRs that modify services or performance tests
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/**'
+      - 'tests/performance/**'
+
+env:
+  PI_HOST: 192.168.8.197
+  PI_USER: rpi1
+  K6_VERSION: v0.49.0
+
+jobs:
+  # Quick smoke test for PRs
+  smoke-test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          curl -L https://github.com/grafana/k6/releases/download/${{ env.K6_VERSION }}/k6-${{ env.K6_VERSION }}-linux-amd64.tar.gz | tar xz
+          sudo mv k6-${{ env.K6_VERSION }}-linux-amd64/k6 /usr/local/bin/
+
+      - name: Check cluster connectivity
+        env:
+          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
+        run: |
+          # Test if cluster is reachable
+          timeout 10 curl -s "http://${{ env.PI_HOST }}:30000/health" || echo "Cluster may be unreachable"
+
+      - name: Run smoke tests
+        working-directory: tests/performance
+        run: |
+          mkdir -p results
+
+          # Run quick health check
+          k6 run --env LOAD_PROFILE=smoke health-check.test.js \
+            --summary-export=results/smoke-summary.json || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: tests/performance/results/
+          retention-days: 7
+
+  # Full performance test suite
+  performance-test:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          curl -L https://github.com/grafana/k6/releases/download/${{ env.K6_VERSION }}/k6-${{ env.K6_VERSION }}-linux-amd64.tar.gz | tar xz
+          sudo mv k6-${{ env.K6_VERSION }}-linux-amd64/k6 /usr/local/bin/
+          k6 version
+
+      - name: Verify cluster health
+        env:
+          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
+        run: |
+          # Check key services are up before testing
+          echo "Checking cluster health..."
+
+          SERVICES=("30000" "30001" "30008" "30006")  # shell, claude-pod, gateway, pulse
+
+          for port in "${SERVICES[@]}"; do
+            if curl -s --connect-timeout 5 "http://${{ env.PI_HOST }}:${port}/health" > /dev/null; then
+              echo "Service on port ${port}: OK"
+            else
+              echo "Service on port ${port}: NOT RESPONDING"
+            fi
+          done
+
+      - name: Run performance tests
+        working-directory: tests/performance
+        env:
+          CLUSTER_IP: ${{ env.PI_HOST }}
+        run: |
+          mkdir -p results
+
+          TEST_TYPE="${{ github.event.inputs.test_type || 'full' }}"
+          LOAD_PROFILE="${{ github.event.inputs.load_profile || 'standard' }}"
+
+          echo "Running: ${TEST_TYPE} with profile: ${LOAD_PROFILE}"
+
+          ./run-tests.sh "${TEST_TYPE}" "${LOAD_PROFILE}"
+
+      - name: Process results
+        working-directory: tests/performance
+        run: |
+          echo "## Performance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Type:** ${{ github.event.inputs.test_type || 'full' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Load Profile:** ${{ github.event.inputs.load_profile || 'standard' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ env.PI_HOST }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Parse any summary JSON files
+          if ls results/*-summary.json 1> /dev/null 2>&1; then
+            for summary in results/*-summary.json; do
+              test_name=$(basename "$summary" | sed 's/-summary.json//')
+              echo "### ${test_name}" >> $GITHUB_STEP_SUMMARY
+
+              # Extract key metrics if jq is available
+              if command -v jq &> /dev/null; then
+                if [ -f "$summary" ]; then
+                  # Try to extract common metrics
+                  http_reqs=$(jq -r '.metrics.http_reqs.values.count // "N/A"' "$summary" 2>/dev/null)
+                  http_failed=$(jq -r '.metrics.http_req_failed.values.rate // "N/A"' "$summary" 2>/dev/null)
+
+                  echo "- Total Requests: ${http_reqs}" >> $GITHUB_STEP_SUMMARY
+                  echo "- Failed Rate: ${http_failed}" >> $GITHUB_STEP_SUMMARY
+                fi
+              fi
+              echo "" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results-${{ github.run_number }}
+          path: tests/performance/results/
+          retention-days: 30
+
+      - name: Compare with baselines
+        working-directory: tests/performance
+        run: |
+          echo "Comparing results against baselines..."
+
+          # This would normally compare against baselines.json
+          # For now, just output the baseline requirements
+          cat baselines.json | jq '.thresholds.global' || true
+
+  # Stress test (run separately due to duration)
+  stress-test:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.test_type == 'stress'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          curl -L https://github.com/grafana/k6/releases/download/${{ env.K6_VERSION }}/k6-${{ env.K6_VERSION }}-linux-amd64.tar.gz | tar xz
+          sudo mv k6-${{ env.K6_VERSION }}-linux-amd64/k6 /usr/local/bin/
+
+      - name: Run stress test
+        working-directory: tests/performance
+        env:
+          CLUSTER_IP: ${{ env.PI_HOST }}
+        run: |
+          mkdir -p results
+          k6 run --env LOAD_PROFILE=stress stress.test.js \
+            --out json=results/stress-full.json \
+            --summary-export=results/stress-summary.json
+
+      - name: Upload stress test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-test-results-${{ github.run_number }}
+          path: tests/performance/results/
+          retention-days: 30
+
+  # Generate report and notify
+  report:
+    needs: [performance-test]
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download results
+        uses: actions/download-artifact@v4
+        with:
+          name: performance-results-${{ github.run_number }}
+          path: results/
+
+      - name: Generate report
+        run: |
+          echo "# HolmOS Performance Report" > report.md
+          echo "" >> report.md
+          echo "**Date:** $(date -u)" >> report.md
+          echo "**Run:** #${{ github.run_number }}" >> report.md
+          echo "**Trigger:** ${{ github.event_name }}" >> report.md
+          echo "" >> report.md
+
+          echo "## Summary" >> report.md
+          echo "" >> report.md
+
+          # List all result files
+          if ls results/*.json 1> /dev/null 2>&1; then
+            echo "Result files generated:" >> report.md
+            ls -la results/*.json >> report.md
+          else
+            echo "No result files found" >> report.md
+          fi
+
+          cat report.md
+
+      - name: Post summary
+        run: |
+          cat report.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Alert on failures
+        if: failure()
+        run: |
+          echo "Performance tests failed! Review the results."
+          # Add notification logic here (Slack, email, etc.)

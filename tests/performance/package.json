@@ -1,0 +1,43 @@
+{
+  "name": "holmos-performance-tests",
+  "version": "1.0.0",
+  "description": "Performance and load testing suite for HolmOS services",
+  "scripts": {
+    "test": "./run-tests.sh full standard",
+    "test:smoke": "./run-tests.sh smoke",
+    "test:health": "./run-tests.sh health",
+    "test:core": "./run-tests.sh core standard",
+    "test:agents": "./run-tests.sh agents standard",
+    "test:apps": "./run-tests.sh apps standard",
+    "test:infra": "./run-tests.sh infrastructure light",
+    "test:stress": "./run-tests.sh stress",
+    "test:spike": "./run-tests.sh spike",
+    "test:all": "./run-tests.sh all standard",
+    "test:light": "./run-tests.sh full light",
+    "test:soak": "./run-tests.sh full soak",
+    "k6:health": "k6 run health-check.test.js",
+    "k6:core": "k6 run core-services.test.js",
+    "k6:agents": "k6 run agents.test.js",
+    "k6:apps": "k6 run apps.test.js",
+    "k6:infra": "k6 run infrastructure.test.js",
+    "k6:stress": "k6 run stress.test.js",
+    "k6:spike": "k6 run spike.test.js"
+  },
+  "keywords": [
+    "k6",
+    "load-testing",
+    "performance",
+    "holmos",
+    "raspberry-pi"
+  ],
+  "author": "HolmOS Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/holmos/holmos"
+  }
+}

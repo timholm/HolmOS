@@ -1,102 +1,69 @@
 name: Cluster Health Check
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'  # Every 30 minutes
+  # Disabled: Pi cluster is on private network, unreachable from GitHub Actions
+  # schedule:
+  #   - cron: '*/30 * * * *'  # Every 30 minutes
   workflow_dispatch:
 
 env:
   PI_HOST: 192.168.8.197
-  PI_USER: rpi1
 
 jobs:
-  health:
+  check-connectivity:
+    name: Check Connectivity
     runs-on: ubuntu-latest
+    outputs:
+      reachable: ${{ steps.check.outputs.reachable }}
     steps:
-      - name: Check cluster health
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
+      - name: Check if cluster is reachable
+        id: check
         run: |
-          sudo apt-get update && sudo apt-get install -y sshpass
-
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }} << 'HEALTH'
-
-          echo "=== HolmOS Cluster Health ==="
-          echo ""
-
-          # Node status
-          echo "### Nodes ###"
-          kubectl get nodes -o wide
-
-          # Pod summary
-          echo ""
-          echo "### Pod Summary ###"
-          TOTAL=$(kubectl get pods -n holm --no-headers 2>/dev/null | wc -l)
-          RUNNING=$(kubectl get pods -n holm --no-headers 2>/dev/null | grep Running | wc -l)
-          FAILED=$(kubectl get pods -n holm --no-headers 2>/dev/null | grep -E "(Error|CrashLoop|Failed)" | wc -l)
-          echo "Total: $TOTAL | Running: $RUNNING | Failed: $FAILED"
-
-          # Failed pods
-          if [ $FAILED -gt 0 ]; then
-            echo ""
-            echo "### Failed Pods ###"
-            kubectl get pods -n holm --no-headers | grep -E "(Error|CrashLoop|Failed)"
+          if curl -s --connect-timeout 5 "http://$PI_HOST:30000/health" > /dev/null 2>&1; then
+            echo "reachable=true" >> $GITHUB_OUTPUT
+            echo "✅ Cluster is reachable"
+          else
+            echo "reachable=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Cluster is not reachable (private network)"
           fi
 
-          # Resource usage
-          echo ""
-          echo "### Resource Usage ###"
-          kubectl top nodes 2>/dev/null || echo "Metrics not available"
-
-          # Longhorn status
-          echo ""
-          echo "### Storage (Longhorn) ###"
-          kubectl get pods -n longhorn-system --no-headers | grep -c Running || echo "0"
-          echo "Longhorn pods running"
-
-          # Registry status
-          echo ""
-          echo "### Registry ###"
-          IMAGES=$(curl -s http://10.110.67.87:5000/v2/_catalog 2>/dev/null | jq -r '.repositories | length')
-          echo "$IMAGES images in registry"
-
-          HEALTH
-
-      - name: Generate report
-        run: |
-          echo "## 🏥 HolmOS Health Report" >> $GITHUB_STEP_SUMMARY
-          echo "**Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
-          echo "**Cluster:** 192.168.8.197" >> $GITHUB_STEP_SUMMARY
-
-  auto-heal:
+  health:
+    name: Health Check
+    needs: check-connectivity
+    if: needs.check-connectivity.outputs.reachable == 'true'
     runs-on: ubuntu-latest
-    needs: health
-    if: failure()
     steps:
-      - name: Attempt auto-heal
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
+      - name: Check services via HTTP
         run: |
-          sudo apt-get update && sudo apt-get install -y sshpass
+          echo "## HolmOS Health Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }} << 'HEAL'
+          SERVICES="holmos-shell:30000 nova:30004 auth-gateway:30100 registry-ui:31750"
 
-          echo "=== Auto-healing failed pods ==="
+          for svc in $SERVICES; do
+            NAME=$(echo $svc | cut -d: -f1)
+            PORT=$(echo $svc | cut -d: -f2)
 
-          # Restart failed pods
-          kubectl get pods -n holm --no-headers | grep -E "(Error|CrashLoop)" | awk '{print $1}' | while read pod; do
-            echo "Deleting failed pod: $pod"
-            kubectl delete pod $pod -n holm --force --grace-period=0 2>/dev/null || true
-          done
-
-          # Restart stuck deployments
-          kubectl get deployments -n holm -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.availableReplicas}{"\n"}{end}' | while read name replicas; do
-            if [ "$replicas" = "0" ] || [ -z "$replicas" ]; then
-              echo "Restarting deployment: $name"
-              kubectl rollout restart deployment/$name -n holm 2>/dev/null || true
+            if curl -s --connect-timeout 5 "http://$PI_HOST:$PORT/health" > /dev/null 2>&1; then
+              echo "✅ $NAME: healthy" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ $NAME: unreachable" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
-          HEAL
+  summary:
+    name: Summary
+    needs: check-connectivity
+    if: needs.check-connectivity.outputs.reachable == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## ⚠️ Cluster Unreachable" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The Pi cluster at $PI_HOST is on a private network and cannot be reached from GitHub Actions." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**To check health locally:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "ssh rpi1@$PI_HOST 'kubectl get pods -n holm'" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,112 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scribe
+  namespace: holm
+  labels:
+    app: scribe
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scribe-log-reader
+  labels:
+    app: scribe
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "namespaces"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scribe-log-reader-binding
+  labels:
+    app: scribe
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scribe-log-reader
+subjects:
+- kind: ServiceAccount
+  name: scribe
+  namespace: holm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scribe
+  namespace: holm
+  labels:
+    app: scribe
+    agent: scribe
+    holmos.io/component: log-aggregator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scribe
+  template:
+    metadata:
+      labels:
+        app: scribe
+        agent: scribe
+    spec:
+      serviceAccountName: scribe
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - openmediavault
+      containers:
+      - name: scribe
+        image: 10.110.67.87:5000/scribe:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scribe
+  namespace: holm
+  labels:
+    app: scribe
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30860
+    protocol: TCP
+    name: http
+  selector:
+    app: scribe

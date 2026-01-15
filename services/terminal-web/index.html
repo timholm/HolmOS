@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HolmOS Terminal</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+        }
+        .sidebar {
+            width: 250px;
+            background: #16213e;
+            border-right: 1px solid #0f3460;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-header {
+            padding: 15px;
+            background: #0f3460;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .host-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        .host-item {
+            padding: 10px 12px;
+            margin-bottom: 5px;
+            background: #1a1a2e;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.2s;
+            border-left: 3px solid transparent;
+        }
+        .host-item:hover { background: #0f3460; }
+        .host-item.connected { border-left-color: #00b894; }
+        .host-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #636e72;
+        }
+        .host-info { flex: 1; }
+        .host-name { font-weight: 500; }
+        .host-addr { font-size: 11px; color: #888; }
+        .host-delete {
+            opacity: 0;
+            color: #e74c3c;
+            cursor: pointer;
+            padding: 5px;
+        }
+        .host-item:hover .host-delete { opacity: 1; }
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .tabs {
+            display: flex;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+            overflow-x: auto;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-right: 1px solid #0f3460;
+            white-space: nowrap;
+            min-width: 120px;
+        }
+        .tab:hover { background: #0f3460; }
+        .tab.active { background: #1a1a2e; border-bottom: 2px solid #4ecdc4; }
+        .tab-close {
+            opacity: 0.5;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .tab-close:hover { opacity: 1; color: #e74c3c; }
+        .terminal-container {
+            flex: 1;
+            background: #000;
+            position: relative;
+        }
+        .terminal-wrapper {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: none;
+            padding: 5px;
+        }
+        .terminal-wrapper.active { display: block; }
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+            gap: 15px;
+        }
+        .empty-state h2 { color: #888; }
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .modal.show { display: flex; }
+        .modal-content {
+            background: #16213e;
+            padding: 25px;
+            border-radius: 10px;
+            width: 400px;
+            max-width: 90%;
+        }
+        .modal h3 { margin-bottom: 20px; }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 13px;
+            color: #aaa;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px;
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 5px;
+            color: #fff;
+            font-size: 14px;
+        }
+        .form-row {
+            display: flex;
+            gap: 10px;
+        }
+        .form-row .form-group { flex: 1; }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .btn-primary { background: #4ecdc4; color: #000; }
+        .btn-primary:hover { background: #45b7d1; }
+        .btn-secondary { background: #636e72; color: #fff; }
+        .btn-secondary:hover { background: #747d80; }
+        .btn-danger { background: #e74c3c; color: #fff; }
+        .btn-danger:hover { background: #c0392b; }
+        .btn-small { padding: 5px 10px; font-size: 12px; }
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        .history-panel {
+            padding: 10px;
+            background: #0f3460;
+            border-top: 1px solid #16213e;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .history-panel h4 { margin-bottom: 10px; font-size: 12px; color: #888; }
+        .history-item {
+            padding: 5px 10px;
+            font-family: monospace;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .history-item:hover { background: #16213e; }
+        .status-bar {
+            padding: 5px 15px;
+            background: #0f3460;
+            font-size: 12px;
+            color: #888;
+            display: flex;
+            justify-content: space-between;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <span>SSH Hosts</span>
+            <div>
+                <button class="btn btn-small btn-primary" onclick="initHosts()">Init Pi</button>
+                <button class="btn btn-small btn-secondary" onclick="showAddModal()">+ Add</button>
+            </div>
+        </div>
+        <div class="host-list" id="hostList"></div>
+    </div>
+    <div class="main">
+        <div class="tabs" id="tabs"></div>
+        <div class="terminal-container" id="terminalContainer">
+            <div class="empty-state" id="emptyState">
+                <h2>No Terminal Open</h2>
+                <p>Click a host in the sidebar to connect</p>
+            </div>
+        </div>
+        <div class="history-panel" id="historyPanel" style="display: none;">
+            <h4>Command History (Click to paste)</h4>
+            <div id="historyList"></div>
+        </div>
+        <div class="status-bar">
+            <span id="statusText">Ready</span>
+            <span id="connectionCount">0 connections</span>
+        </div>
+    </div>
+
+    <div class="modal" id="addModal">
+        <div class="modal-content">
+            <h3>Add SSH Host</h3>
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="hostName" placeholder="e.g., production-server">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Hostname/IP</label>
+                    <input type="text" id="hostHostname" placeholder="192.168.1.100">
+                </div>
+                <div class="form-group" style="max-width: 100px;">
+                    <label>Port</label>
+                    <input type="number" id="hostPort" value="22">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="hostUsername" placeholder="root">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="hostPassword">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Color</label>
+                <input type="color" id="hostColor" value="#4ecdc4">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideAddModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="addHost()">Add Host</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+    <script>
+        const hosts = [];
+        const terminals = {};
+        let activeTabId = null;
+        let commandHistory = JSON.parse(localStorage.getItem('terminalHistory') || '[]');
+
+        async function loadHosts() {
+            try {
+                const res = await fetch('/api/hosts');
+                const data = await res.json();
+                hosts.length = 0;
+                hosts.push(...data);
+                renderHosts();
+            } catch (e) {
+                console.error('Failed to load hosts:', e);
+            }
+        }
+
+        function renderHosts() {
+            const list = document.getElementById('hostList');
+            list.innerHTML = hosts.map(h => `
+                <div class="host-item ${terminals[h.id] ? 'connected' : ''}" onclick="connectHost(${h.id})">
+                    <div class="host-dot" style="background: ${h.color || '#636e72'}"></div>
+                    <div class="host-info">
+                        <div class="host-name">${h.name}</div>
+                        <div class="host-addr">${h.username}@${h.hostname}:${h.port}</div>
+                    </div>
+                    <span class="host-delete" onclick="event.stopPropagation(); deleteHost(${h.id})">✕</span>
+                </div>
+            `).join('');
+        }
+
+        function connectHost(hostId) {
+            const host = hosts.find(h => h.id === hostId);
+            if (!host) return;
+            
+            // If already connected, just switch to tab
+            if (terminals[hostId]) {
+                switchTab(hostId);
+                return;
+            }
+            
+            // Create new terminal
+            const wrapper = document.createElement('div');
+            wrapper.className = 'terminal-wrapper';
+            wrapper.id = 'term-' + hostId;
+            document.getElementById('terminalContainer').appendChild(wrapper);
+            
+            const term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                theme: {
+                    background: '#1a1a2e',
+                    foreground: '#eee',
+                    cursor: '#4ecdc4',
+                    selection: 'rgba(78, 205, 196, 0.3)'
+                }
+            });
+            
+            const fitAddon = new FitAddon.FitAddon();
+            const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+            term.loadAddon(fitAddon);
+            term.loadAddon(webLinksAddon);
+            
+            term.open(wrapper);
+            fitAddon.fit();
+            
+            // Connect WebSocket
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(wsProtocol + '//' + window.location.host + '/ws/terminal?host=' + hostId);
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = () => {
+                term.write('\r\n*** Connected to ' + host.name + ' ***\r\n\r\n');
+                updateStatus('Connected to ' + host.name);
+                
+                // Send initial size
+                sendResize(ws, term.cols, term.rows);
+            };
+            
+            ws.onmessage = (e) => {
+                const data = new Uint8Array(e.data);
+                term.write(data);
+            };
+            
+            ws.onclose = () => {
+                term.write('\r\n*** Connection closed ***\r\n');
+                updateStatus('Disconnected from ' + host.name);
+            };
+            
+            ws.onerror = (e) => {
+                term.write('\r\n*** Connection error ***\r\n');
+            };
+            
+            // Handle input
+            let currentLine = '';
+            term.onData(data => {
+                // Track command for history
+                if (data === '\r') {
+                    if (currentLine.trim()) {
+                        addToHistory(currentLine);
+                    }
+                    currentLine = '';
+                } else if (data === '\x7f') {
+                    currentLine = currentLine.slice(0, -1);
+                } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+                    currentLine += data;
+                }
+                ws.send(new TextEncoder().encode(data));
+            });
+            
+            // Handle resize
+            const resizeObserver = new ResizeObserver(() => {
+                fitAddon.fit();
+                sendResize(ws, term.cols, term.rows);
+            });
+            resizeObserver.observe(wrapper);
+            
+            terminals[hostId] = { term, ws, fitAddon, wrapper, resizeObserver, host };
+            
+            addTab(hostId, host);
+            switchTab(hostId);
+            renderHosts();
+            updateConnectionCount();
+        }
+
+        function sendResize(ws, cols, rows) {
+            if (ws.readyState === WebSocket.OPEN) {
+                const msg = new Uint8Array([1, cols >> 8, cols & 0xff, rows >> 8, rows & 0xff]);
+                ws.send(msg);
+            }
+        }
+
+        function addTab(hostId, host) {
+            const tabs = document.getElementById('tabs');
+            const tab = document.createElement('div');
+            tab.className = 'tab';
+            tab.id = 'tab-' + hostId;
+            tab.innerHTML = `
+                <span style="width:8px;height:8px;border-radius:50%;background:${host.color || '#636e72'}"></span>
+                <span>${host.name}</span>
+                <span class="tab-close" onclick="event.stopPropagation(); closeTab(${hostId})">✕</span>
+            `;
+            tab.onclick = () => switchTab(hostId);
+            tabs.appendChild(tab);
+        }
+
+        function switchTab(hostId) {
+            // Hide all terminals
+            Object.values(terminals).forEach(t => {
+                t.wrapper.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            
+            // Show selected terminal
+            if (terminals[hostId]) {
+                terminals[hostId].wrapper.classList.add('active');
+                document.getElementById('tab-' + hostId).classList.add('active');
+                terminals[hostId].term.focus();
+                terminals[hostId].fitAddon.fit();
+                activeTabId = hostId;
+            }
+            
+            document.getElementById('emptyState').style.display = Object.keys(terminals).length === 0 ? 'flex' : 'none';
+        }
+
+        function closeTab(hostId) {
+            if (terminals[hostId]) {
+                terminals[hostId].ws.close();
+                terminals[hostId].term.dispose();
+                terminals[hostId].resizeObserver.disconnect();
+                terminals[hostId].wrapper.remove();
+                delete terminals[hostId];
+            }
+            
+            document.getElementById('tab-' + hostId)?.remove();
+            
+            // Switch to another tab if available
+            const remaining = Object.keys(terminals);
+            if (remaining.length > 0) {
+                switchTab(parseInt(remaining[0]));
+            } else {
+                activeTabId = null;
+                document.getElementById('emptyState').style.display = 'flex';
+            }
+            
+            renderHosts();
+            updateConnectionCount();
+        }
+
+        function addToHistory(cmd) {
+            if (commandHistory[0] !== cmd) {
+                commandHistory.unshift(cmd);
+                if (commandHistory.length > 100) commandHistory.pop();
+                localStorage.setItem('terminalHistory', JSON.stringify(commandHistory));
+                renderHistory();
+            }
+        }
+
+        function renderHistory() {
+            const panel = document.getElementById('historyPanel');
+            const list = document.getElementById('historyList');
+            
+            if (commandHistory.length === 0) {
+                panel.style.display = 'none';
+                return;
+            }
+            
+            panel.style.display = 'block';
+            list.innerHTML = commandHistory.slice(0, 20).map(cmd => `
+                <div class="history-item" onclick="pasteCommand('${cmd.replace(/'/g, "\\'")}')">${cmd}</div>
+            `).join('');
+        }
+
+        function pasteCommand(cmd) {
+            if (activeTabId && terminals[activeTabId]) {
+                const ws = terminals[activeTabId].ws;
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(new TextEncoder().encode(cmd));
+                }
+            }
+        }
+
+        function showAddModal() {
+            document.getElementById('addModal').classList.add('show');
+        }
+
+        function hideAddModal() {
+            document.getElementById('addModal').classList.remove('show');
+        }
+
+        async function addHost() {
+            const host = {
+                name: document.getElementById('hostName').value,
+                hostname: document.getElementById('hostHostname').value,
+                port: parseInt(document.getElementById('hostPort').value) || 22,
+                username: document.getElementById('hostUsername').value,
+                password: document.getElementById('hostPassword').value,
+                color: document.getElementById('hostColor').value,
+                auth_type: 'password'
+            };
+            
+            try {
+                const res = await fetch('/api/hosts/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(host)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    hideAddModal();
+                    loadHosts();
+                    // Clear form
+                    ['hostName', 'hostHostname', 'hostUsername', 'hostPassword'].forEach(id => {
+                        document.getElementById(id).value = '';
+                    });
+                } else {
+                    alert(data.message);
+                }
+            } catch (e) {
+                alert('Failed to add host');
+            }
+        }
+
+        async function deleteHost(id) {
+            if (!confirm('Delete this host?')) return;
+            
+            try {
+                await fetch('/api/hosts/delete?id=' + id, { method: 'DELETE' });
+                closeTab(id);
+                loadHosts();
+            } catch (e) {
+                alert('Failed to delete host');
+            }
+        }
+
+        async function initHosts() {
+            try {
+                const res = await fetch('/api/hosts/init', { method: 'POST' });
+                const data = await res.json();
+                alert(data.message);
+                loadHosts();
+            } catch (e) {
+                alert('Failed to initialize hosts');
+            }
+        }
+
+        function updateStatus(text) {
+            document.getElementById('statusText').textContent = text;
+        }
+
+        function updateConnectionCount() {
+            const count = Object.keys(terminals).length;
+            document.getElementById('connectionCount').textContent = count + ' connection' + (count !== 1 ? 's' : '');
+        }
+
+        // Initialize
+        loadHosts();
+        renderHistory();
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+Shift+T: New connection dialog
+            if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+                showAddModal();
+                e.preventDefault();
+            }
+            // Ctrl+W: Close current tab
+            if (e.ctrlKey && e.key === 'w' && activeTabId) {
+                closeTab(activeTabId);
+                e.preventDefault();
+            }
+        });
+    </script>
+</body>
+</html>

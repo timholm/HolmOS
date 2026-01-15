@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: settings-restore
+  namespace: holm
+  labels:
+    app: settings-restore
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: settings-restore
+  template:
+    metadata:
+      labels:
+        app: settings-restore
+    spec:
+      containers:
+      - name: settings-restore
+        image: 10.110.67.87:5000/holm/settings-restore:v1
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: DB_HOST
+          value: "postgres.holm.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "postgres"
+        - name: DB_NAME
+          value: "holm"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: settings-restore
+  namespace: holm
+spec:
+  type: ClusterIP
+  selector:
+    app: settings-restore
+  ports:
+  - port: 8080
+    targetPort: 8080

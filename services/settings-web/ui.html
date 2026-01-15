@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings Hub - HolmOS</title>
+    <style>
+        /* Catppuccin Mocha (Default) */
+        :root {
+            --ctp-base: #1e1e2e;
+            --ctp-mantle: #181825;
+            --ctp-crust: #11111b;
+            --ctp-surface0: #313244;
+            --ctp-surface1: #45475a;
+            --ctp-surface2: #585b70;
+            --ctp-overlay0: #6c7086;
+            --ctp-overlay1: #7f849c;
+            --ctp-text: #cdd6f4;
+            --ctp-subtext0: #a6adc8;
+            --ctp-subtext1: #bac2de;
+            --ctp-lavender: #b4befe;
+            --ctp-blue: #89b4fa;
+            --ctp-sapphire: #74c7ec;
+            --ctp-sky: #89dceb;
+            --ctp-teal: #94e2d5;
+            --ctp-green: #a6e3a1;
+            --ctp-yellow: #f9e2af;
+            --ctp-peach: #fab387;
+            --ctp-maroon: #eba0ac;
+            --ctp-red: #f38ba8;
+            --ctp-mauve: #cba6f7;
+            --ctp-pink: #f5c2e7;
+            --ctp-flamingo: #f2cdcd;
+            --ctp-rosewater: #f5e0dc;
+        }
+
+        /* Catppuccin Latte (Light) */
+        .theme-latte {
+            --ctp-base: #eff1f5;
+            --ctp-mantle: #e6e9ef;
+            --ctp-crust: #dce0e8;
+            --ctp-surface0: #ccd0da;
+            --ctp-surface1: #bcc0cc;
+            --ctp-surface2: #acb0be;
+            --ctp-overlay0: #9ca0b0;
+            --ctp-overlay1: #8c8fa1;
+            --ctp-text: #4c4f69;
+            --ctp-subtext0: #6c6f85;
+            --ctp-subtext1: #5c5f77;
+            --ctp-lavender: #7287fd;
+            --ctp-blue: #1e66f5;
+            --ctp-sapphire: #209fb5;
+            --ctp-sky: #04a5e5;
+            --ctp-teal: #179299;
+            --ctp-green: #40a02b;
+            --ctp-yellow: #df8e1d;
+            --ctp-peach: #fe640b;
+            --ctp-maroon: #e64553;
+            --ctp-red: #d20f39;
+            --ctp-mauve: #8839ef;
+            --ctp-pink: #ea76cb;
+            --ctp-flamingo: #dd7878;
+            --ctp-rosewater: #dc8a78;
+        }
+
+        /* Catppuccin Frappe */
+        .theme-frappe {
+            --ctp-base: #303446;
+            --ctp-mantle: #292c3c;
+            --ctp-crust: #232634;
+            --ctp-surface0: #414559;
+            --ctp-surface1: #51576d;
+            --ctp-surface2: #626880;
+            --ctp-overlay0: #737994;
+            --ctp-overlay1: #838ba7;
+            --ctp-text: #c6d0f5;
+            --ctp-subtext0: #a5adce;
+            --ctp-subtext1: #b5bfe2;
+            --ctp-lavender: #babbf1;
+            --ctp-blue: #8caaee;
+            --ctp-sapphire: #85c1dc;
+            --ctp-sky: #99d1db;
+            --ctp-teal: #81c8be;
+            --ctp-green: #a6d189;
+            --ctp-yellow: #e5c890;
+            --ctp-peach: #ef9f76;
+            --ctp-maroon: #ea999c;
+            --ctp-red: #e78284;
+            --ctp-mauve: #ca9ee6;
+            --ctp-pink: #f4b8e4;
+            --ctp-flamingo: #eebebe;
+            --ctp-rosewater: #f2d5cf;
+        }
+
+        /* Catppuccin Macchiato */
+        .theme-macchiato {
+            --ctp-base: #24273a;
+            --ctp-mantle: #1e2030;
+            --ctp-crust: #181926;
+            --ctp-surface0: #363a4f;
+            --ctp-surface1: #494d64;
+            --ctp-surface2: #5b6078;
+            --ctp-overlay0: #6e738d;
+            --ctp-overlay1: #8087a2;
+            --ctp-text: #cad3f5;
+            --ctp-subtext0: #a5adcb;
+            --ctp-subtext1: #b8c0e0;
+            --ctp-lavender: #b7bdf8;
+            --ctp-blue: #8aadf4;
+            --ctp-sapphire: #7dc4e4;
+            --ctp-sky: #91d7e3;
+            --ctp-teal: #8bd5ca;
+            --ctp-green: #a6da95;
+            --ctp-yellow: #eed49f;
+            --ctp-peach: #f5a97f;
+            --ctp-maroon: #ee99a0;
+            --ctp-red: #ed8796;
+            --ctp-mauve: #c6a0f6;
+            --ctp-pink: #f5bde6;
+            --ctp-flamingo: #f0c6c6;
+            --ctp-rosewater: #f4dbd6;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--ctp-base);
+            color: var(--ctp-text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding-bottom: 70px;
+            transition: all 0.3s ease;
+        }
+
+        .header {
+            background-color: var(--ctp-mantle);
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--ctp-surface0);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-icon {
+            width: 32px; height: 32px;
+            background: linear-gradient(135deg, var(--ctp-mauve), var(--ctp-blue));
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        .header h1 { font-size: 1.5rem; font-weight: 600; }
+        .header small { color: var(--ctp-subtext0); font-size: 0.85rem; margin-left: auto; }
+
+        .tabs-container {
+            display: flex;
+            background-color: var(--ctp-mantle);
+            padding: 8px 12px;
+            gap: 4px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .tab {
+            flex: 1; min-width: 70px;
+            padding: 10px 12px;
+            border: none;
+            background-color: transparent;
+            color: var(--ctp-subtext0);
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .tab:hover { background-color: var(--ctp-surface0); color: var(--ctp-text); }
+        .tab.active { background-color: var(--ctp-surface0); color: var(--ctp-lavender); }
+
+        .content { flex: 1; padding: 16px; overflow-y: auto; }
+
+        .tab-content { display: none; animation: fadeIn 0.3s ease; }
+        .tab-content.active { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .section {
+            background-color: var(--ctp-surface0);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--ctp-lavender);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--ctp-surface1);
+        }
+        .setting-row:last-child { border-bottom: none; }
+
+        .setting-label { display: flex; flex-direction: column; gap: 2px; }
+        .setting-label span { font-weight: 500; font-size: 0.95rem; }
+        .setting-label small { color: var(--ctp-subtext0); font-size: 0.8rem; }
+
+        .toggle {
+            position: relative;
+            width: 44px; height: 24px;
+            background-color: var(--ctp-surface2);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        .toggle.active { background-color: var(--ctp-green); }
+        .toggle::after {
+            content: "";
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 20px; height: 20px;
+            background-color: var(--ctp-text);
+            border-radius: 50%;
+            transition: transform 0.2s ease;
+        }
+        .toggle.active::after { transform: translateX(20px); }
+
+        input[type="text"], input[type="number"], select {
+            background-color: var(--ctp-surface1);
+            border: 1px solid var(--ctp-surface2);
+            border-radius: 8px;
+            padding: 8px 12px;
+            color: var(--ctp-text);
+            font-size: 0.9rem;
+            min-width: 140px;
+        }
+        input:focus, select:focus { outline: none; border-color: var(--ctp-lavender); }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-primary { background-color: var(--ctp-blue); color: var(--ctp-crust); }
+        .btn-primary:hover { background-color: var(--ctp-sapphire); }
+        .btn-secondary { background-color: var(--ctp-surface1); color: var(--ctp-text); }
+        .btn-secondary:hover { background-color: var(--ctp-surface2); }
+        .btn-danger { background-color: var(--ctp-red); color: var(--ctp-crust); }
+        .btn-danger:hover { background-color: var(--ctp-maroon); }
+        .btn-success { background-color: var(--ctp-green); color: var(--ctp-crust); }
+        .btn-success:hover { background-color: var(--ctp-teal); }
+
+        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 12px;
+        }
+
+        .info-card {
+            background-color: var(--ctp-surface1);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+        .info-card .value { font-size: 1.4rem; font-weight: 700; color: var(--ctp-lavender); }
+        .info-card .label { font-size: 0.75rem; color: var(--ctp-subtext0); margin-top: 4px; }
+
+        .theme-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .theme-option {
+            border-radius: 10px;
+            padding: 14px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.2s ease;
+        }
+        .theme-option:hover { transform: scale(1.02); }
+        .theme-option.selected { border-color: var(--ctp-lavender); }
+        .theme-option .colors { display: flex; gap: 4px; margin-bottom: 8px; }
+        .theme-option .colors div { width: 18px; height: 18px; border-radius: 50%; }
+        .theme-option .theme-name { font-weight: 500; font-size: 0.9rem; }
+
+        .node-list, .storage-list { max-height: 300px; overflow-y: auto; }
+
+        .node-item, .storage-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            background-color: var(--ctp-surface1);
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+
+        .node-info, .storage-info { display: flex; flex-direction: column; gap: 2px; }
+        .node-name, .storage-name { font-weight: 500; }
+        .node-details, .storage-details { font-size: 0.8rem; color: var(--ctp-subtext0); }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .status-ready { background-color: rgba(166, 227, 161, 0.2); color: var(--ctp-green); }
+        .status-notready { background-color: rgba(243, 139, 168, 0.2); color: var(--ctp-red); }
+        .status-pending { background-color: rgba(249, 226, 175, 0.2); color: var(--ctp-yellow); }
+
+        .progress-bar {
+            width: 80px; height: 6px;
+            background-color: var(--ctp-surface2);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: var(--ctp-green);
+            transition: width 0.3s ease;
+        }
+        .progress-fill.warning { background-color: var(--ctp-yellow); }
+        .progress-fill.danger { background-color: var(--ctp-red); }
+
+        .file-input { display: none; }
+        .file-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background-color: var(--ctp-surface1);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .file-label:hover { background-color: var(--ctp-surface2); }
+
+        .dock {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            background-color: var(--ctp-mantle);
+            border-top: 1px solid var(--ctp-surface0);
+            padding: 8px 16px;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .dock-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            text-decoration: none;
+            color: var(--ctp-subtext0);
+            padding: 6px 12px;
+            border-radius: 10px;
+            transition: all 0.2s ease;
+        }
+        .dock-item:hover { background-color: var(--ctp-surface0); color: var(--ctp-text); }
+        .dock-item.active { color: var(--ctp-lavender); }
+        .dock-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
+        .dock-label { font-size: 0.7rem; font-weight: 500; }
+
+        .toast {
+            position: fixed;
+            bottom: 80px; left: 50%;
+            transform: translateX(-50%);
+            background-color: var(--ctp-surface0);
+            color: var(--ctp-text);
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            z-index: 1001;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { border-left: 4px solid var(--ctp-green); }
+        .toast.error { border-left: 4px solid var(--ctp-red); }
+
+        @media (max-width: 600px) {
+            .tabs-container { padding: 6px; }
+            .tab { padding: 8px 10px; font-size: 0.8rem; }
+            .content { padding: 12px; }
+            .section { padding: 14px; }
+            .setting-row { flex-direction: column; align-items: flex-start; gap: 10px; }
+            input[type="text"], input[type="number"], select { width: 100%; }
+            .theme-grid { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#cdd6f4" stroke-width="2">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+        </div>
+        <h1>Settings Hub</h1>
+        <small>HolmOS v2.0</small>
+    </div>
+
+    <div class="tabs-container">
+        <button class="tab active" data-tab="system">System</button>
+        <button class="tab" data-tab="theme">Theme</button>
+        <button class="tab" data-tab="prefs">Preferences</button>
+        <button class="tab" data-tab="notifications">Alerts</button>
+        <button class="tab" data-tab="backup">Backup</button>
+    </div>
+
+    <div class="content">
+        <!-- System Tab -->
+        <div id="system" class="tab-content active">
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                    Cluster Overview
+                </h2>
+                <div class="info-grid">
+                    <div class="info-card">
+                        <div class="value" id="node-count">-</div>
+                        <div class="label">Nodes</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="pod-running">-</div>
+                        <div class="label">Running Pods</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="service-count">-</div>
+                        <div class="label">Services</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="namespace-count">-</div>
+                        <div class="label">Namespaces</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                        <rect x="9" y="9" width="6" height="6"></rect>
+                        <line x1="9" y1="1" x2="9" y2="4"></line>
+                        <line x1="15" y1="1" x2="15" y2="4"></line>
+                        <line x1="9" y1="20" x2="9" y2="23"></line>
+                        <line x1="15" y1="20" x2="15" y2="23"></line>
+                        <line x1="20" y1="9" x2="23" y2="9"></line>
+                        <line x1="20" y1="14" x2="23" y2="14"></line>
+                        <line x1="1" y1="9" x2="4" y2="9"></line>
+                        <line x1="1" y1="14" x2="4" y2="14"></line>
+                    </svg>
+                    Cluster Nodes
+                </h2>
+                <div class="node-list" id="node-list">
+                    <div class="node-item">
+                        <div class="node-info">
+                            <span class="node-name">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+                    </svg>
+                    Pod Status
+                </h2>
+                <div class="info-grid">
+                    <div class="info-card">
+                        <div class="value" id="pod-total">-</div>
+                        <div class="label">Total</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="pod-pending" style="color: var(--ctp-yellow);">-</div>
+                        <div class="label">Pending</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="pod-failed" style="color: var(--ctp-red);">-</div>
+                        <div class="label">Failed</div>
+                    </div>
+                    <div class="info-card">
+                        <div class="value" id="pod-completed" style="color: var(--ctp-teal);">-</div>
+                        <div class="label">Completed</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                    </svg>
+                    Storage
+                </h2>
+                <div class="storage-list" id="storage-list">
+                    <div class="storage-item">
+                        <div class="storage-info">
+                            <span class="storage-name">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="refreshSystemInfo()">Refresh</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Theme Tab -->
+        <div id="theme" class="tab-content">
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    Catppuccin Theme
+                </h2>
+                <div class="theme-grid">
+                    <div class="theme-option selected" data-theme="mocha" style="background-color: #1e1e2e;">
+                        <div class="colors">
+                            <div style="background-color: #cba6f7;"></div>
+                            <div style="background-color: #89b4fa;"></div>
+                            <div style="background-color: #a6e3a1;"></div>
+                            <div style="background-color: #f38ba8;"></div>
+                        </div>
+                        <div class="theme-name" style="color: #cdd6f4;">Mocha (Dark)</div>
+                    </div>
+                    <div class="theme-option" data-theme="macchiato" style="background-color: #24273a;">
+                        <div class="colors">
+                            <div style="background-color: #c6a0f6;"></div>
+                            <div style="background-color: #8aadf4;"></div>
+                            <div style="background-color: #a6da95;"></div>
+                            <div style="background-color: #ed8796;"></div>
+                        </div>
+                        <div class="theme-name" style="color: #cad3f5;">Macchiato</div>
+                    </div>
+                    <div class="theme-option" data-theme="frappe" style="background-color: #303446;">
+                        <div class="colors">
+                            <div style="background-color: #ca9ee6;"></div>
+                            <div style="background-color: #8caaee;"></div>
+                            <div style="background-color: #a6d189;"></div>
+                            <div style="background-color: #e78284;"></div>
+                        </div>
+                        <div class="theme-name" style="color: #c6d0f5;">Frappe</div>
+                    </div>
+                    <div class="theme-option" data-theme="latte" style="background-color: #eff1f5;">
+                        <div class="colors">
+                            <div style="background-color: #8839ef;"></div>
+                            <div style="background-color: #1e66f5;"></div>
+                            <div style="background-color: #40a02b;"></div>
+                            <div style="background-color: #d20f39;"></div>
+                        </div>
+                        <div class="theme-name" style="color: #4c4f69;">Latte (Light)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">Display Settings</h2>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Compact Mode</span>
+                        <small>Reduce spacing for more content</small>
+                    </div>
+                    <div class="toggle" data-setting="compact-mode"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Animations</span>
+                        <small>Enable smooth UI transitions</small>
+                    </div>
+                    <div class="toggle active" data-setting="animations"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Font Size</span>
+                        <small>Base text size</small>
+                    </div>
+                    <select id="font-size">
+                        <option value="14">Small</option>
+                        <option value="16" selected>Medium</option>
+                        <option value="18">Large</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Accent Color</span>
+                        <small>UI highlight color</small>
+                    </div>
+                    <select id="accent-color">
+                        <option value="lavender" selected>Lavender</option>
+                        <option value="blue">Blue</option>
+                        <option value="mauve">Mauve</option>
+                        <option value="pink">Pink</option>
+                        <option value="teal">Teal</option>
+                        <option value="green">Green</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="saveTheme()">Apply Theme</button>
+                    <button class="btn btn-secondary" onclick="resetTheme()">Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Preferences Tab -->
+        <div id="prefs" class="tab-content">
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                    User Preferences
+                </h2>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Language</span>
+                        <small>Interface language</small>
+                    </div>
+                    <select id="language">
+                        <option value="en" selected>English</option>
+                        <option value="es">Spanish</option>
+                        <option value="de">German</option>
+                        <option value="fr">French</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Timezone</span>
+                        <small>Your local timezone</small>
+                    </div>
+                    <select id="timezone">
+                        <option value="America/Los_Angeles" selected>Pacific (PT)</option>
+                        <option value="America/Denver">Mountain (MT)</option>
+                        <option value="America/Chicago">Central (CT)</option>
+                        <option value="America/New_York">Eastern (ET)</option>
+                        <option value="UTC">UTC</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Date Format</span>
+                        <small>How dates are displayed</small>
+                    </div>
+                    <select id="date-format">
+                        <option value="YYYY-MM-DD" selected>2026-01-15</option>
+                        <option value="MM/DD/YYYY">01/15/2026</option>
+                        <option value="DD/MM/YYYY">15/01/2026</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">File Manager</h2>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Auto Save</span>
+                        <small>Automatically save changes</small>
+                    </div>
+                    <div class="toggle active" data-setting="auto-save"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Show Hidden Files</span>
+                        <small>Display files starting with dot</small>
+                    </div>
+                    <div class="toggle" data-setting="show-hidden"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Default View</span>
+                        <small>File list layout</small>
+                    </div>
+                    <select id="default-view">
+                        <option value="grid" selected>Grid</option>
+                        <option value="list">List</option>
+                        <option value="details">Details</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="savePreferences()">Save Preferences</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notifications Tab -->
+        <div id="notifications" class="tab-content">
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                    </svg>
+                    Notification Settings
+                </h2>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Enable Notifications</span>
+                        <small>Show system notifications</small>
+                    </div>
+                    <div class="toggle active" data-setting="notif-enabled"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Sound Alerts</span>
+                        <small>Play sound for notifications</small>
+                    </div>
+                    <div class="toggle active" data-setting="notif-sound"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Desktop Notifications</span>
+                        <small>Show browser notifications</small>
+                    </div>
+                    <div class="toggle active" data-setting="notif-desktop"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Email Notifications</span>
+                        <small>Send alerts to email</small>
+                    </div>
+                    <div class="toggle" data-setting="notif-email"></div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">Alert Types</h2>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Build Alerts</span>
+                        <small>Notify on build success/failure</small>
+                    </div>
+                    <div class="toggle active" data-setting="alert-build"></div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <span>Cluster Alerts</span>
+                        <small>Node status changes</small>
+                    </div>
+                    <div class="toggle active" data-setting="alert-cluster"></div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="saveNotifications()">Save Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Backup Tab -->
+        <div id="backup" class="tab-content">
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Export Settings
+                </h2>
+                <p style="color: var(--ctp-subtext0); margin-bottom: 12px; font-size: 0.9rem;">
+                    Download all HolmOS settings as a JSON file.
+                </p>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="exportSettings()">Export All Settings</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    Import Settings
+                </h2>
+                <p style="color: var(--ctp-subtext0); margin-bottom: 12px; font-size: 0.9rem;">
+                    Restore settings from a backup file.
+                </p>
+                <input type="file" id="import-file" class="file-input" accept=".json" onchange="handleFileSelect(event)" />
+                <label for="import-file" class="file-label">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                    </svg>
+                    Choose File
+                </label>
+                <div id="selected-file" style="margin-top: 10px; color: var(--ctp-subtext0); font-size: 0.85rem;"></div>
+                <div style="margin-top: 12px;">
+                    <button class="btn btn-success" onclick="importSettings()" id="import-btn" disabled>Import</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title" style="color: var(--ctp-red);">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                    Danger Zone
+                </h2>
+                <p style="color: var(--ctp-subtext0); margin-bottom: 12px; font-size: 0.9rem;">
+                    Reset all settings to defaults. This cannot be undone.
+                </p>
+                <button class="btn btn-danger" onclick="resetAllSettings()">Reset All Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dock -->
+    <nav class="dock">
+        <a href="http://192.168.8.197:30088" class="dock-item">
+            <div class="dock-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+            </div>
+            <span class="dock-label">Files</span>
+        </a>
+        <a href="http://192.168.8.197:30088/terminal" class="dock-item">
+            <div class="dock-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="4 17 10 11 4 5"></polyline>
+                    <line x1="12" y1="19" x2="20" y2="19"></line>
+                </svg>
+            </div>
+            <span class="dock-label">Terminal</span>
+        </a>
+        <a href="http://192.168.8.197:30600" class="dock-item active">
+            <div class="dock-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+            </div>
+            <span class="dock-label">Settings</span>
+        </a>
+        <a href="http://192.168.8.197:30700" class="dock-item">
+            <div class="dock-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                    <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                </svg>
+            </div>
+            <span class="dock-label">Audio</span>
+        </a>
+    </nav>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        // Tab switching
+        document.querySelectorAll(".tab").forEach(tab => {
+            tab.addEventListener("click", () => {
+                document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+                document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+                tab.classList.add("active");
+                document.getElementById(tab.dataset.tab).classList.add("active");
+                saveTabState(tab.dataset.tab);
+            });
+        });
+
+        // Toggle switches
+        document.querySelectorAll(".toggle").forEach(toggle => {
+            toggle.addEventListener("click", () => toggle.classList.toggle("active"));
+        });
+
+        // Theme selection
+        document.querySelectorAll(".theme-option").forEach(option => {
+            option.addEventListener("click", () => {
+                document.querySelectorAll(".theme-option").forEach(o => o.classList.remove("selected"));
+                option.classList.add("selected");
+                applyTheme(option.dataset.theme);
+            });
+        });
+
+        function applyTheme(theme) {
+            document.body.className = theme !== "mocha" ? "theme-" + theme : "";
+        }
+
+        function showToast(message, type = "success") {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.className = "toast " + type + " show";
+            setTimeout(() => toast.classList.remove("show"), 3000);
+        }
+
+        // API calls
+        async function saveTabState(tab) {
+            try {
+                await fetch("/api/tabs/state", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ activeTab: tab })
+                });
+            } catch (e) { console.log("Tab save failed:", e); }
+        }
+
+        async function loadTabState() {
+            try {
+                const resp = await fetch("/api/tabs/state");
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.activeTab) {
+                        document.querySelector(`[data-tab="${data.activeTab}"]`)?.click();
+                    }
+                }
+            } catch (e) { console.log("Tab load failed:", e); }
+        }
+
+        async function refreshSystemInfo() {
+            showToast("Refreshing system info...", "success");
+            try {
+                const resp = await fetch("/api/system/info");
+                if (resp.ok) {
+                    const data = await resp.json();
+                    document.getElementById("node-count").textContent = data.nodes?.length || 0;
+                    document.getElementById("pod-running").textContent = data.pods?.running || 0;
+                    document.getElementById("service-count").textContent = data.services || 0;
+                    document.getElementById("namespace-count").textContent = data.namespaces || 0;
+                    document.getElementById("pod-total").textContent = data.pods?.total || 0;
+                    document.getElementById("pod-pending").textContent = data.pods?.pending || 0;
+                    document.getElementById("pod-failed").textContent = data.pods?.failed || 0;
+                    document.getElementById("pod-completed").textContent = data.pods?.completed || 0;
+
+                    // Render nodes
+                    const nodeList = document.getElementById("node-list");
+                    if (data.nodes?.length > 0) {
+                        nodeList.innerHTML = data.nodes.map(node => `
+                            <div class="node-item">
+                                <div class="node-info">
+                                    <span class="node-name">${node.name}</span>
+                                    <span class="node-details">${node.role} | ${node.arch} | ${node.cpu} CPU | ${node.age}</span>
+                                </div>
+                                <span class="status-badge status-${node.status.toLowerCase()}">${node.status}</span>
+                            </div>
+                        `).join("");
+                    }
+
+                    // Render storage
+                    const storageList = document.getElementById("storage-list");
+                    if (data.storage?.length > 0) {
+                        storageList.innerHTML = data.storage.map(s => {
+                            const pct = parseInt(s.percent) || 0;
+                            const cls = pct > 90 ? "danger" : pct > 70 ? "warning" : "";
+                            return `
+                                <div class="storage-item">
+                                    <div class="storage-info">
+                                        <span class="storage-name">${s.mount}</span>
+                                        <span class="storage-details">${s.used} / ${s.size}</span>
+                                    </div>
+                                    <div class="progress-bar">
+                                        <div class="progress-fill ${cls}" style="width: ${pct}%"></div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join("");
+                    }
+                    showToast("System info updated", "success");
+                }
+            } catch (e) {
+                console.error("System info error:", e);
+                showToast("Failed to load system info", "error");
+            }
+        }
+
+        async function loadTheme() {
+            try {
+                const resp = await fetch("/api/theme/preferences");
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.theme) {
+                        document.querySelectorAll(".theme-option").forEach(o => o.classList.remove("selected"));
+                        document.querySelector(`[data-theme="${data.theme}"]`)?.classList.add("selected");
+                        applyTheme(data.theme);
+                    }
+                    if (data.compactMode) document.querySelector("[data-setting='compact-mode']")?.classList.add("active");
+                    if (data.animations) document.querySelector("[data-setting='animations']")?.classList.add("active");
+                    else document.querySelector("[data-setting='animations']")?.classList.remove("active");
+                    if (data.fontSize) document.getElementById("font-size").value = data.fontSize;
+                    if (data.accentColor) document.getElementById("accent-color").value = data.accentColor;
+                }
+            } catch (e) { console.log("Theme load failed:", e); }
+        }
+
+        async function saveTheme() {
+            const theme = document.querySelector(".theme-option.selected")?.dataset.theme || "mocha";
+            const data = {
+                theme: theme,
+                compactMode: document.querySelector("[data-setting='compact-mode']")?.classList.contains("active") || false,
+                animations: document.querySelector("[data-setting='animations']")?.classList.contains("active") || false,
+                fontSize: parseInt(document.getElementById("font-size").value),
+                accentColor: document.getElementById("accent-color").value
+            };
+            try {
+                await fetch("/api/theme/preferences", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(data)
+                });
+                showToast("Theme saved", "success");
+            } catch (e) {
+                showToast("Failed to save theme", "error");
+            }
+        }
+
+        function resetTheme() {
+            document.querySelectorAll(".theme-option").forEach(o => o.classList.remove("selected"));
+            document.querySelector("[data-theme='mocha']").classList.add("selected");
+            applyTheme("mocha");
+            showToast("Theme reset to Mocha", "success");
+        }
+
+        async function savePreferences() {
+            const data = {
+                language: document.getElementById("language").value,
+                timezone: document.getElementById("timezone").value,
+                dateFormat: document.getElementById("date-format").value,
+                autoSave: document.querySelector("[data-setting='auto-save']")?.classList.contains("active") || false,
+                showHidden: document.querySelector("[data-setting='show-hidden']")?.classList.contains("active") || false,
+                defaultView: document.getElementById("default-view").value
+            };
+            try {
+                await fetch("/api/user/preferences", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(data)
+                });
+                showToast("Preferences saved", "success");
+            } catch (e) {
+                showToast("Failed to save preferences", "error");
+            }
+        }
+
+        async function saveNotifications() {
+            const data = {
+                enabled: document.querySelector("[data-setting='notif-enabled']")?.classList.contains("active") || false,
+                sound: document.querySelector("[data-setting='notif-sound']")?.classList.contains("active") || false,
+                desktop: document.querySelector("[data-setting='notif-desktop']")?.classList.contains("active") || false,
+                email: document.querySelector("[data-setting='notif-email']")?.classList.contains("active") || false,
+                buildAlerts: document.querySelector("[data-setting='alert-build']")?.classList.contains("active") || false,
+                clusterAlerts: document.querySelector("[data-setting='alert-cluster']")?.classList.contains("active") || false
+            };
+            try {
+                await fetch("/api/notifications/settings", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(data)
+                });
+                showToast("Notification settings saved", "success");
+            } catch (e) {
+                showToast("Failed to save notifications", "error");
+            }
+        }
+
+        async function exportSettings() {
+            try {
+                const resp = await fetch("/api/backup/export");
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "holmos-settings-" + new Date().toISOString().split("T")[0] + ".json";
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    showToast("Settings exported", "success");
+                }
+            } catch (e) {
+                showToast("Export failed", "error");
+            }
+        }
+
+        let selectedFileData = null;
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                document.getElementById("selected-file").textContent = "Selected: " + file.name;
+                document.getElementById("import-btn").disabled = false;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        selectedFileData = JSON.parse(e.target.result);
+                    } catch (err) {
+                        showToast("Invalid JSON file", "error");
+                        selectedFileData = null;
+                        document.getElementById("import-btn").disabled = true;
+                    }
+                };
+                reader.readAsText(file);
+            }
+        }
+
+        async function importSettings() {
+            if (!selectedFileData) {
+                showToast("Please select a file", "error");
+                return;
+            }
+            try {
+                const resp = await fetch("/api/restore/import", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(selectedFileData)
+                });
+                if (resp.ok) {
+                    showToast("Settings imported", "success");
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    throw new Error("Import failed");
+                }
+            } catch (e) {
+                showToast("Import failed", "error");
+            }
+        }
+
+        function resetAllSettings() {
+            if (confirm("Reset all settings to defaults? This cannot be undone.")) {
+                showToast("Settings reset", "success");
+                setTimeout(() => location.reload(), 1000);
+            }
+        }
+
+        // Initialize
+        document.addEventListener("DOMContentLoaded", () => {
+            loadTabState();
+            loadTheme();
+            refreshSystemInfo();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "chat-hub",
+  "version": "3.0.0",
+  "description": "HolmOS Chat Hub - 12 AI Agents with WebSocket",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "uuid": "^9.0.0",
+    "ws": "^8.14.2"
+  }
+}

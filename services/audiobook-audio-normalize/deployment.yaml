@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audiobook-audio-normalize
+  namespace: holm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audiobook-audio-normalize
+  template:
+    metadata:
+      labels:
+        app: audiobook-audio-normalize
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - openmediavault
+      containers:
+      - name: audiobook-audio-normalize
+        image: 10.110.67.87:5000/holm/audiobook-audio-normalize:v1
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: audiobook-data
+          mountPath: /data/audiobooks
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 60
+      volumes:
+      - name: audiobook-data
+        persistentVolumeClaim:
+          claimName: audiobook-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audiobook-audio-normalize
+  namespace: holm
+spec:
+  selector:
+    app: audiobook-audio-normalize
+  ports:
+  - port: 8080
+    targetPort: 8080

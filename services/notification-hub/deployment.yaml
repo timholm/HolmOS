@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-hub
+  namespace: holm
+  labels:
+    app: notification-hub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-hub
+  template:
+    metadata:
+      labels:
+        app: notification-hub
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - rpi-2
+                - rpi-3
+                - rpi-4
+                - rpi-5
+                - rpi-6
+                - rpi-7
+                - rpi-8
+      containers:
+      - name: notification-hub
+        image: 10.110.67.87:5000/notification-hub:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: NOTIFICATION_QUEUE_URL
+          value: "http://notification-queue"
+        - name: NOTIFICATION_EMAIL_URL
+          value: "http://notification-email:8080"
+        - name: NOTIFICATION_WEBHOOK_URL
+          value: "http://notification-webhook:8080"
+        - name: ECHO_URL
+          value: "http://echo"
+        - name: SMTP_HOST
+          value: "smtp.gmail.com"
+        - name: SMTP_FROM
+          value: "notifications@holmos.local"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-hub
+  namespace: holm
+  labels:
+    app: notification-hub
+spec:
+  selector:
+    app: notification-hub
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: notification-hub
+  namespace: holm
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: notifications.holm.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: notification-hub
+            port:
+              number: 80

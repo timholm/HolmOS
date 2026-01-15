@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deploy Controller - HolmOS</title>
+    <style>
+        :root {
+            --ctp-rosewater: #f5e0dc; --ctp-flamingo: #f2cdcd; --ctp-pink: #f5c2e7;
+            --ctp-mauve: #cba6f7; --ctp-red: #f38ba8; --ctp-maroon: #eba0ac;
+            --ctp-peach: #fab387; --ctp-yellow: #f9e2af; --ctp-green: #a6e3a1;
+            --ctp-teal: #94e2d5; --ctp-sky: #89dceb; --ctp-sapphire: #74c7ec;
+            --ctp-blue: #89b4fa; --ctp-lavender: #b4befe; --ctp-text: #cdd6f4;
+            --ctp-subtext1: #bac2de; --ctp-subtext0: #a6adc8;
+            --ctp-surface2: #585b70; --ctp-surface1: #45475a; --ctp-surface0: #313244;
+            --ctp-base: #1e1e2e; --ctp-mantle: #181825; --ctp-crust: #11111b;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--ctp-base); color: var(--ctp-text); min-height: 100vh; padding: 1.5rem; }
+        .container { max-width: 1600px; margin: 0 auto; }
+        header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--ctp-surface0); }
+        h1 { color: var(--ctp-mauve); font-size: 1.75rem; }
+        .status-badge { padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+        .status-Running { background: var(--ctp-green); color: var(--ctp-crust); }
+        .status-Updating { background: var(--ctp-yellow); color: var(--ctp-crust); }
+        .status-NotReady { background: var(--ctp-red); color: var(--ctp-crust); }
+        .status-success { background: var(--ctp-green); color: var(--ctp-crust); }
+        .status-failed { background: var(--ctp-red); color: var(--ctp-crust); }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--ctp-surface0); padding-bottom: 0.5rem; flex-wrap: wrap; }
+        .tab { padding: 0.5rem 1rem; border-radius: 8px 8px 0 0; cursor: pointer; background: var(--ctp-surface0); color: var(--ctp-subtext0); border: none; font-size: 0.9rem; }
+        .tab.active { background: var(--ctp-mauve); color: var(--ctp-crust); }
+        .tab:hover { background: var(--ctp-surface1); }
+        .tab.active:hover { background: var(--ctp-mauve); }
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1rem; }
+        .card { background: var(--ctp-surface0); border-radius: 12px; padding: 1rem; border: 1px solid var(--ctp-surface1); }
+        .card:hover { border-color: var(--ctp-mauve); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
+        .card-title { font-weight: 600; }
+        .card-body { font-size: 0.85rem; color: var(--ctp-subtext0); }
+        .image-tag { font-family: monospace; font-size: 0.75rem; background: var(--ctp-surface1); padding: 0.25rem 0.5rem; border-radius: 4px; word-break: break-all; display: inline-block; margin-top: 0.5rem; }
+        .events-list { max-height: 600px; overflow-y: auto; }
+        .event-item { background: var(--ctp-surface0); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; border-left: 3px solid var(--ctp-mauve); }
+        .event-item.success { border-left-color: var(--ctp-green); }
+        .event-item.failed { border-left-color: var(--ctp-red); }
+        .event-header { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+        .event-title { font-weight: 600; }
+        .event-time { font-size: 0.75rem; color: var(--ctp-subtext0); }
+        .btn { padding: 0.5rem 1rem; border-radius: 8px; border: none; cursor: pointer; font-weight: 500; font-size: 0.85rem; transition: all 0.2s; }
+        .btn:hover { filter: brightness(1.1); }
+        .btn-primary { background: var(--ctp-mauve); color: var(--ctp-crust); }
+        .btn-danger { background: var(--ctp-red); color: var(--ctp-crust); }
+        .btn-secondary { background: var(--ctp-surface1); color: var(--ctp-text); }
+        .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+        .form-group { margin-bottom: 1rem; }
+        .form-label { display: block; margin-bottom: 0.25rem; font-size: 0.85rem; color: var(--ctp-subtext0); }
+        .form-input { width: 100%; padding: 0.5rem; border-radius: 8px; background: var(--ctp-surface1); border: 1px solid var(--ctp-surface2); color: var(--ctp-text); }
+        .form-input:focus { outline: none; border-color: var(--ctp-mauve); }
+        .form-checkbox { display: flex; align-items: center; gap: 0.5rem; }
+        .form-checkbox input { width: 18px; height: 18px; }
+        .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+        .modal.show { display: flex; }
+        .modal-content { background: var(--ctp-surface0); border-radius: 16px; padding: 1.5rem; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; }
+        .modal-title { font-size: 1.25rem; font-weight: 600; color: var(--ctp-mauve); margin-bottom: 1rem; }
+        .modal-footer { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+        .webhook-info { background: var(--ctp-surface1); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.8rem; }
+        .webhook-info code { background: var(--ctp-surface0); padding: 0.15rem 0.35rem; border-radius: 4px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .stat-card { background: var(--ctp-surface0); border-radius: 12px; padding: 1rem; text-align: center; }
+        .stat-value { font-size: 2rem; font-weight: 700; color: var(--ctp-mauve); }
+        .stat-label { font-size: 0.85rem; color: var(--ctp-subtext0); }
+        .auto-badge { background: var(--ctp-blue); color: var(--ctp-crust); padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; margin-left: 0.5rem; }
+        .trigger-badge { background: var(--ctp-surface1); padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; }
+        .trigger-badge.registry-webhook { background: var(--ctp-peach); color: var(--ctp-crust); }
+        .trigger-badge.registry-poll { background: var(--ctp-yellow); color: var(--ctp-crust); }
+        .trigger-badge.manual { background: var(--ctp-blue); color: var(--ctp-crust); }
+        .trigger-badge.rollback { background: var(--ctp-red); color: var(--ctp-crust); }
+        .trigger-badge.auto-create { background: var(--ctp-green); color: var(--ctp-crust); }
+        
+        /* History timeline */
+        .history-timeline { position: relative; padding-left: 2rem; }
+        .history-timeline::before { content: ''; position: absolute; left: 0.5rem; top: 0; bottom: 0; width: 2px; background: var(--ctp-surface1); }
+        .history-item { position: relative; margin-bottom: 1rem; padding: 0.75rem; background: var(--ctp-surface0); border-radius: 8px; }
+        .history-item::before { content: ''; position: absolute; left: -1.75rem; top: 1rem; width: 12px; height: 12px; border-radius: 50%; background: var(--ctp-mauve); border: 2px solid var(--ctp-base); }
+        .history-item.success::before { background: var(--ctp-green); }
+        .history-item.failed::before { background: var(--ctp-red); }
+        .history-version { font-weight: 600; color: var(--ctp-mauve); }
+        .history-meta { font-size: 0.75rem; color: var(--ctp-subtext0); margin-top: 0.25rem; }
+        
+        /* Registry events */
+        .registry-event { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: var(--ctp-surface0); border-radius: 8px; margin-bottom: 0.5rem; }
+        .registry-event.processed { border-left: 3px solid var(--ctp-green); }
+        .registry-event.pending { border-left: 3px solid var(--ctp-yellow); }
+        .digest { font-family: monospace; font-size: 0.7rem; color: var(--ctp-subtext0); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Deploy Controller v3</h1>
+            <span class="status-badge status-Running" id="health-badge">Healthy</span>
+        </header>
+        <div class="stats" id="stats">
+            <div class="stat-card"><div class="stat-value" id="total-deps">0</div><div class="stat-label">Deployments</div></div>
+            <div class="stat-card"><div class="stat-value" id="running-count">0</div><div class="stat-label">Running</div></div>
+            <div class="stat-card"><div class="stat-value" id="auto-count">0</div><div class="stat-label">Auto-Deploy</div></div>
+            <div class="stat-card"><div class="stat-value" id="events-count">0</div><div class="stat-label">Deploy Events</div></div>
+            <div class="stat-card"><div class="stat-value" id="registry-count">0</div><div class="stat-label">Registry Events</div></div>
+        </div>
+        <div class="tabs">
+            <button class="tab active" data-tab="deployments">Deployments</button>
+            <button class="tab" data-tab="history">History</button>
+            <button class="tab" data-tab="events">Events</button>
+            <button class="tab" data-tab="registry">Registry</button>
+            <button class="tab" data-tab="webhooks">Webhooks</button>
+            <button class="tab" data-tab="images">Images</button>
+            <button class="tab" data-tab="autodeploy">Auto-Deploy</button>
+        </div>
+        
+        <div id="deployments" class="panel active"><div class="grid" id="deps-grid"></div></div>
+        
+        <div id="history" class="panel">
+            <div class="form-group" style="margin-bottom:1rem">
+                <select id="history-select" class="form-input" style="max-width:300px">
+                    <option value="">Select deployment...</option>
+                </select>
+            </div>
+            <div class="history-timeline" id="history-timeline"></div>
+        </div>
+        
+        <div id="events" class="panel"><div class="events-list" id="events-list"></div></div>
+        
+        <div id="registry" class="panel">
+            <div class="webhook-info">
+                <strong>Registry Webhook URL:</strong><br>
+                <code>POST http://deploy-controller.holm.svc.cluster.local/api/webhook/registry</code><br><br>
+                <strong>Configure in registry:</strong> Set <code>REGISTRY_HTTP_NOTIFICATIONS_ENDPOINTS</code> to point here
+            </div>
+            <div class="events-list" id="registry-list"></div>
+        </div>
+        
+        <div id="webhooks" class="panel">
+            <div class="webhook-info">
+                <strong>Git Webhook:</strong> <code>POST /api/webhook/git</code><br>
+                <strong>Build Webhook:</strong> <code>POST /api/webhook/build</code><br>
+                <strong>Registry Webhook:</strong> <code>POST /api/webhook/registry</code>
+            </div>
+            <div class="events-list" id="webhook-list"></div>
+        </div>
+        
+        <div id="images" class="panel"><div class="grid" id="images-grid"></div></div>
+        
+        <div id="autodeploy" class="panel">
+            <button class="btn btn-primary" onclick="showRuleModal()" style="margin-bottom:1rem">+ Add Rule</button>
+            <div class="grid" id="rules-grid"></div>
+        </div>
+    </div>
+
+    <!-- Deploy Modal -->
+    <div id="deploy-modal" class="modal">
+        <div class="modal-content">
+            <h2 class="modal-title">Deploy Image</h2>
+            <div class="form-group"><label class="form-label">Deployment</label><input type="text" id="d-name" class="form-input" readonly></div>
+            <div class="form-group"><label class="form-label">Image</label><input type="text" id="d-image" class="form-input"></div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('deploy-modal')">Cancel</button>
+                <button class="btn btn-primary" onclick="doDeploy()">Deploy</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rule Modal -->
+    <div id="rule-modal" class="modal">
+        <div class="modal-content">
+            <h2 class="modal-title">Add Auto-Deploy Rule</h2>
+            <div class="form-group">
+                <label class="form-label">Image Pattern</label>
+                <input type="text" id="r-pattern" class="form-input" placeholder="e.g., my-app">
+                <small style="color:var(--ctp-subtext0)">Matches repository names containing this pattern</small>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Tag Pattern (optional)</label>
+                <input type="text" id="r-tag" class="form-input" placeholder="e.g., latest, v*, or leave empty for all">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Target Deployment</label>
+                <input type="text" id="r-deploy" class="form-input" placeholder="Deployment name">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Namespace</label>
+                <input type="text" id="r-ns" class="form-input" value="holm">
+            </div>
+            <div class="form-group">
+                <label class="form-checkbox">
+                    <input type="checkbox" id="r-autocreate">
+                    <span>Auto-create deployment if it doesn't exist</span>
+                </label>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('rule-modal')">Cancel</button>
+                <button class="btn btn-primary" onclick="addRule()">Add Rule</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rollback Modal -->
+    <div id="rollback-modal" class="modal">
+        <div class="modal-content">
+            <h2 class="modal-title">Rollback Deployment</h2>
+            <div class="form-group">
+                <label class="form-label">Deployment</label>
+                <input type="text" id="rb-name" class="form-input" readonly>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Select Version</label>
+                <select id="rb-version" class="form-input"></select>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('rollback-modal')">Cancel</button>
+                <button class="btn btn-danger" onclick="doRollback()">Rollback</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let deps=[], evts=[], hooks=[], imgs=[], rules={}, regEvts=[], history={};
+        
+        document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+            document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+            t.classList.add('active');
+            document.getElementById(t.dataset.tab).classList.add('active');
+        });
+
+        async function load(){
+            try{
+                const [d,e,w,i,r,re,h]=await Promise.all([
+                    fetch('/api/deployments').then(r=>r.json()),
+                    fetch('/api/events').then(r=>r.json()),
+                    fetch('/api/webhook').then(r=>r.json()),
+                    fetch('/api/images').then(r=>r.json()),
+                    fetch('/api/autodeploy').then(r=>r.json()),
+                    fetch('/api/registry-events').then(r=>r.json()),
+                    fetch('/api/history').then(r=>r.json())
+                ]);
+                deps=d||[];evts=e||[];hooks=w||[];imgs=i||[];rules=r||{};regEvts=re||[];history=h||{};
+                render();
+            }catch(e){console.error(e);}
+        }
+
+        function render(){
+            document.getElementById('total-deps').textContent=deps.length;
+            document.getElementById('running-count').textContent=deps.filter(d=>d.status==='Running').length;
+            document.getElementById('auto-count').textContent=Object.keys(rules).length;
+            document.getElementById('events-count').textContent=evts.length;
+            document.getElementById('registry-count').textContent=regEvts.length;
+
+            // Deployments grid
+            document.getElementById('deps-grid').innerHTML=deps.map(d=>`
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">${d.name}${d.autoDeploy?'<span class="auto-badge">AUTO</span>':''}</span>
+                        <span class="status-badge status-${d.status}">${d.status}</span>
+                    </div>
+                    <div class="card-body">
+                        <p>${d.ready}/${d.replicas} ready</p>
+                        <div class="image-tag">${d.image||'No image'}</div>
+                        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+                            <button class="btn btn-primary btn-sm" onclick="showDeployModal('${d.name}','${d.image||''}')">Deploy</button>
+                            <button class="btn btn-danger btn-sm" onclick="showRollbackModal('${d.name}')">Rollback</button>
+                            <button class="btn btn-secondary btn-sm" onclick="showHistory('${d.name}')">History</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Events list
+            document.getElementById('events-list').innerHTML=evts.map(e=>`
+                <div class="event-item ${e.status}">
+                    <div class="event-header">
+                        <span class="event-title">${e.deployment}</span>
+                        <span class="event-time">${new Date(e.timestamp).toLocaleString()}</span>
+                    </div>
+                    <div>
+                        <span class="status-badge status-${e.status}">${e.status}</span>
+                        <span class="trigger-badge ${e.trigger}">${e.trigger}</span>
+                        ${e.duration?`<span style="font-size:0.75rem;color:var(--ctp-subtext0);margin-left:0.5rem">${e.duration.toFixed(2)}s</span>`:''}
+                    </div>
+                    <p style="margin-top:0.5rem">${e.message}</p>
+                    <div class="image-tag">${e.image}</div>
+                    ${e.oldImage?`<div class="image-tag" style="opacity:0.6">Previous: ${e.oldImage}</div>`:''}
+                </div>
+            `).join('')||'<p style="color:var(--ctp-subtext0)">No events yet</p>';
+
+            // Registry events
+            document.getElementById('registry-list').innerHTML=regEvts.map(e=>`
+                <div class="registry-event ${e.processed?'processed':'pending'}">
+                    <div>
+                        <strong>${e.repository}:${e.tag}</strong>
+                        ${e.autoDeploy?'<span class="auto-badge">Auto-deployed</span>':''}
+                        <div class="digest">${e.digest?e.digest.substring(0,20)+'...':''}</div>
+                        <div style="font-size:0.75rem;color:var(--ctp-subtext0)">${new Date(e.timestamp).toLocaleString()}</div>
+                    </div>
+                    <span class="status-badge ${e.processed?'status-success':'status-Updating'}">${e.processed?'Processed':'Pending'}</span>
+                </div>
+            `).join('')||'<p style="color:var(--ctp-subtext0)">No registry events. Configure registry webhooks to receive push notifications.</p>';
+
+            // Webhook list
+            document.getElementById('webhook-list').innerHTML=hooks.map(w=>`
+                <div class="event-item">
+                    <div class="event-header">
+                        <span class="event-title">${w.type}: ${w.repo}</span>
+                        <span class="event-time">${new Date(w.timestamp).toLocaleString()}</span>
+                    </div>
+                    <p>Branch: ${w.branch} | Commit: ${w.commit}</p>
+                </div>
+            `).join('')||'<p style="color:var(--ctp-subtext0)">No webhooks received</p>';
+
+            // Images grid
+            document.getElementById('images-grid').innerHTML=imgs.slice(0,50).map(i=>`
+                <div class="card">
+                    <div class="card-header"><span class="card-title">${i.name}</span></div>
+                    <div class="card-body">Tags: ${(i.tags||[]).slice(0,5).join(', ')||'none'}</div>
+                </div>
+            `).join('');
+
+            // Auto-deploy rules
+            document.getElementById('rules-grid').innerHTML=Object.values(rules).map(r=>`
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">${r.deployment}</span>
+                        <span class="status-badge status-${r.enabled?'Running':'NotReady'}">${r.enabled?'Enabled':'Disabled'}</span>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Pattern:</strong> ${r.imagePattern}</p>
+                        ${r.tagPattern?`<p><strong>Tag:</strong> ${r.tagPattern}</p>`:''}
+                        <p><strong>Namespace:</strong> ${r.namespace}</p>
+                        ${r.autoCreate?'<p><span class="auto-badge">Auto-create</span></p>':''}
+                        ${r.lastTriggered?`<p style="font-size:0.75rem;color:var(--ctp-subtext0)">Last: ${new Date(r.lastTriggered).toLocaleString()}</p>`:''}
+                        <button class="btn btn-danger btn-sm" style="margin-top:0.5rem" onclick="delRule('${r.deployment}')">Delete</button>
+                    </div>
+                </div>
+            `).join('')||'<p style="color:var(--ctp-subtext0)">No auto-deploy rules configured</p>';
+
+            // History select
+            const sel=document.getElementById('history-select');
+            const currentVal=sel.value;
+            sel.innerHTML='<option value="">Select deployment...</option>'+deps.map(d=>`<option value="${d.name}">${d.name}</option>`).join('');
+            sel.value=currentVal;
+            if(currentVal)renderHistory(currentVal);
+        }
+
+        function renderHistory(deployment){
+            const h=history[deployment]||[];
+            document.getElementById('history-timeline').innerHTML=h.length?h.map(v=>`
+                <div class="history-item ${v.status}">
+                    <div class="history-version">v${v.version}</div>
+                    <div class="image-tag">${v.image}</div>
+                    <div class="history-meta">
+                        <span class="trigger-badge ${v.trigger}">${v.trigger}</span>
+                        ${v.duration?`<span>${v.duration.toFixed(2)}s</span>`:''}
+                        <span>${new Date(v.timestamp).toLocaleString()}</span>
+                    </div>
+                </div>
+            `).join(''):'<p style="color:var(--ctp-subtext0)">No history for this deployment</p>';
+        }
+
+        document.getElementById('history-select').onchange=e=>renderHistory(e.target.value);
+
+        function showHistory(name){
+            document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+            document.querySelector('[data-tab="history"]').classList.add('active');
+            document.getElementById('history').classList.add('active');
+            document.getElementById('history-select').value=name;
+            renderHistory(name);
+        }
+
+        function showDeployModal(n,i){
+            document.getElementById('d-name').value=n;
+            document.getElementById('d-image').value=i;
+            document.getElementById('deploy-modal').classList.add('show');
+        }
+
+        function showRuleModal(){
+            document.getElementById('r-pattern').value='';
+            document.getElementById('r-tag').value='';
+            document.getElementById('r-deploy').value='';
+            document.getElementById('r-ns').value='holm';
+            document.getElementById('r-autocreate').checked=false;
+            document.getElementById('rule-modal').classList.add('show');
+        }
+
+        async function showRollbackModal(name){
+            document.getElementById('rb-name').value=name;
+            const h=history[name]||[];
+            const sel=document.getElementById('rb-version');
+            sel.innerHTML=h.filter(v=>v.status==='success').slice(1).map(v=>`<option value="${v.version}">v${v.version}: ${v.image.split('/').pop()}</option>`).join('');
+            if(sel.options.length===0){
+                sel.innerHTML='<option value="">No previous versions</option>';
+            }
+            document.getElementById('rollback-modal').classList.add('show');
+        }
+
+        function closeModal(id){document.getElementById(id).classList.remove('show');}
+
+        async function doDeploy(){
+            const d=document.getElementById('d-name').value;
+            const i=document.getElementById('d-image').value;
+            await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deployment:d,image:i,namespace:'holm'})});
+            closeModal('deploy-modal');
+            load();
+        }
+
+        async function doRollback(){
+            const d=document.getElementById('rb-name').value;
+            const v=parseInt(document.getElementById('rb-version').value)||0;
+            await fetch('/api/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deployment:d,namespace:'holm',version:v})});
+            closeModal('rollback-modal');
+            load();
+        }
+
+        async function addRule(){
+            const r={
+                imagePattern:document.getElementById('r-pattern').value,
+                tagPattern:document.getElementById('r-tag').value,
+                deployment:document.getElementById('r-deploy').value,
+                namespace:document.getElementById('r-ns').value,
+                autoCreate:document.getElementById('r-autocreate').checked,
+                enabled:true
+            };
+            await fetch('/api/autodeploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r)});
+            closeModal('rule-modal');
+            load();
+        }
+
+        async function delRule(d){
+            if(confirm('Delete rule for '+d+'?')){
+                await fetch('/api/autodeploy?deployment='+d,{method:'DELETE'});
+                load();
+            }
+        }
+
+        load();
+        setInterval(load,5000);
+    </script>
+</body>
+</html>

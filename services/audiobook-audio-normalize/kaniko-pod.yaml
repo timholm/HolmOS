@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-audiobook-audio-normalize
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  tolerations:
+  - key: "node-role.kubernetes.io/control-plane"
+    operator: "Exists"
+    effect: "NoSchedule"
+  restartPolicy: Never
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--context=dir:///workspace"
+    - "--destination=10.110.67.87:5000/holm/audiobook-audio-normalize:v1"
+    - "--insecure"
+    - "--cache=true"
+    volumeMounts:
+    - name: build-context
+      mountPath: /workspace
+  volumes:
+  - name: build-context
+    hostPath:
+      path: /tmp/build-context/audiobook-audio-normalize
+      type: Directory

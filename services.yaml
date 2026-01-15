@@ -1,0 +1,192 @@
+# HolmOS Service Registry
+# All services with their configurations
+
+services:
+  # === Core Entry Points ===
+  holmos-shell:
+    port: 30000
+    replicas: 2
+    health: /health
+    category: core
+    description: iPhone-style home screen
+
+  claude-pod:
+    port: 30001
+    replicas: 1
+    health: /health
+    category: core
+    description: AI chat interface
+
+  app-store:
+    port: 30002
+    replicas: 1
+    health: /health
+    category: core
+    description: AI-powered app generator
+
+  chat-hub:
+    port: 30003
+    replicas: 1
+    health: /health
+    category: core
+    description: Unified agent messaging
+
+  # === AI Agents ===
+  nova:
+    port: 30004
+    replicas: 1
+    health: /health
+    category: agent
+    personality: "I see all 13 stars in our constellation"
+
+  merchant:
+    port: 30005
+    replicas: 1
+    health: /health
+    category: agent
+    personality: "Describe what you need, I'll make it happen"
+
+  pulse:
+    port: 30006
+    replicas: 1
+    health: /health
+    category: agent
+    personality: "Vital signs are looking good"
+
+  gateway:
+    port: 30008
+    replicas: 2
+    health: /health
+    category: agent
+    personality: "All roads lead through me"
+
+  scribe:
+    port: 30860
+    replicas: 1
+    health: /health
+    category: agent
+    personality: "It's all in the records"
+
+  vault:
+    port: 30870
+    replicas: 1
+    health: /health
+    category: agent
+    personality: "Your secrets are safe with me"
+
+  # === Apps ===
+  clock-app:
+    port: 30007
+    replicas: 1
+    health: /health
+    category: app
+    description: World clock, alarms, timer
+
+  calculator-app:
+    port: 30010
+    replicas: 1
+    health: /health
+    category: app
+    description: iPhone-style calculator
+
+  # === Infrastructure ===
+  holm-git:
+    port: 30009
+    replicas: 1
+    health: /health
+    category: devops
+    description: Git repository server
+
+  cicd-controller:
+    port: 30020
+    replicas: 1
+    health: /health
+    category: devops
+    description: CI/CD pipeline manager
+
+  deploy-controller:
+    port: 30021
+    replicas: 1
+    health: /health
+    category: devops
+    description: Auto-deployment controller
+
+  file-web-nautilus:
+    port: 30088
+    replicas: 1
+    health: /health
+    category: app
+    description: GNOME-style file manager
+
+  cluster-manager:
+    port: 30502
+    replicas: 1
+    health: /health
+    category: admin
+    description: Cluster admin dashboard
+
+  settings-web:
+    port: 30600
+    replicas: 1
+    health: /health
+    category: app
+    description: Settings hub
+
+  audiobook-web:
+    port: 30700
+    replicas: 1
+    health: /health
+    category: app
+    description: Audiobook TTS pipeline
+
+  terminal-web:
+    port: 30800
+    replicas: 1
+    health: /health
+    category: app
+    description: Web-based terminal
+
+  backup-dashboard:
+    port: 30850
+    replicas: 1
+    health: /health
+    category: admin
+    description: Backup management
+
+  test-dashboard:
+    port: 30900
+    replicas: 1
+    health: /health
+    category: monitoring
+    description: Service health monitoring
+
+  metrics-dashboard:
+    port: 30950
+    replicas: 1
+    health: /health
+    category: monitoring
+    description: Cluster metrics
+
+  registry-ui:
+    port: 31750
+    replicas: 1
+    health: /health
+    category: devops
+    description: Container registry browser
+
+# Deployment defaults
+defaults:
+  namespace: holm
+  image_pull_policy: Always
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+
+# Node affinity rules
+affinity:
+  exclude_nodes:
+    - openmediavault  # No insecure registry config

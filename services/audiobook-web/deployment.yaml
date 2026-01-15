@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: audiobook-pvc
+  namespace: holm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audiobook-web
+  namespace: holm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audiobook-web
+  template:
+    metadata:
+      labels:
+        app: audiobook-web
+    spec:
+      containers:
+      - name: audiobook-web
+        image: localhost/audiobook-web:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: POSTGRES_HOST
+          value: "postgres.holm.svc.cluster.local"
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        - name: POSTGRES_DB
+          value: "holm"
+        - name: UPLOAD_EPUB_URL
+          value: "http://audiobook-upload-epub.holm.svc.cluster.local:8080"
+        - name: UPLOAD_TXT_URL
+          value: "http://audiobook-upload-txt.holm.svc.cluster.local:8080"
+        - name: PARSE_EPUB_URL
+          value: "http://audiobook-parse-epub.holm.svc.cluster.local:8080"
+        - name: CHUNK_TEXT_URL
+          value: "http://audiobook-chunk-text.holm.svc.cluster.local:8080"
+        - name: TTS_CONVERT_URL
+          value: "http://audiobook-tts-convert.holm.svc.cluster.local:8080"
+        - name: AUDIO_CONCAT_URL
+          value: "http://audiobook-audio-concat.holm.svc.cluster.local:8080"
+        - name: AUDIO_NORMALIZE_URL
+          value: "http://audiobook-audio-normalize.holm.svc.cluster.local:8080"
+        - name: WEB_CALLBACK_URL
+          value: "http://audiobook-web.holm.svc.cluster.local:8080"
+        volumeMounts:
+        - name: audiobook-data
+          mountPath: /data/audiobooks
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: audiobook-data
+        persistentVolumeClaim:
+          claimName: audiobook-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audiobook-web
+  namespace: holm
+spec:
+  selector:
+    app: audiobook-web
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audiobook-web-nodeport
+  namespace: holm
+spec:
+  type: NodePort
+  selector:
+    app: audiobook-web
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30700

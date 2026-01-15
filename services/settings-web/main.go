@@ -1919,15 +1919,15 @@ var settingsHTML = `<!DOCTYPE html>
 
                     const nodeList = document.getElementById("node-list");
                     if (data.nodes?.length > 0) {
-                        nodeList.innerHTML = data.nodes.map(node => ` + "`" + `
-                            <div class="list-item">
-                                <div class="item-info">
-                                    <span class="item-name">${node.name}</span>
-                                    <span class="item-details">${node.role} | ${node.arch} | ${node.cpu} CPU</span>
-                                </div>
-                                <span class="status-badge status-${node.status.toLowerCase()}">${node.status}</span>
-                            </div>
-                        ` + "`" + `).join("");
+                        nodeList.innerHTML = data.nodes.map(node =>
+                            '<div class="list-item">' +
+                                '<div class="item-info">' +
+                                    '<span class="item-name">' + node.name + '</span>' +
+                                    '<span class="item-details">' + node.role + ' | ' + node.arch + ' | ' + node.cpu + ' CPU</span>' +
+                                '</div>' +
+                                '<span class="status-badge status-' + node.status.toLowerCase() + '">' + node.status + '</span>' +
+                            '</div>'
+                        ).join("");
                     }
 
                     const storageList = document.getElementById("storage-list");
@@ -1935,17 +1935,15 @@ var settingsHTML = `<!DOCTYPE html>
                         storageList.innerHTML = data.storage.map(s => {
                             const pct = parseInt(s.percent) || 0;
                             const cls = pct > 90 ? "danger" : pct > 70 ? "warning" : "";
-                            return ` + "`" + `
-                                <div class="list-item">
-                                    <div class="item-info">
-                                        <span class="item-name">${s.mount}</span>
-                                        <span class="item-details">${s.used} / ${s.size}</span>
-                                    </div>
-                                    <div class="progress-bar">
-                                        <div class="progress-fill ${cls}" style="width: ${pct}%"></div>
-                                    </div>
-                                </div>
-                            ` + "`" + `;
+                            return '<div class="list-item">' +
+                                '<div class="item-info">' +
+                                    '<span class="item-name">' + s.mount + '</span>' +
+                                    '<span class="item-details">' + s.used + ' / ' + s.size + '</span>' +
+                                '</div>' +
+                                '<div class="progress-bar">' +
+                                    '<div class="progress-fill ' + cls + '" style="width: ' + pct + '%"></div>' +
+                                '</div>' +
+                            '</div>';
                         }).join("");
                     }
                     showToast("System info updated", "success");
@@ -1970,15 +1968,15 @@ var settingsHTML = `<!DOCTYPE html>
 
                     const servicesList = document.getElementById("services-list");
                     if (data.services?.length > 0) {
-                        servicesList.innerHTML = data.services.map(s => ` + "`" + `
-                            <div class="list-item">
-                                <div class="item-info">
-                                    <span class="item-name">${s.name}</span>
-                                    <span class="item-details">Port ${s.port}</span>
-                                </div>
-                                <span class="status-badge status-${s.status}">${s.status}</span>
-                            </div>
-                        ` + "`" + `).join("");
+                        servicesList.innerHTML = data.services.map(s =>
+                            '<div class="list-item">' +
+                                '<div class="item-info">' +
+                                    '<span class="item-name">' + s.name + '</span>' +
+                                    '<span class="item-details">Port ' + s.port + '</span>' +
+                                '</div>' +
+                                '<span class="status-badge status-' + s.status + '">' + s.status + '</span>' +
+                            '</div>'
+                        ).join("");
                     }
                 }
             } catch (e) {
@@ -1993,7 +1991,7 @@ var settingsHTML = `<!DOCTYPE html>
                     const data = await resp.json();
                     if (data.theme) {
                         document.querySelectorAll(".theme-option").forEach(o => o.classList.remove("selected"));
-                        document.querySelector(` + "`" + `[data-theme="${data.theme}"]` + "`" + `)?.classList.add("selected");
+                        document.querySelector('[data-theme="' + data.theme + '"]')?.classList.add("selected");
                         applyTheme(data.theme);
                     }
                     if (data.compactMode) document.querySelector("[data-setting='compact-mode']")?.classList.add("active");
@@ -2151,4 +2149,4 @@ var settingsHTML = `<!DOCTYPE html>
     </script>
 </body>
 </html>
-'
+`

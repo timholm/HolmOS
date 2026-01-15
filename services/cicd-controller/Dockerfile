@@ -1,13 +1,12 @@
-FROM docker.io/library/golang:1.21-alpine AS builder
+FROM quay.io/projectquay/golang:1.21 AS builder
 WORKDIR /app
-RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
 COPY main.go .
 RUN CGO_ENABLED=0 GOOS=linux go build -o cicd-controller .
 
-FROM docker.io/library/alpine:3.19
-RUN apk add --no-cache ca-certificates
+FROM quay.io/fedora/fedora-minimal:40
+RUN microdnf install -y ca-certificates && microdnf clean all
 WORKDIR /app
 COPY --from=builder /app/cicd-controller .
 COPY ui.html .

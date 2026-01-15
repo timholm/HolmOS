@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -13,8 +12,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,12 +23,11 @@ import (
 )
 
 type Config struct {
-	SchedulerURL     string
-	StorageURL       string
-	VaultURL         string
 	DB               *sql.DB
 	EncryptionKey    []byte
 	VaultIntegration bool
+	BackupDir        string
+	mu               sync.RWMutex
 }
 
 type Schedule struct {
@@ -44,24 +43,16 @@ type Schedule struct {
 	NextRunAt  *time.Time `json:"next_run_at,omitempty"`
 }
 
-type BackupHistory struct {
-	ID          string     `json:"id"`
-	ScheduleID  string     `json:"schedule_id"`
-	Status      string     `json:"status"`
-	StartedAt   time.Time  `json:"started_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Size        int64      `json:"size,omitempty"`
-	Message     string     `json:"message,omitempty"`
-}
-
-type StoredBackup struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	Size      int64     `json:"size"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Encrypted bool      `json:"encrypted"`
+type BackupEntry struct {
+	ID          string    `json:"id"`
+	SourcePath  string    `json:"source_path"`
+	BackupPath  string    `json:"backup_path"`
+	Size        int64     `json:"size"`
+	CreatedAt   time.Time `json:"created_at"`
+	Description string    `json:"description"`
+	Status      string    `json:"status"`
+	Type        string    `json:"type"`
+	Encrypted   bool      `json:"encrypted"`
 }
 
 type RestorePoint struct {
@@ -106,11 +97,12 @@ var config *Config
 
 func main() {
 	config = &Config{
-		SchedulerURL:     getEnv("SCHEDULER_URL", "http://backup-scheduler.holm.svc.cluster.local:8080"),
-		StorageURL:       getEnv("STORAGE_URL", "http://backup-storage.holm.svc.cluster.local"),
-		VaultURL:         getEnv("VAULT_URL", "http://vault.holm.svc.cluster.local"),
 		VaultIntegration: getEnv("VAULT_INTEGRATION", "true") == "true",
+		BackupDir:        getEnv("BACKUP_DIR", "/data/backups"),
 	}
+
+	// Ensure backup directory exists
+	os.MkdirAll(config.BackupDir, 0755)
 
 	keyStr := getEnv("ENCRYPTION_KEY", "")
 	if keyStr != "" {
@@ -135,10 +127,11 @@ func main() {
 		if err == nil {
 			err = config.DB.Ping()
 			if err == nil {
+				log.Printf("Connected to database")
 				break
 			}
 		}
-		log.Printf("Waiting for database... attempt %d/30", i+1)
+		log.Printf("Waiting for database... attempt %d/30: %v", i+1, err)
 		time.Sleep(2 * time.Second)
 	}
 	if err != nil {
@@ -146,30 +139,37 @@ func main() {
 	}
 	defer config.DB.Close()
 
-	if err := initDashboardDB(); err != nil {
-		log.Printf("Warning: Failed to initialize dashboard tables: %v", err)
+	if err := initDB(); err != nil {
+		log.Printf("Warning: Failed to initialize tables: %v", err)
 	}
 
 	r := mux.NewRouter()
-
 	r.HandleFunc("/", dashboardHandler).Methods("GET")
 	r.HandleFunc("/health", healthHandler).Methods("GET")
 
 	api := r.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/stats", getStatsHandler).Methods("GET")
+
+	// Schedule endpoints (integrated)
 	api.HandleFunc("/schedules", listSchedulesHandler).Methods("GET")
 	api.HandleFunc("/schedules", createScheduleHandler).Methods("POST")
 	api.HandleFunc("/schedules/{id}", deleteScheduleHandler).Methods("DELETE")
 	api.HandleFunc("/schedules/{id}/run", triggerScheduleHandler).Methods("POST")
 	api.HandleFunc("/schedules/{id}/history", getScheduleHistoryHandler).Methods("GET")
+
+	// Backup endpoints (integrated)
 	api.HandleFunc("/backups", listBackupsHandler).Methods("GET")
 	api.HandleFunc("/backups/{id}", getBackupHandler).Methods("GET")
 	api.HandleFunc("/backups/{id}/download", downloadBackupHandler).Methods("GET")
 	api.HandleFunc("/backup/manual", triggerManualBackupHandler).Methods("POST")
+
+	// Restore endpoints
 	api.HandleFunc("/restore/points", listRestorePointsHandler).Methods("GET")
 	api.HandleFunc("/restore/start", startRestoreHandler).Methods("POST")
 	api.HandleFunc("/restore/jobs", listRestoreJobsHandler).Methods("GET")
 	api.HandleFunc("/restore/jobs/{id}", getRestoreJobHandler).Methods("GET")
+
+	// Vault endpoints
 	api.HandleFunc("/vault/status", vaultStatusHandler).Methods("GET")
 	api.HandleFunc("/vault/encrypt", encryptDataHandler).Methods("POST")
 
@@ -185,8 +185,45 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
-func initDashboardDB() error {
+func initDB() error {
 	schema := `
+	CREATE TABLE IF NOT EXISTS schedules (
+		id VARCHAR(36) PRIMARY KEY,
+		name VARCHAR(255) NOT NULL,
+		cron_expression VARCHAR(100) NOT NULL,
+		type VARCHAR(50) NOT NULL,
+		target VARCHAR(500) NOT NULL,
+		enabled BOOLEAN DEFAULT TRUE,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		last_run_at TIMESTAMP,
+		next_run_at TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS backups (
+		id VARCHAR(36) PRIMARY KEY,
+		source_path VARCHAR(500),
+		backup_path VARCHAR(500),
+		size BIGINT DEFAULT 0,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		description VARCHAR(500),
+		status VARCHAR(50) DEFAULT 'completed',
+		type VARCHAR(50) DEFAULT 'manual',
+		encrypted BOOLEAN DEFAULT FALSE
+	);
+	CREATE INDEX IF NOT EXISTS idx_backups_created ON backups(created_at DESC);
+
+	CREATE TABLE IF NOT EXISTS backup_history (
+		id VARCHAR(36) PRIMARY KEY,
+		schedule_id VARCHAR(36) REFERENCES schedules(id) ON DELETE CASCADE,
+		status VARCHAR(20) NOT NULL,
+		started_at TIMESTAMP NOT NULL,
+		completed_at TIMESTAMP,
+		size BIGINT,
+		message TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_backup_history_schedule ON backup_history(schedule_id);
+
 	CREATE TABLE IF NOT EXISTS restore_jobs (
 		id VARCHAR(36) PRIMARY KEY,
 		backup_id VARCHAR(36) NOT NULL,
@@ -216,25 +253,15 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		status["database"] = "healthy"
 	}
 
-	resp, err := http.Get(config.SchedulerURL + "/health")
-	if err != nil || resp.StatusCode != 200 {
-		status["scheduler"] = "unhealthy"
-	} else {
-		status["scheduler"] = "healthy"
-	}
-	if resp != nil {
-		resp.Body.Close()
-	}
-
-	resp, err = http.Get(config.StorageURL + "/health")
-	if err != nil || resp.StatusCode != 200 {
+	// Check backup directory
+	if _, err := os.Stat(config.BackupDir); err != nil {
 		status["storage"] = "unhealthy"
 	} else {
 		status["storage"] = "healthy"
 	}
-	if resp != nil {
-		resp.Body.Close()
-	}
+
+	// Scheduler is integrated
+	status["scheduler"] = "healthy"
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
@@ -243,105 +270,267 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func getStatsHandler(w http.ResponseWriter, r *http.Request) {
 	stats := DashboardStats{}
 
-	resp, err := http.Get(config.SchedulerURL + "/schedules")
-	if err == nil && resp.StatusCode == 200 {
-		var schedules []Schedule
-		json.NewDecoder(resp.Body).Decode(&schedules)
-		resp.Body.Close()
-		stats.TotalSchedules = len(schedules)
-		for _, s := range schedules {
-			if s.Enabled {
-				stats.ActiveSchedules++
-			}
-		}
-	}
+	// Get schedule stats
+	config.DB.QueryRow("SELECT COUNT(*) FROM schedules").Scan(&stats.TotalSchedules)
+	config.DB.QueryRow("SELECT COUNT(*) FROM schedules WHERE enabled = true").Scan(&stats.ActiveSchedules)
 
-	resp, err = http.Get(config.StorageURL + "/backups")
-	if err == nil && resp.StatusCode == 200 {
-		var backupResp struct {
-			Backups []struct {
-				ID   string `json:"id"`
-				Size int64  `json:"size"`
-				Name string `json:"name"`
-			} `json:"backups"`
-			Count int `json:"count"`
-		}
-		json.NewDecoder(resp.Body).Decode(&backupResp)
-		resp.Body.Close()
-		stats.TotalBackups = backupResp.Count
-		for _, b := range backupResp.Backups {
-			stats.TotalSize += b.Size
-			if strings.HasSuffix(b.Name, ".enc") {
+	// Get backup stats
+	rows, err := config.DB.Query("SELECT size, encrypted FROM backups")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var size int64
+			var encrypted bool
+			rows.Scan(&size, &encrypted)
+			stats.TotalBackups++
+			stats.TotalSize += size
+			if encrypted {
 				stats.EncryptedBackups++
 			}
 		}
-		stats.TotalSizeHuman = formatBytes(stats.TotalSize)
 	}
+	stats.TotalSizeHuman = formatBytes(stats.TotalSize)
 
-	var count int
-	config.DB.QueryRow("SELECT COUNT(*) FROM restore_jobs").Scan(&count)
-	stats.RestoreJobs = count
+	// Get restore jobs count
+	config.DB.QueryRow("SELECT COUNT(*) FROM restore_jobs").Scan(&stats.RestoreJobs)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
 
+// Schedule handlers (integrated)
 func listSchedulesHandler(w http.ResponseWriter, r *http.Request) {
-	proxyRequest(w, r, config.SchedulerURL+"/schedules", "GET", nil)
+	rows, err := config.DB.Query(`
+		SELECT id, name, cron_expression, type, target, enabled, created_at, updated_at, last_run_at, next_run_at
+		FROM schedules ORDER BY created_at DESC
+	`)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	schedules := []Schedule{}
+	for rows.Next() {
+		var s Schedule
+		rows.Scan(&s.ID, &s.Name, &s.CronExpr, &s.Type, &s.Target, &s.Enabled, &s.CreatedAt, &s.UpdatedAt, &s.LastRunAt, &s.NextRunAt)
+		schedules = append(schedules, s)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(schedules)
 }
 
 func createScheduleHandler(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
-	proxyRequest(w, r, config.SchedulerURL+"/schedules", "POST", body)
+	var req struct {
+		Name     string `json:"name"`
+		Type     string `json:"type"`
+		CronExpr string `json:"cron_expression"`
+		Target   string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	id := uuid.New().String()
+	_, err := config.DB.Exec(`
+		INSERT INTO schedules (id, name, cron_expression, type, target)
+		VALUES ($1, $2, $3, $4, $5)
+	`, id, req.Name, req.CronExpr, req.Type, req.Target)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "created"})
 }
 
 func deleteScheduleHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	proxyRequest(w, r, config.SchedulerURL+"/schedules/"+vars["id"], "DELETE", nil)
+	_, err := config.DB.Exec("DELETE FROM schedules WHERE id = $1", vars["id"])
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 }
 
 func triggerScheduleHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	proxyRequest(w, r, config.SchedulerURL+"/schedules/"+vars["id"]+"/run", "POST", nil)
+	scheduleID := vars["id"]
+
+	// Get schedule details
+	var name, target, schedType string
+	err := config.DB.QueryRow("SELECT name, target, type FROM schedules WHERE id = $1", scheduleID).Scan(&name, &target, &schedType)
+	if err != nil {
+		http.Error(w, `{"error": "Schedule not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Create backup
+	backupID := uuid.New().String()
+	backupData := fmt.Sprintf("Scheduled backup: %s, Target: %s, Time: %s", name, target, time.Now().Format(time.RFC3339))
+	backupPath := filepath.Join(config.BackupDir, backupID+".dat")
+
+	if err := os.WriteFile(backupPath, []byte(backupData), 0644); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to write backup: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	// Save backup metadata
+	_, err = config.DB.Exec(`
+		INSERT INTO backups (id, source_path, backup_path, size, description, status, type, encrypted)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, backupID, target, backupPath, len(backupData), name, "completed", schedType, false)
+	if err != nil {
+		log.Printf("Failed to save backup metadata: %v", err)
+	}
+
+	// Update schedule last run
+	config.DB.Exec("UPDATE schedules SET last_run_at = $1, updated_at = $1 WHERE id = $2", time.Now(), scheduleID)
+
+	// Add to history
+	historyID := uuid.New().String()
+	config.DB.Exec(`
+		INSERT INTO backup_history (id, schedule_id, status, started_at, completed_at, size, message)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, historyID, scheduleID, "completed", time.Now(), time.Now(), len(backupData), "Manual trigger successful")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":    "completed",
+		"job_id":    historyID,
+		"backup_id": backupID,
+	})
 }
 
 func getScheduleHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	limit := r.URL.Query().Get("limit")
-	url := config.SchedulerURL + "/schedules/" + vars["id"] + "/history"
-	if limit != "" {
-		url += "?limit=" + limit
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
 	}
-	proxyRequest(w, r, url, "GET", nil)
+
+	rows, err := config.DB.Query(`
+		SELECT id, schedule_id, status, started_at, completed_at, size, message
+		FROM backup_history WHERE schedule_id = $1 ORDER BY started_at DESC LIMIT $2
+	`, vars["id"], limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	history := []map[string]interface{}{}
+	for rows.Next() {
+		var id, schedID, status, message string
+		var startedAt time.Time
+		var completedAt *time.Time
+		var size *int64
+		rows.Scan(&id, &schedID, &status, &startedAt, &completedAt, &size, &message)
+		entry := map[string]interface{}{
+			"id":          id,
+			"schedule_id": schedID,
+			"status":      status,
+			"started_at":  startedAt,
+			"message":     message,
+		}
+		if completedAt != nil {
+			entry["completed_at"] = completedAt
+		}
+		if size != nil {
+			entry["size"] = *size
+		}
+		history = append(history, entry)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
 }
 
+// Backup handlers (integrated)
 func listBackupsHandler(w http.ResponseWriter, r *http.Request) {
 	typeFilter := r.URL.Query().Get("type")
-	url := config.StorageURL + "/backups"
+
+	query := "SELECT id, source_path, backup_path, size, created_at, description, status, type, encrypted FROM backups ORDER BY created_at DESC"
+	var rows *sql.Rows
+	var err error
+
 	if typeFilter != "" {
-		url += "?type=" + typeFilter
+		query = "SELECT id, source_path, backup_path, size, created_at, description, status, type, encrypted FROM backups WHERE type = $1 ORDER BY created_at DESC"
+		rows, err = config.DB.Query(query, typeFilter)
+	} else {
+		rows, err = config.DB.Query(query)
 	}
-	proxyRequest(w, r, url, "GET", nil)
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	backups := []BackupEntry{}
+	for rows.Next() {
+		var b BackupEntry
+		rows.Scan(&b.ID, &b.SourcePath, &b.BackupPath, &b.Size, &b.CreatedAt, &b.Description, &b.Status, &b.Type, &b.Encrypted)
+		backups = append(backups, b)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"backups": backups,
+		"count":   len(backups),
+	})
 }
 
 func getBackupHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	proxyRequest(w, r, config.StorageURL+"/backups/"+vars["id"], "GET", nil)
+	var b BackupEntry
+	err := config.DB.QueryRow(`
+		SELECT id, source_path, backup_path, size, created_at, description, status, type, encrypted
+		FROM backups WHERE id = $1
+	`, vars["id"]).Scan(&b.ID, &b.SourcePath, &b.BackupPath, &b.Size, &b.CreatedAt, &b.Description, &b.Status, &b.Type, &b.Encrypted)
+
+	if err != nil {
+		http.Error(w, `{"error": "Backup not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(b)
 }
 
 func downloadBackupHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	resp, err := http.Get(config.StorageURL + "/backups/" + vars["id"] + "/download")
+	var backupPath string
+	var encrypted bool
+
+	err := config.DB.QueryRow("SELECT backup_path, encrypted FROM backups WHERE id = $1", vars["id"]).Scan(&backupPath, &encrypted)
 	if err != nil {
-		http.Error(w, "Failed to download backup", http.StatusInternalServerError)
+		http.Error(w, `{"error": "Backup not found"}`, http.StatusNotFound)
 		return
 	}
-	defer resp.Body.Close()
-	for k, v := range resp.Header {
-		w.Header()[k] = v
+
+	data, err := os.ReadFile(backupPath)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to read backup file"}`, http.StatusInternalServerError)
+		return
 	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	filename := filepath.Base(backupPath)
+	if encrypted {
+		filename += ".enc"
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	w.Write(data)
 }
 
 func triggerManualBackupHandler(w http.ResponseWriter, r *http.Request) {
@@ -351,115 +540,122 @@ func triggerManualBackupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	backupID := uuid.New().String()
 	backupData := fmt.Sprintf("Manual backup: %s, Type: %s, Target: %s, Time: %s",
 		req.Name, req.Type, req.Target, time.Now().Format(time.RFC3339))
 
-	var finalData string
+	var finalData []byte
 	var backupName string
+	encrypted := false
+
 	if req.Encrypt && config.VaultIntegration {
-		encrypted, err := encryptWithVault([]byte(backupData))
+		encryptedData, err := encryptWithVault([]byte(backupData))
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error": "Encryption failed: %v"}`, err), http.StatusInternalServerError)
 			return
 		}
-		finalData = base64.StdEncoding.EncodeToString(encrypted)
+		finalData = encryptedData
 		backupName = req.Name + ".enc"
+		encrypted = true
 	} else {
-		finalData = base64.StdEncoding.EncodeToString([]byte(backupData))
+		finalData = []byte(backupData)
 		backupName = req.Name
 	}
 
-	storeReq := map[string]string{
-		"name": backupName,
-		"type": req.Type,
-		"data": finalData,
-	}
-	body, _ := json.Marshal(storeReq)
-
-	resp, err := http.Post(config.StorageURL+"/backups", "application/json", bytes.NewReader(body))
-	if err != nil {
-		http.Error(w, `{"error": "Failed to store backup"}`, http.StatusInternalServerError)
+	backupPath := filepath.Join(config.BackupDir, backupID+".dat")
+	if err := os.WriteFile(backupPath, finalData, 0644); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to write backup: %v"}`, err), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
 
-	result := make(map[string]interface{})
-	json.NewDecoder(resp.Body).Decode(&result)
-	if result == nil {
-		result = make(map[string]interface{})
+	// Save to database
+	_, err := config.DB.Exec(`
+		INSERT INTO backups (id, source_path, backup_path, size, description, status, type, encrypted)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, backupID, req.Target, backupPath, len(finalData), backupName, "completed", req.Type, encrypted)
+	if err != nil {
+		log.Printf("Failed to save backup metadata: %v", err)
 	}
-	result["encrypted"] = req.Encrypt && config.VaultIntegration
-	result["name"] = backupName
-	result["status"] = "completed"
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":        backupID,
+		"name":      backupName,
+		"status":    "completed",
+		"encrypted": encrypted,
+		"size":      len(finalData),
+	})
 }
 
+// Restore handlers
 func listRestorePointsHandler(w http.ResponseWriter, r *http.Request) {
-	resp, err := http.Get(config.StorageURL + "/backups")
+	rows, err := config.DB.Query(`
+		SELECT id, source_path, backup_path, size, created_at, description, status, type, encrypted
+		FROM backups ORDER BY created_at DESC
+	`)
 	if err != nil {
-		http.Error(w, `{"error": "Failed to fetch backups"}`, http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
+	defer rows.Close()
 
-	var backupResp struct {
-		Backups []struct {
-			ID          string    `json:"id"`
-			SourcePath  string    `json:"source_path"`
-			BackupPath  string    `json:"backup_path"`
-			Size        int64     `json:"size"`
-			CreatedAt   time.Time `json:"created_at"`
-			Description string    `json:"description"`
-			Status      string    `json:"status"`
-		} `json:"backups"`
-	}
-	json.NewDecoder(resp.Body).Decode(&backupResp)
+	points := []RestorePoint{}
+	for rows.Next() {
+		var b BackupEntry
+		rows.Scan(&b.ID, &b.SourcePath, &b.BackupPath, &b.Size, &b.CreatedAt, &b.Description, &b.Status, &b.Type, &b.Encrypted)
 
-	restorePoints := make([]RestorePoint, len(backupResp.Backups))
-	for i, b := range backupResp.Backups {
 		backupName := b.Description
 		if backupName == "" {
 			backupName = b.SourcePath
 		}
-		restorePoints[i] = RestorePoint{
+
+		points = append(points, RestorePoint{
 			ID:         b.ID,
 			BackupID:   b.ID,
 			BackupName: backupName,
-			Type:       "file",
+			Type:       b.Type,
 			Size:       b.Size,
 			CreatedAt:  b.CreatedAt,
-			Encrypted:  strings.HasSuffix(b.BackupPath, ".enc"),
+			Encrypted:  b.Encrypted,
 			Status:     b.Status,
-		}
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(restorePoints)
+	json.NewEncoder(w).Encode(points)
 }
 
 func startRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		BackupID   string `json:"backup_id"`
-		TargetTime string `json:"target_time,omitempty"`
+		TargetPath string `json:"target_path,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
 		return
 	}
 
+	// Verify backup exists
+	var backupPath string
+	var encrypted bool
+	err := config.DB.QueryRow("SELECT backup_path, encrypted FROM backups WHERE id = $1", req.BackupID).Scan(&backupPath, &encrypted)
+	if err != nil {
+		http.Error(w, `{"error": "Backup not found"}`, http.StatusNotFound)
+		return
+	}
+
 	jobID := uuid.New().String()
 	startTime := time.Now()
 
-	_, err := config.DB.Exec(`INSERT INTO restore_jobs (id, backup_id, status, started_at) VALUES ($1, $2, $3, $4)`,
+	_, err = config.DB.Exec(`INSERT INTO restore_jobs (id, backup_id, status, started_at) VALUES ($1, $2, $3, $4)`,
 		jobID, req.BackupID, "running", startTime)
 	if err != nil {
 		http.Error(w, `{"error": "Failed to create restore job"}`, http.StatusInternalServerError)
 		return
 	}
 
-	go executeRestore(jobID, req.BackupID)
+	// Execute restore in background
+	go executeRestore(jobID, req.BackupID, backupPath, encrypted, req.TargetPath)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -470,34 +666,38 @@ func startRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func executeRestore(jobID, backupID string) {
-	time.Sleep(3 * time.Second)
+func executeRestore(jobID, backupID, backupPath string, encrypted bool, targetPath string) {
+	// Simulate some processing time
+	time.Sleep(2 * time.Second)
 
-	resp, err := http.Get(config.StorageURL + "/backups/" + backupID + "/download")
+	// Read backup file
+	data, err := os.ReadFile(backupPath)
 	if err != nil {
-		updateRestoreJob(jobID, "failed", "Failed to download backup: "+err.Error())
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		updateRestoreJob(jobID, "failed", "Backup not found")
+		updateRestoreJob(jobID, "failed", fmt.Sprintf("Failed to read backup file: %v", err))
 		return
 	}
 
-	data, _ := io.ReadAll(resp.Body)
-
-	contentDisp := resp.Header.Get("Content-Disposition")
-	if strings.Contains(contentDisp, ".enc") {
+	// Decrypt if needed
+	if encrypted {
 		decrypted, err := decryptWithVault(data)
 		if err != nil {
-			updateRestoreJob(jobID, "failed", "Decryption failed: "+err.Error())
+			updateRestoreJob(jobID, "failed", fmt.Sprintf("Decryption failed: %v", err))
 			return
 		}
 		data = decrypted
 	}
 
-	time.Sleep(2 * time.Second)
+	// If target path is specified, write the restored data
+	if targetPath != "" {
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			updateRestoreJob(jobID, "failed", fmt.Sprintf("Failed to create target directory: %v", err))
+			return
+		}
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			updateRestoreJob(jobID, "failed", fmt.Sprintf("Failed to write restored data: %v", err))
+			return
+		}
+	}
 
 	log.Printf("Restore job %s completed, restored %d bytes", jobID, len(data))
 	updateRestoreJob(jobID, "completed", fmt.Sprintf("Successfully restored %d bytes", len(data)))
@@ -550,26 +750,11 @@ func getRestoreJobHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func vaultStatusHandler(w http.ResponseWriter, r *http.Request) {
-	resp, err := http.Get(config.VaultURL + "/health")
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"available":   false,
-			"integration": config.VaultIntegration,
-			"error":       err.Error(),
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	var vaultHealth map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&vaultHealth)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"available":   true,
 		"integration": config.VaultIntegration,
-		"vault":       vaultHealth,
+		"message":     "Using local AES-256-GCM encryption",
 	})
 }
 
@@ -633,36 +818,6 @@ func decryptWithVault(data []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-func proxyRequest(w http.ResponseWriter, r *http.Request, url string, method string, body []byte) {
-	var req *http.Request
-	var err error
-
-	if body != nil {
-		req, err = http.NewRequest(method, url, bytes.NewReader(body))
-	} else {
-		req, err = http.NewRequest(method, url, nil)
-	}
-
-	if err != nil {
-		http.Error(w, `{"error": "Failed to create request"}`, http.StatusInternalServerError)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Upstream error: %v"}`, err), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-}
-
 func formatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -688,19 +843,9 @@ var dashboardHTML = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Backup Dashboard - HolmOS</title>
     <style>
-        :root {
-            --ctp-rosewater: #f5e0dc; --ctp-flamingo: #f2cdcd; --ctp-pink: #f5c2e7;
-            --ctp-mauve: #cba6f7; --ctp-red: #f38ba8; --ctp-maroon: #eba0ac;
-            --ctp-peach: #fab387; --ctp-yellow: #f9e2af; --ctp-green: #a6e3a1;
-            --ctp-teal: #94e2d5; --ctp-sky: #89dceb; --ctp-sapphire: #74c7ec;
-            --ctp-blue: #89b4fa; --ctp-lavender: #b4befe; --ctp-text: #cdd6f4;
-            --ctp-subtext1: #bac2de; --ctp-subtext0: #a6adc8; --ctp-overlay2: #9399b2;
-            --ctp-overlay1: #7f849c; --ctp-overlay0: #6c7086; --ctp-surface2: #585b70;
-            --ctp-surface1: #45475a; --ctp-surface0: #313244; --ctp-base: #1e1e2e;
-            --ctp-mantle: #181825; --ctp-crust: #11111b;
-        }
+        :root { --ctp-teal: #94e2d5; --ctp-green: #a6e3a1; --ctp-blue: #89b4fa; --ctp-mauve: #cba6f7; --ctp-red: #f38ba8; --ctp-yellow: #f9e2af; --ctp-text: #cdd6f4; --ctp-subtext0: #a6adc8; --ctp-subtext1: #bac2de; --ctp-overlay0: #6c7086; --ctp-surface0: #313244; --ctp-surface1: #45475a; --ctp-base: #1e1e2e; --ctp-mantle: #181825; --ctp-crust: #11111b; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; background: linear-gradient(135deg, var(--ctp-crust) 0%, var(--ctp-base) 50%, var(--ctp-mantle) 100%); color: var(--ctp-text); min-height: 100vh; line-height: 1.6; }
+        body { font-family: system-ui, sans-serif; background: linear-gradient(135deg, var(--ctp-crust) 0%, var(--ctp-base) 50%, var(--ctp-mantle) 100%); color: var(--ctp-text); min-height: 100vh; line-height: 1.6; }
         .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
         header { text-align: center; padding: 2rem; background: var(--ctp-mantle); border-radius: 1rem; margin-bottom: 2rem; border: 1px solid var(--ctp-surface0); }
         header h1 { color: var(--ctp-teal); font-size: 2.5rem; }
@@ -725,14 +870,13 @@ var dashboardHTML = `<!DOCTYPE html>
         .badge-warning { background: var(--ctp-yellow); color: var(--ctp-crust); }
         .badge-error { background: var(--ctp-red); color: var(--ctp-crust); }
         .badge-info { background: var(--ctp-blue); color: var(--ctp-crust); }
-        .badge-encrypted { background: var(--ctp-mauve); color: var(--ctp-crust); }
         .form-group { margin-bottom: 1rem; }
         .form-group label { display: block; color: var(--ctp-subtext1); margin-bottom: 0.5rem; }
         input, select, textarea { width: 100%; padding: 0.75rem; background: var(--ctp-surface0); border: 2px solid var(--ctp-surface1); border-radius: 0.5rem; color: var(--ctp-text); font-size: 1rem; }
         input:focus, select:focus { outline: none; border-color: var(--ctp-teal); }
         button { background: linear-gradient(135deg, var(--ctp-teal) 0%, var(--ctp-green) 100%); color: var(--ctp-crust); border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer; font-weight: 600; transition: all 0.2s; }
         button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(148, 226, 213, 0.3); }
-        .btn-danger { background: linear-gradient(135deg, var(--ctp-red) 0%, var(--ctp-maroon) 100%); }
+        .btn-danger { background: linear-gradient(135deg, var(--ctp-red) 0%, #eba0ac 100%); }
         .btn-secondary { background: var(--ctp-surface1); color: var(--ctp-text); }
         .btn-small { padding: 0.5rem 1rem; font-size: 0.875rem; }
         .actions { display: flex; gap: 0.5rem; }
@@ -750,8 +894,8 @@ var dashboardHTML = `<!DOCTYPE html>
         .empty-state { text-align: center; padding: 3rem; color: var(--ctp-overlay0); }
         .checkbox-group { display: flex; align-items: center; gap: 0.5rem; }
         .checkbox-group input[type="checkbox"] { width: auto; accent-color: var(--ctp-teal); }
-        .service-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
-        .service-badge { display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1rem; background: var(--ctp-surface0); border-radius: 0.5rem; }
+        .service-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-top: 1rem; }
+        .service-badge { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: var(--ctp-surface0); border-radius: 0.5rem; font-size: 0.9rem; }
         .service-badge.online { border-left: 3px solid var(--ctp-green); }
         .service-badge.offline { border-left: 3px solid var(--ctp-red); }
         .status-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -766,288 +910,65 @@ var dashboardHTML = `<!DOCTYPE html>
             <p>Unified backup management for HolmOS</p>
             <div class="service-status" id="service-status"></div>
         </header>
-
-        <div class="stats-grid" id="stats-grid">
+        <div class="stats-grid">
             <div class="stat-card"><div class="value" id="stat-schedules">-</div><div class="label">Active Schedules</div></div>
             <div class="stat-card"><div class="value" id="stat-backups">-</div><div class="label">Total Backups</div></div>
             <div class="stat-card"><div class="value" id="stat-size">-</div><div class="label">Storage Used</div></div>
             <div class="stat-card"><div class="value" id="stat-encrypted">-</div><div class="label">Encrypted</div></div>
         </div>
-
         <div class="tabs">
             <button class="tab active" onclick="showTab('schedules', this)">Schedules</button>
-            <button class="tab" onclick="showTab('backups', this)">Backup History</button>
-            <button class="tab" onclick="showTab('manual', this)">Manual Backup</button>
+            <button class="tab" onclick="showTab('backups', this)">History</button>
+            <button class="tab" onclick="showTab('manual', this)">Manual</button>
             <button class="tab" onclick="showTab('restore', this)">Restore</button>
-            <button class="tab" onclick="showTab('vault', this)">Vault Integration</button>
+            <button class="tab" onclick="showTab('vault', this)">Vault</button>
         </div>
-
         <div id="schedules" class="tab-content active">
             <div class="grid-2">
-                <div class="card">
-                    <h2>Scheduled Backups</h2>
-                    <table><thead><tr><th>Name</th><th>Schedule</th><th>Type</th><th>Next Run</th><th>Actions</th></tr></thead><tbody id="schedules-table"></tbody></table>
-                </div>
-                <div class="card">
-                    <h2>Create Schedule</h2>
-                    <form id="schedule-form">
-                        <div class="form-group"><label>Name</label><input type="text" id="sched-name" placeholder="Daily Database Backup" required></div>
-                        <div class="form-group"><label>Type</label><select id="sched-type"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="custom">Custom</option></select></div>
-                        <div class="form-group"><label>Cron Expression</label><input type="text" id="sched-cron" placeholder="0 0 2 * * *" required></div>
-                        <div class="form-group"><label>Target</label><input type="text" id="sched-target" placeholder="/data/important" required></div>
-                        <button type="submit">Create Schedule</button>
-                    </form>
-                </div>
+                <div class="card"><h2>Scheduled Backups</h2><table><thead><tr><th>Name</th><th>Schedule</th><th>Type</th><th>Actions</th></tr></thead><tbody id="schedules-table"></tbody></table></div>
+                <div class="card"><h2>Create Schedule</h2><form id="schedule-form"><div class="form-group"><label>Name</label><input type="text" id="sched-name" required></div><div class="form-group"><label>Type</label><select id="sched-type"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div><div class="form-group"><label>Cron</label><input type="text" id="sched-cron" placeholder="0 0 2 * * *" required></div><div class="form-group"><label>Target</label><input type="text" id="sched-target" required></div><button type="submit">Create</button></form></div>
             </div>
         </div>
-
-        <div id="backups" class="tab-content">
-            <div class="card">
-                <h2>Backup History</h2>
-                <div style="margin-bottom: 1rem;"><select id="backup-type-filter" onchange="loadBackups()"><option value="">All Types</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="manual">Manual</option><option value="database">Database</option></select></div>
-                <table><thead><tr><th>Description</th><th>Source</th><th>Size</th><th>Created</th><th>Status</th><th>Actions</th></tr></thead><tbody id="backups-table"></tbody></table>
-            </div>
-        </div>
-
+        <div id="backups" class="tab-content"><div class="card"><h2>Backup History</h2><table><thead><tr><th>Description</th><th>Source</th><th>Size</th><th>Created</th><th>Status</th><th>Actions</th></tr></thead><tbody id="backups-table"></tbody></table></div></div>
         <div id="manual" class="tab-content">
             <div class="grid-2">
-                <div class="card">
-                    <h2>Trigger Manual Backup</h2>
-                    <form id="manual-form">
-                        <div class="form-group"><label>Backup Name</label><input type="text" id="manual-name" placeholder="pre-deploy-backup" required></div>
-                        <div class="form-group"><label>Backup Type</label><select id="manual-type"><option value="manual">Manual</option><option value="database">Database</option><option value="files">Files</option><option value="config">Configuration</option></select></div>
-                        <div class="form-group"><label>Target Path</label><input type="text" id="manual-target" placeholder="/data/app"></div>
-                        <div class="form-group"><div class="checkbox-group"><input type="checkbox" id="manual-encrypt" checked><label for="manual-encrypt">Encrypt with Vault</label></div></div>
-                        <button type="submit">Start Backup</button>
-                    </form>
-                </div>
-                <div class="card">
-                    <h2>Quick Actions</h2>
-                    <div style="display: flex; flex-direction: column; gap: 1rem;">
-                        <button onclick="triggerScheduleBackups()">Run All Scheduled Backups</button>
-                        <button class="btn-secondary" onclick="loadBackups()">Refresh Backup List</button>
-                    </div>
-                </div>
+                <div class="card"><h2>Manual Backup</h2><form id="manual-form"><div class="form-group"><label>Name</label><input type="text" id="manual-name" required></div><div class="form-group"><label>Type</label><select id="manual-type"><option value="manual">Manual</option><option value="database">Database</option><option value="files">Files</option></select></div><div class="form-group"><label>Target</label><input type="text" id="manual-target"></div><div class="form-group"><div class="checkbox-group"><input type="checkbox" id="manual-encrypt" checked><label for="manual-encrypt">Encrypt</label></div></div><button type="submit">Start Backup</button></form></div>
+                <div class="card"><h2>Quick Actions</h2><div style="display: flex; flex-direction: column; gap: 1rem;"><button onclick="triggerAll()">Run All Schedules</button><button class="btn-secondary" onclick="loadBackups()">Refresh</button></div></div>
             </div>
         </div>
-
         <div id="restore" class="tab-content">
             <div class="grid-2">
-                <div class="card">
-                    <h2>Available Restore Points</h2>
-                    <div class="timeline" id="restore-points"></div>
-                </div>
-                <div class="card">
-                    <h2>Restore Operations</h2>
-                    <div id="selected-restore" style="margin-bottom: 1rem; padding: 1rem; background: var(--ctp-surface0); border-radius: 0.5rem;"><p style="color: var(--ctp-overlay0);">Select a restore point from the timeline</p></div>
-                    <button id="start-restore-btn" onclick="startRestore()" disabled>Start Restore</button>
-                    <h3 style="margin-top: 2rem; margin-bottom: 1rem; color: var(--ctp-subtext1);">Recent Restore Jobs</h3>
-                    <div id="restore-jobs"></div>
-                </div>
+                <div class="card"><h2>Restore Points</h2><div class="timeline" id="restore-points"></div></div>
+                <div class="card"><h2>Restore</h2><div id="selected-restore" style="padding: 1rem; background: var(--ctp-surface0); border-radius: 0.5rem; margin-bottom: 1rem;"><p style="color: var(--ctp-overlay0);">Select a restore point</p></div><button id="start-restore-btn" onclick="startRestore()" disabled>Start Restore</button><h3 style="margin-top: 2rem; color: var(--ctp-subtext1);">Recent Jobs</h3><div id="restore-jobs"></div></div>
             </div>
         </div>
-
         <div id="vault" class="tab-content">
-            <div class="card">
-                <h2>Vault Integration Status</h2>
-                <div id="vault-status" class="vault-status"><span>Checking connection...</span></div>
-            </div>
-            <div class="grid-2">
-                <div class="card">
-                    <h2>Encryption Settings</h2>
-                    <p style="color: var(--ctp-subtext0); margin-bottom: 1rem;">All encrypted backups use AES-256-GCM encryption. Keys are managed securely through the Vault agent.</p>
-                    <div class="form-group"><div class="checkbox-group"><input type="checkbox" id="auto-encrypt" checked><label for="auto-encrypt">Auto-encrypt all new backups</label></div></div>
-                </div>
-                <div class="card">
-                    <h2>Test Encryption</h2>
-                    <div class="form-group"><label>Test Data</label><textarea id="test-data" rows="3" placeholder="Enter text to encrypt..."></textarea></div>
-                    <button onclick="testEncryption()">Test Encryption</button>
-                    <div id="encryption-result" style="margin-top: 1rem;"></div>
-                </div>
-            </div>
+            <div class="card"><h2>Vault Status</h2><div id="vault-status" class="vault-status"><span>Checking...</span></div></div>
+            <div class="grid-2"><div class="card"><h2>Encryption</h2><p style="color: var(--ctp-subtext0);">AES-256-GCM encryption for all backups.</p></div><div class="card"><h2>Test</h2><div class="form-group"><textarea id="test-data" rows="2" placeholder="Enter text..."></textarea></div><button onclick="testEncrypt()">Test</button><div id="enc-result" style="margin-top: 1rem;"></div></div></div>
         </div>
     </div>
-
     <script>
-        var selectedRestorePoint = null;
-
-        function showTab(tabId, btn) {
-            document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
-            document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
-            document.getElementById(tabId).classList.add('active');
-            btn.classList.add('active');
-            if (tabId === 'schedules') loadSchedules();
-            if (tabId === 'backups') loadBackups();
-            if (tabId === 'restore') { loadRestorePoints(); loadRestoreJobs(); }
-            if (tabId === 'vault') loadVaultStatus();
-        }
-
-        function loadServiceStatus() {
-            fetch('/health').then(function(r) { return r.json(); }).then(function(status) {
-                var container = document.getElementById('service-status');
-                var services = ['database', 'scheduler', 'storage'];
-                container.innerHTML = services.map(function(s) {
-                    var isOnline = status[s] === 'healthy';
-                    return '<div class="service-badge ' + (isOnline ? 'online' : 'offline') + '"><span class="status-dot ' + (isOnline ? 'online' : 'offline') + '"></span><span>' + s.charAt(0).toUpperCase() + s.slice(1) + '</span></div>';
-                }).join('');
-            }).catch(function(e) { console.error('Failed to load service status:', e); });
-        }
-
-        function loadStats() {
-            fetch('/api/stats').then(function(r) { return r.json(); }).then(function(stats) {
-                document.getElementById('stat-schedules').textContent = stats.active_schedules + '/' + stats.total_schedules;
-                document.getElementById('stat-backups').textContent = stats.total_backups;
-                document.getElementById('stat-size').textContent = stats.total_size_human || '0 B';
-                document.getElementById('stat-encrypted').textContent = stats.encrypted_backups;
-            }).catch(function(e) { console.error('Failed to load stats:', e); });
-        }
-
-        function loadSchedules() {
-            fetch('/api/schedules').then(function(r) { return r.json(); }).then(function(schedules) {
-                var tbody = document.getElementById('schedules-table');
-                if (!schedules || schedules.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No schedules configured</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = schedules.map(function(s) {
-                    return '<tr><td>' + escapeHtml(s.name) + '</td><td><code>' + s.cron_expression + '</code></td><td><span class="badge badge-info">' + s.type + '</span></td><td>' + (s.next_run_at ? new Date(s.next_run_at).toLocaleString() : 'Not scheduled') + '</td><td class="actions"><button class="btn-small" onclick="runSchedule(\'' + s.id + '\')">Run Now</button><button class="btn-small btn-danger" onclick="deleteSchedule(\'' + s.id + '\')">Delete</button></td></tr>';
-                }).join('');
-            }).catch(function(e) { console.error('Failed to load schedules:', e); });
-        }
-
-        function loadBackups() {
-            var typeFilter = document.getElementById('backup-type-filter').value;
-            var url = typeFilter ? '/api/backups?type=' + typeFilter : '/api/backups';
-            fetch(url).then(function(r) { return r.json(); }).then(function(data) {
-                var backups = data.backups || [];
-                var tbody = document.getElementById('backups-table');
-                if (!backups || backups.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No backups found</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = backups.map(function(b) {
-                    var name = b.description || b.source_path || 'Backup';
-                    return '<tr><td>' + escapeHtml(name) + '</td><td>' + escapeHtml(b.source_path || '-') + '</td><td>' + formatBytes(b.size) + '</td><td>' + new Date(b.created_at).toLocaleString() + '</td><td><span class="badge ' + (b.status === 'completed' ? 'badge-success' : 'badge-warning') + '">' + b.status + '</span></td><td class="actions"><button class="btn-small btn-secondary" onclick="downloadBackup(\'' + b.id + '\')">Download</button></td></tr>';
-                }).join('');
-            }).catch(function(e) { console.error('Failed to load backups:', e); });
-        }
-
-        function loadRestorePoints() {
-            fetch('/api/restore/points').then(function(r) { return r.json(); }).then(function(points) {
-                var container = document.getElementById('restore-points');
-                if (!points || points.length === 0) {
-                    container.innerHTML = '<div class="empty-state">No restore points available</div>';
-                    return;
-                }
-                container.innerHTML = points.map(function(p) {
-                    return '<div class="timeline-item" onclick="selectRestorePoint(\'' + p.id + '\', \'' + escapeHtml(p.backup_name) + '\', \'' + p.type + '\', ' + p.size + ', \'' + p.created_at + '\', ' + p.encrypted + ')"><div style="display: flex; justify-content: space-between; align-items: center;"><div><strong>' + escapeHtml(p.backup_name) + '</strong><div style="font-size: 0.85rem; color: var(--ctp-subtext0);">' + new Date(p.created_at).toLocaleString() + '</div></div><div><span class="badge badge-info">' + p.type + '</span>' + (p.encrypted ? '<span class="badge badge-encrypted">Encrypted</span>' : '') + '</div></div><div style="font-size: 0.85rem; color: var(--ctp-overlay0); margin-top: 0.5rem;">' + formatBytes(p.size) + '</div></div>';
-                }).join('');
-            }).catch(function(e) { console.error('Failed to load restore points:', e); });
-        }
-
-        function selectRestorePoint(id, name, type, size, createdAt, encrypted) {
-            selectedRestorePoint = { id: id, name: name, type: type, size: size, createdAt: createdAt, encrypted: encrypted };
-            document.querySelectorAll('.timeline-item').forEach(function(el) { el.classList.remove('selected'); });
-            event.currentTarget.classList.add('selected');
-            document.getElementById('selected-restore').innerHTML = '<h4 style="margin-bottom: 0.5rem;">Selected: ' + name + '</h4><p>Type: ' + type + ' | Size: ' + formatBytes(size) + '</p><p>Created: ' + new Date(createdAt).toLocaleString() + '</p>' + (encrypted ? '<p><span class="badge badge-encrypted">Will be decrypted during restore</span></p>' : '');
-            document.getElementById('start-restore-btn').disabled = false;
-        }
-
-        function startRestore() {
-            if (!selectedRestorePoint) return;
-            if (!confirm('Are you sure you want to restore from this backup point?')) return;
-            fetch('/api/restore/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ backup_id: selectedRestorePoint.id }) }).then(function(r) { return r.json(); }).then(function(result) {
-                alert('Restore job started: ' + result.job_id);
-                loadRestoreJobs();
-            }).catch(function(e) { alert('Failed to start restore: ' + e.message); });
-        }
-
-        function loadRestoreJobs() {
-            fetch('/api/restore/jobs?limit=10').then(function(r) { return r.json(); }).then(function(jobs) {
-                var container = document.getElementById('restore-jobs');
-                if (!jobs || jobs.length === 0) {
-                    container.innerHTML = '<div class="empty-state">No restore jobs yet</div>';
-                    return;
-                }
-                container.innerHTML = jobs.map(function(j) {
-                    return '<div style="padding: 0.75rem; background: var(--ctp-surface0); border-radius: 0.5rem; margin-bottom: 0.5rem;"><div style="display: flex; justify-content: space-between; align-items: center;"><span>Job: ' + j.id.substring(0, 8) + '...</span><span class="badge ' + (j.status === 'completed' ? 'badge-success' : j.status === 'failed' ? 'badge-error' : 'badge-warning') + '">' + j.status + '</span></div><div style="font-size: 0.85rem; color: var(--ctp-subtext0); margin-top: 0.25rem;">' + (j.message || 'Processing...') + '</div></div>';
-                }).join('');
-            }).catch(function(e) { console.error('Failed to load restore jobs:', e); });
-        }
-
-        function loadVaultStatus() {
-            fetch('/api/vault/status').then(function(r) { return r.json(); }).then(function(status) {
-                var container = document.getElementById('vault-status');
-                if (status.available) {
-                    container.className = 'vault-status connected';
-                    container.innerHTML = '<span style="color: var(--ctp-green);">&#x2713;</span><span>Vault Connected - Encryption Active</span>';
-                } else {
-                    container.className = 'vault-status disconnected';
-                    container.innerHTML = '<span style="color: var(--ctp-red);">&#x2717;</span><span>Vault Disconnected - Using local encryption</span>';
-                }
-            }).catch(function(e) { console.error('Failed to load vault status:', e); });
-        }
-
-        function runSchedule(id) {
-            fetch('/api/schedules/' + id + '/run', { method: 'POST' }).then(function() { alert('Backup triggered'); setTimeout(loadStats, 1000); }).catch(function() { alert('Failed to trigger backup'); });
-        }
-
-        function deleteSchedule(id) {
-            if (!confirm('Delete this schedule?')) return;
-            fetch('/api/schedules/' + id, { method: 'DELETE' }).then(function() { loadSchedules(); loadStats(); }).catch(function() { alert('Failed to delete schedule'); });
-        }
-
-        function downloadBackup(id) { window.open('/api/backups/' + id + '/download', '_blank'); }
-
-        document.getElementById('schedule-form').addEventListener('submit', function(e) {
-            e.preventDefault();
-            var data = { name: document.getElementById('sched-name').value, type: document.getElementById('sched-type').value, cron_expression: document.getElementById('sched-cron').value, target: document.getElementById('sched-target').value };
-            fetch('/api/schedules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then(function(res) {
-                if (res.ok) { e.target.reset(); loadSchedules(); loadStats(); } else { res.json().then(function(err) { alert('Error: ' + err.error); }); }
-            }).catch(function() { alert('Failed to create schedule'); });
-        });
-
-        document.getElementById('manual-form').addEventListener('submit', function(e) {
-            e.preventDefault();
-            var data = { name: document.getElementById('manual-name').value, type: document.getElementById('manual-type').value, target: document.getElementById('manual-target').value, encrypt: document.getElementById('manual-encrypt').checked };
-            fetch('/api/backup/manual', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then(function(res) {
-                if (res.ok) { alert('Manual backup completed!'); e.target.reset(); loadStats(); } else { res.json().then(function(err) { alert('Error: ' + err.error); }); }
-            }).catch(function() { alert('Failed to create backup'); });
-        });
-
-        function triggerScheduleBackups() {
-            fetch('/api/schedules').then(function(r) { return r.json(); }).then(function(schedules) {
-                var promises = schedules.filter(function(s) { return s.enabled; }).map(function(s) { return fetch('/api/schedules/' + s.id + '/run', { method: 'POST' }); });
-                Promise.all(promises).then(function() { alert('All scheduled backups triggered'); loadStats(); });
-            });
-        }
-
-        function testEncryption() {
-            var data = document.getElementById('test-data').value;
-            if (!data) { alert('Enter some text to encrypt'); return; }
-            fetch('/api/vault/encrypt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: data }) }).then(function(r) { return r.json(); }).then(function(result) {
-                document.getElementById('encryption-result').innerHTML = '<div style="background: var(--ctp-surface0); padding: 1rem; border-radius: 0.5rem;"><strong>Encrypted:</strong><code style="word-break: break-all; display: block; margin-top: 0.5rem;">' + result.encrypted.substring(0, 100) + '...</code></div>';
-            }).catch(function() { alert('Encryption failed'); });
-        }
-
-        function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
-            var k = 1024;
-            var sizes = ['B', 'KB', 'MB', 'GB'];
-            var i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-        }
-
-        function escapeHtml(text) {
-            var div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        loadServiceStatus();
-        loadStats();
-        loadSchedules();
-        setInterval(loadServiceStatus, 30000);
+        var selPoint = null;
+        function showTab(id, btn) { document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active')); document.querySelectorAll('.tab').forEach(t => t.classList.remove('active')); document.getElementById(id).classList.add('active'); btn.classList.add('active'); if(id==='schedules')loadSchedules(); if(id==='backups')loadBackups(); if(id==='restore'){loadRestorePoints();loadRestoreJobs();} if(id==='vault')loadVault(); }
+        function loadStatus() { fetch('/health').then(r=>r.json()).then(s => { var c = document.getElementById('service-status'); c.innerHTML = ['database','scheduler','storage'].map(x => '<div class="service-badge '+(s[x]==='healthy'?'online':'offline')+'"><span class="status-dot '+(s[x]==='healthy'?'online':'offline')+'"></span>'+x.charAt(0).toUpperCase()+x.slice(1)+'</div>').join(''); }).catch(e => console.error('Health check failed:', e)); }
+        function loadStats() { fetch('/api/stats').then(r=>r.json()).then(s => { document.getElementById('stat-schedules').textContent = s.active_schedules+'/'+s.total_schedules; document.getElementById('stat-backups').textContent = s.total_backups; document.getElementById('stat-size').textContent = s.total_size_human||'0 B'; document.getElementById('stat-encrypted').textContent = s.encrypted_backups; }).catch(e => console.error('Stats load failed:', e)); }
+        function loadSchedules() { fetch('/api/schedules').then(r=>r.json()).then(d => { var t = document.getElementById('schedules-table'); if(!d||!d.length){t.innerHTML='<tr><td colspan="4" class="empty-state">No schedules</td></tr>';return;} t.innerHTML = d.map(s=>'<tr><td>'+esc(s.name)+'</td><td><code>'+s.cron_expression+'</code></td><td><span class="badge badge-info">'+s.type+'</span></td><td class="actions"><button class="btn-small" onclick="runSched(\''+s.id+'\')">Run</button><button class="btn-small btn-danger" onclick="delSched(\''+s.id+'\')">Del</button></td></tr>').join(''); }).catch(e => console.error('Schedules load failed:', e)); }
+        function loadBackups() { fetch('/api/backups').then(r=>r.json()).then(d => { var bs = d.backups||[]; var t = document.getElementById('backups-table'); if(!bs.length){t.innerHTML='<tr><td colspan="6" class="empty-state">No backups</td></tr>';return;} t.innerHTML = bs.map(b=>'<tr><td>'+esc(b.description||'-')+'</td><td>'+esc(b.source_path||'-')+'</td><td>'+fmt(b.size)+'</td><td>'+new Date(b.created_at).toLocaleString()+'</td><td><span class="badge badge-success">'+b.status+'</span></td><td><button class="btn-small btn-secondary" onclick="dl(\''+b.id+'\')">Download</button></td></tr>').join(''); }).catch(e => console.error('Backups load failed:', e)); }
+        function loadRestorePoints() { fetch('/api/restore/points').then(r=>r.json()).then(p => { var c = document.getElementById('restore-points'); if(!p||!p.length){c.innerHTML='<div class="empty-state">No restore points available</div>';return;} c.innerHTML = p.map(x=>'<div class="timeline-item" onclick="selRP(\''+x.id+'\',\''+esc(x.backup_name)+'\','+x.size+','+x.encrypted+')"><strong>'+esc(x.backup_name)+'</strong><div style="font-size:0.85rem;color:var(--ctp-subtext0);">'+new Date(x.created_at).toLocaleString()+' - '+fmt(x.size)+(x.encrypted?' <span class="badge" style="background:var(--ctp-mauve);color:var(--ctp-crust);">Encrypted</span>':'')+'</div></div>').join(''); }).catch(e => console.error('Restore points load failed:', e)); }
+        function selRP(id,name,size,encrypted) { selPoint={id:id,name:name,size:size,encrypted:encrypted}; document.querySelectorAll('.timeline-item').forEach(e=>e.classList.remove('selected')); event.currentTarget.classList.add('selected'); document.getElementById('selected-restore').innerHTML='<h4>'+name+'</h4><p>Size: '+fmt(size)+(encrypted?' (Encrypted - will be decrypted)':'')+'</p>'; document.getElementById('start-restore-btn').disabled=false; }
+        function startRestore() { if(!selPoint)return; if(!confirm('Start restore from "'+selPoint.name+'"?'))return; fetch('/api/restore/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({backup_id:selPoint.id})}).then(r=>r.json()).then(r=>{alert('Restore job started: '+r.job_id);loadRestoreJobs();}).catch(e => alert('Restore failed: '+e)); }
+        function loadRestoreJobs() { fetch('/api/restore/jobs?limit=10').then(r=>r.json()).then(j => { var c = document.getElementById('restore-jobs'); if(!j||!j.length){c.innerHTML='<div class="empty-state">No restore jobs</div>';return;} c.innerHTML = j.map(x=>'<div style="padding:0.75rem;background:var(--ctp-surface0);border-radius:0.5rem;margin-bottom:0.5rem;"><span>'+x.id.substring(0,8)+'...</span> <span class="badge '+(x.status==='completed'?'badge-success':x.status==='failed'?'badge-error':'badge-warning')+'">'+x.status+'</span><div style="font-size:0.85rem;color:var(--ctp-subtext0);">'+(x.message||'Processing...')+'</div></div>').join(''); }).catch(e => console.error('Restore jobs load failed:', e)); }
+        function loadVault() { fetch('/api/vault/status').then(r=>r.json()).then(s => { var c = document.getElementById('vault-status'); c.className='vault-status connected'; c.innerHTML='<span style="color:var(--ctp-green);">Active</span> <span>'+s.message+'</span>'; }).catch(e => console.error('Vault status load failed:', e)); }
+        function runSched(id) { fetch('/api/schedules/'+id+'/run',{method:'POST'}).then(r=>r.json()).then(r=>{alert('Backup completed! ID: '+r.backup_id);loadStats();loadBackups();}).catch(e => alert('Failed: '+e)); }
+        function delSched(id) { if(!confirm('Delete this schedule?'))return; fetch('/api/schedules/'+id,{method:'DELETE'}).then(()=>{loadSchedules();loadStats();}).catch(e => alert('Delete failed: '+e)); }
+        function dl(id) { window.open('/api/backups/'+id+'/download','_blank'); }
+        document.getElementById('schedule-form').addEventListener('submit', e => { e.preventDefault(); var d={name:document.getElementById('sched-name').value,type:document.getElementById('sched-type').value,cron_expression:document.getElementById('sched-cron').value,target:document.getElementById('sched-target').value}; fetch('/api/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)}).then(r=>{if(r.ok){e.target.reset();loadSchedules();loadStats();alert('Schedule created!');}else{r.json().then(j=>alert('Error: '+j.error));}}); });
+        document.getElementById('manual-form').addEventListener('submit', e => { e.preventDefault(); var d={name:document.getElementById('manual-name').value,type:document.getElementById('manual-type').value,target:document.getElementById('manual-target').value,encrypt:document.getElementById('manual-encrypt').checked}; fetch('/api/backup/manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)}).then(r=>r.json()).then(r=>{alert('Backup completed! ID: '+r.id+(r.encrypted?' (Encrypted)':''));e.target.reset();loadStats();loadBackups();}).catch(e => alert('Backup failed: '+e)); });
+        function triggerAll() { fetch('/api/schedules').then(r=>r.json()).then(s=>{if(!s.length){alert('No schedules to run');return;} Promise.all(s.filter(x=>x.enabled).map(x=>fetch('/api/schedules/'+x.id+'/run',{method:'POST'}))).then(()=>{alert('All schedules triggered!');loadStats();loadBackups();}); }); }
+        function testEncrypt() { var d=document.getElementById('test-data').value; if(!d){alert('Enter text to encrypt');return;} fetch('/api/vault/encrypt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:d})}).then(r=>r.json()).then(r=>{document.getElementById('enc-result').innerHTML='<div style="background:var(--ctp-surface0);padding:1rem;border-radius:0.5rem;"><strong>Encrypted:</strong><code style="word-break:break-all;display:block;margin-top:0.5rem;">'+r.encrypted.substring(0,80)+'...</code></div>';}); }
+        function fmt(b) { if(b===0)return'0 B'; var k=1024,s=['B','KB','MB','GB'],i=Math.floor(Math.log(b)/Math.log(k)); return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]; }
+        function esc(t) { var d=document.createElement('div'); d.textContent=t||''; return d.innerHTML; }
+        loadStatus(); loadStats(); loadSchedules(); setInterval(loadStatus,30000); setInterval(loadStats,60000);
     </script>
 </body>
 </html>` + "`"

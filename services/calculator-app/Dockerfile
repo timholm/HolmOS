@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM registry.registry.svc.cluster.local:5000/golang:1.21-alpine AS builder
 WORKDIR /app
 COPY go.mod ./
 COPY main.go .

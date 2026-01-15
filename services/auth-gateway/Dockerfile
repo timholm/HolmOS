@@ -1,4 +1,5 @@
-FROM public.ecr.aws/docker/library/busybox:latest
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY auth-gateway .
 RUN chmod +x auth-gateway

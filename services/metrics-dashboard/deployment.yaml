@@ -27,7 +27,7 @@ spec:
                 - openmediavault
       containers:
       - name: metrics-dashboard
-        image: registry.registry.svc.cluster.local:5000/holm/metrics-dashboard:latest
+        image: 192.168.8.197:30500/metrics-dashboard:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

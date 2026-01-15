@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM public.ecr.aws/docker/library/golang:1.21-alpine AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o metrics-dashboard .
 
 # Final image
-FROM alpine:3.19
+FROM public.ecr.aws/docker/library/alpine:3.19
 
 RUN apk --no-cache add ca-certificates
 

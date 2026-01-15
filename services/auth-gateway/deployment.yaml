@@ -33,7 +33,7 @@ spec:
                 - rpi-8
       containers:
       - name: auth-gateway
-        image: 10.110.67.87:5000/auth-gateway:latest
+        image: localhost:30500/auth-gateway:latest
         ports:
         - containerPort: 8080
         env:

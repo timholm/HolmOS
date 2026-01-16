@@ -327,6 +327,7 @@
             }
         }
 
+        /* Small height screens (landscape or small phones) */
         @media (max-height: 600px) {
             .display {
                 min-height: 80px;
@@ -343,6 +344,94 @@
 
             .btn {
                 font-size: 24px;
+            }
+        }
+
+        /* iPhone SE and small screens */
+        @media (max-width: 375px) {
+            .calculator {
+                padding: 12px;
+                border-radius: 16px;
+            }
+
+            .display {
+                min-height: 70px;
+                padding: 12px;
+                margin-bottom: 10px;
+                border-radius: 12px;
+            }
+
+            .expression {
+                font-size: 14px;
+            }
+
+            .result {
+                font-size: 44px;
+            }
+
+            .buttons {
+                gap: 8px;
+            }
+
+            .btn {
+                font-size: 22px;
+                width: 60px;
+                height: 60px;
+            }
+
+            .btn.zero {
+                width: 128px;
+            }
+        }
+
+        /* Very small height (iPhone SE landscape, notch phones) */
+        @media (max-height: 500px) {
+            .calculator {
+                padding: 8px;
+            }
+
+            .display {
+                min-height: 60px;
+                padding: 8px;
+                margin-bottom: 8px;
+            }
+
+            .result {
+                font-size: 32px;
+            }
+
+            .buttons {
+                gap: 6px;
+            }
+
+            .btn {
+                font-size: 20px;
+                width: 52px;
+                height: 52px;
+            }
+
+            .btn.zero {
+                width: 110px;
+            }
+        }
+
+        /* Ensure calculator fits in viewport */
+        @media (max-height: 700px) and (min-height: 600px) {
+            .calculator {
+                padding: 14px;
+            }
+
+            .display {
+                min-height: 90px;
+                padding: 14px;
+            }
+
+            .result {
+                font-size: 48px;
+            }
+
+            .btn {
+                font-size: 26px;
             }
         }
 

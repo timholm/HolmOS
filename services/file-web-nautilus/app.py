@@ -14,11 +14,72 @@ app = Flask(__name__)
 
 # Configuration
 BASE_PATH = os.environ.get('FILE_BASE_PATH', '/data')
-TRASH_PATH = os.path.join(BASE_PATH, '.trash')
-RECENT_FILE = os.path.join(BASE_PATH, '.recent.json')
-FAVORITES_FILE = os.path.join(BASE_PATH, '.favorites.json')
-THUMBNAIL_CACHE = os.path.join(BASE_PATH, '.thumbnails')
-BOOKMARKS_FILE = os.path.join(BASE_PATH, '.bookmarks.json')
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.storage_config.json')
+
+# Default storage configuration
+DEFAULT_STORAGE_CONFIG = {
+    'basePath': BASE_PATH,
+    'storageTarget': {
+        'type': 'pvc',  # pvc, storageclass, hostpath
+        'name': 'files-pvc',
+        'storageClass': 'local-path',
+        'hostPath': '/mnt/node13-ssd/files',  # Default to node13's 16TB SSDs
+        'node': 'node13'
+    },
+    'mountPaths': [
+        {'name': 'Primary (node13 SSDs)', 'path': '/mnt/node13-ssd/files', 'node': 'node13', 'default': True},
+        {'name': 'Secondary Storage', 'path': '/mnt/storage/files', 'node': 'node01', 'default': False},
+        {'name': 'Archive', 'path': '/mnt/archive/files', 'node': 'node02', 'default': False},
+    ]
+}
+
+def load_storage_config():
+    """Load storage configuration from file"""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                # Merge with defaults to ensure all keys exist
+                merged = DEFAULT_STORAGE_CONFIG.copy()
+                merged.update(config)
+                return merged
+    except Exception as e:
+        print(f"Error loading storage config: {e}")
+    return DEFAULT_STORAGE_CONFIG.copy()
+
+def save_storage_config(config):
+    """Save storage configuration to file"""
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error saving storage config: {e}")
+        return False
+
+def get_base_path():
+    """Get the current base path from config"""
+    config = load_storage_config()
+    return config.get('basePath', BASE_PATH)
+
+# Initialize paths based on config
+def init_paths():
+    base = get_base_path()
+    return {
+        'base': base,
+        'trash': os.path.join(base, '.trash'),
+        'recent': os.path.join(base, '.recent.json'),
+        'favorites': os.path.join(base, '.favorites.json'),
+        'thumbnails': os.path.join(base, '.thumbnails'),
+        'bookmarks': os.path.join(base, '.bookmarks.json'),
+    }
+
+PATHS = init_paths()
+TRASH_PATH = PATHS['trash']
+RECENT_FILE = PATHS['recent']
+FAVORITES_FILE = PATHS['favorites']
+THUMBNAIL_CACHE = PATHS['thumbnails']
+BOOKMARKS_FILE = PATHS['bookmarks']
 
 # Microservice URLs
 SERVICES = {
@@ -55,14 +116,16 @@ DEFAULT_LOCATIONS = [
 ]
 
 def safe_path(path):
+    base = get_base_path()
     if not path:
-        return BASE_PATH
-    abs_path = os.path.abspath(os.path.join(BASE_PATH, path.lstrip('/')))
-    if not abs_path.startswith(BASE_PATH):
+        return base
+    abs_path = os.path.abspath(os.path.join(base, path.lstrip('/')))
+    if not abs_path.startswith(base):
         return None
     return abs_path
 
 def get_file_info(filepath):
+    base = get_base_path()
     try:
         stat = os.stat(filepath)
         name = os.path.basename(filepath)
@@ -72,7 +135,7 @@ def get_file_info(filepath):
 
         return {
             'name': name,
-            'path': filepath.replace(BASE_PATH, '') or '/',
+            'path': filepath.replace(base, '') or '/',
             'isDir': is_dir,
             'size': stat.st_size if not is_dir else get_dir_size(filepath),
             'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),

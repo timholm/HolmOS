@@ -227,6 +227,11 @@ func main() {
 	http.HandleFunc("/api/trigger-build", handleTriggerBuild)
 	http.HandleFunc("/api/health-checks", handleHealthChecks)
 	http.HandleFunc("/api/scale", handleScale)
+	http.HandleFunc("/api/logs", handlePodLogs)
+	http.HandleFunc("/api/events/stream", handleEventStream)
+	http.HandleFunc("/api/apply", handleApplyManifest)
+	http.HandleFunc("/api/restart", handleRestart)
+	http.HandleFunc("/api/k8s-events", handleK8sEvents)
 
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

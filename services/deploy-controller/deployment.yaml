@@ -1,4 +1,47 @@
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deploy-controller
+  namespace: holm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: deploy-controller
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments/status"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: deploy-controller
+subjects:
+- kind: ServiceAccount
+  name: deploy-controller
+  namespace: holm
+roleRef:
+  kind: ClusterRole
+  name: deploy-controller
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,6 +60,7 @@ spec:
       labels:
         app: deploy-controller
     spec:
+      serviceAccountName: deploy-controller
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -33,6 +77,15 @@ spec:
         ports:
         - containerPort: 8080
           name: http
+        env:
+        - name: REGISTRY_URL
+          value: "192.168.8.197:30500"
+        - name: FORGE_URL
+          value: "http://forge.holm.svc.cluster.local"
+        - name: HOLMGIT_URL
+          value: "http://holm-git.holm.svc.cluster.local"
+        - name: RULES_CONFIGMAP
+          value: "deploy-controller-rules"
         resources:
           requests:
             memory: "64Mi"

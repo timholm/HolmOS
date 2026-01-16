@@ -309,6 +309,28 @@ def api_health():
         }
     })
 
+@app.route("/api/v1/kubeconfig")
+def api_kubeconfig():
+    """Download kubeconfig file for cluster access"""
+    try:
+        # Read kubeconfig from k3s
+        kubeconfig_path = "/etc/rancher/k3s/k3s.yaml"
+        if os.path.exists(kubeconfig_path):
+            with open(kubeconfig_path, 'r') as f:
+                kubeconfig = f.read()
+            # Replace localhost with the actual cluster IP
+            kubeconfig = kubeconfig.replace("127.0.0.1", "192.168.8.197")
+            kubeconfig = kubeconfig.replace("localhost", "192.168.8.197")
+            return Response(
+                kubeconfig,
+                mimetype='application/x-yaml',
+                headers={'Content-Disposition': 'attachment; filename=kubeconfig.yaml'}
+            )
+        else:
+            return jsonify({"error": "Kubeconfig not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/v1/terminal/url/<hostname>")
 def api_terminal_url(hostname):
     """Get SSH terminal URL for a node"""

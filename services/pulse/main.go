@@ -236,6 +236,13 @@ type K8sComponentStatusList struct {
 	} `json:"items"`
 }
 
+// All 13 cluster nodes - hardcoded list
+var allClusterNodes = []string{
+	"rpi-1", "rpi-2", "rpi-3", "rpi-4", "rpi-5", "rpi-6",
+	"rpi-7", "rpi-8", "rpi-9", "rpi-10", "rpi-11", "rpi-12",
+	"openmediavault",
+}
+
 // K8s API client
 func k8sAPIRequest(path string) ([]byte, error) {
 	token, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
@@ -371,54 +378,87 @@ func fetchClusterHealth() (*HealthStatus, error) {
 		}
 	}
 
+	// Build a map of k8s nodes for quick lookup
+	k8sNodeMap := make(map[string]K8sNode)
 	for _, node := range nodeList.Items {
+		k8sNodeMap[node.Metadata.Name] = node
+	}
+
+	// Include ALL 13 predefined cluster nodes, even if not in k8s
+	for _, nodeName := range allClusterNodes {
 		nodeStatus := NodeStatus{
-			Name:        node.Metadata.Name,
+			Name:        nodeName,
 			LastChecked: time.Now(),
 		}
 
-		// Check conditions
-		for _, cond := range node.Status.Conditions {
-			if cond.Type == "Ready" {
-				nodeStatus.Ready = cond.Status == "True"
-				if nodeStatus.Ready {
-					nodeStatus.Status = "Ready"
-				} else {
-					nodeStatus.Status = "NotReady"
+		// Check if node exists in Kubernetes
+		if node, exists := k8sNodeMap[nodeName]; exists {
+			// Node is in k8s - get its real status
+			for _, cond := range node.Status.Conditions {
+				if cond.Type == "Ready" {
+					nodeStatus.Ready = cond.Status == "True"
+					if nodeStatus.Ready {
+						nodeStatus.Status = "Ready"
+					} else {
+						nodeStatus.Status = "NotReady"
+					}
+				}
+				if cond.Status == "True" && cond.Type != "Ready" {
+					nodeStatus.Conditions = append(nodeStatus.Conditions, cond.Type)
 				}
 			}
-			if cond.Status == "True" && cond.Type != "Ready" {
-				nodeStatus.Conditions = append(nodeStatus.Conditions, cond.Type)
+
+			// Get resource usage
+			allocCPU := parseCPU(node.Status.Allocatable.CPU)
+			allocMem := parseMemory(node.Status.Allocatable.Memory)
+			totalCPUCores += allocCPU
+			totalMemMB += allocMem
+
+			if metrics, ok := metricsMap[nodeName]; ok {
+				usedCPU := parseCPU(metrics.Usage.CPU)
+				usedMem := parseMemory(metrics.Usage.Memory)
+				usedCPUCores += usedCPU
+				usedMemMB += usedMem
+
+				if allocCPU > 0 {
+					nodeStatus.CPUPercent = (usedCPU / allocCPU) * 100
+				}
+				if allocMem > 0 {
+					nodeStatus.MemoryPercent = (usedMem / allocMem) * 100
+				}
 			}
+		} else {
+			// Node is NOT in k8s yet - show as unknown/not joined
+			nodeStatus.Status = "NotJoined"
+			nodeStatus.Ready = false
+			nodeStatus.Conditions = []string{"Not in Kubernetes cluster"}
 		}
 
-		// Get resource usage
-		allocCPU := parseCPU(node.Status.Allocatable.CPU)
-		allocMem := parseMemory(node.Status.Allocatable.Memory)
-		totalCPUCores += allocCPU
-		totalMemMB += allocMem
-
-		if metrics, ok := metricsMap[node.Metadata.Name]; ok {
-			usedCPU := parseCPU(metrics.Usage.CPU)
-			usedMem := parseMemory(metrics.Usage.Memory)
-			usedCPUCores += usedCPU
-			usedMemMB += usedMem
-
-			if allocCPU > 0 {
-				nodeStatus.CPUPercent = (usedCPU / allocCPU) * 100
-			}
-			if allocMem > 0 {
-				nodeStatus.MemoryPercent = (usedMem / allocMem) * 100
-			}
-		}
-
-		nodeStatus.PodCount = podCountByNode[node.Metadata.Name]
+		nodeStatus.PodCount = podCountByNode[nodeName]
 		status.NodeStatuses = append(status.NodeStatuses, nodeStatus)
 	}
 
-	// Sort nodes by name
+	// Sort nodes: rpi-1 through rpi-12 numerically, then openmediavault
 	sort.Slice(status.NodeStatuses, func(i, j int) bool {
-		return status.NodeStatuses[i].Name < status.NodeStatuses[j].Name
+		nameI := status.NodeStatuses[i].Name
+		nameJ := status.NodeStatuses[j].Name
+
+		// Extract numeric part for rpi-N nodes
+		getNodeOrder := func(name string) int {
+			if name == "openmediavault" {
+				return 100 // Always last
+			}
+			if strings.HasPrefix(name, "rpi-") {
+				numStr := strings.TrimPrefix(name, "rpi-")
+				num, err := strconv.Atoi(numStr)
+				if err == nil {
+					return num
+				}
+			}
+			return 50 // Unknown nodes in the middle
+		}
+
+		return getNodeOrder(nameI) < getNodeOrder(nameJ)
 	})
 
 	// Build pod statuses (focus on non-running or high restart pods)
@@ -484,7 +524,7 @@ func fetchClusterHealth() (*HealthStatus, error) {
 	}
 
 	status.ClusterHealth = ClusterHealth{
-		TotalNodes:       len(nodeList.Items),
+		TotalNodes:       len(allClusterNodes), // Always show all 13 nodes
 		ReadyNodes:       readyNodes,
 		TotalPods:        len(podList.Items),
 		RunningPods:      runningPods,
@@ -556,12 +596,21 @@ func fetchClusterHealth() (*HealthStatus, error) {
 		}
 
 		if !ns.Ready {
+			var msg string
+			var severity string
+			if ns.Status == "NotJoined" {
+				msg = fmt.Sprintf("Node %s has not joined the cluster", ns.Name)
+				severity = "warning" // Not joined is warning, not critical
+			} else {
+				msg = fmt.Sprintf("Node %s is not ready", ns.Name)
+				severity = "critical"
+			}
 			status.ResourceAlerts = append(status.ResourceAlerts, ResourceAlert{
 				ID:        fmt.Sprintf("node-notready-%s", ns.Name),
-				Severity:  "critical",
+				Severity:  severity,
 				Resource:  "node",
 				Node:      ns.Name,
-				Message:   fmt.Sprintf("Node %s is not ready", ns.Name),
+				Message:   msg,
 				Value:     0,
 				Threshold: 0,
 				Timestamp: time.Now(),

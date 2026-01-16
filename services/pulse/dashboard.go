@@ -406,6 +406,27 @@ func getDashboardHTML() string {
 
         .node-status-dot.ready { background: var(--ctp-green); }
         .node-status-dot.not-ready { background: var(--ctp-red); }
+        .node-status-dot.not-joined { background: var(--ctp-overlay0); }
+
+        .node-item.not-joined {
+            opacity: 0.7;
+            background: var(--ctp-surface0);
+            border: 1px dashed var(--ctp-overlay0);
+        }
+
+        .node-status-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 8px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .node-status-badge.not-joined {
+            background: rgba(108, 112, 134, 0.2);
+            color: var(--ctp-overlay0);
+        }
 
         .node-name {
             font-weight: 500;
@@ -939,22 +960,27 @@ func getDashboardHTML() string {
             const nodeList = document.getElementById('nodeList');
             if (health.node_statuses && health.node_statuses.length > 0) {
                 nodeList.innerHTML = health.node_statuses.map(node => {
-                    const statusClass = node.ready ? 'ready' : 'not-ready';
-                    return '<div class="node-item">' +
+                    const isNotJoined = node.status === 'NotJoined';
+                    const statusClass = node.ready ? 'ready' : (isNotJoined ? 'not-joined' : 'not-ready');
+                    const itemClass = isNotJoined ? 'node-item not-joined' : 'node-item';
+                    const statusBadge = isNotJoined ? '<span class="node-status-badge not-joined">Not Joined</span>' : '';
+                    const metricsDisplay = isNotJoined ? '--' : Math.round(node.cpu_percent) + '%';
+                    const memDisplay = isNotJoined ? '--' : Math.round(node.memory_percent) + '%';
+                    return '<div class="' + itemClass + '">' +
                         '<div class="node-info">' +
                             '<div class="node-status-dot ' + statusClass + '"></div>' +
                             '<div>' +
-                                '<div class="node-name">' + node.name + '</div>' +
-                                '<div class="node-pods">' + node.pod_count + ' pods</div>' +
+                                '<div class="node-name">' + node.name + statusBadge + '</div>' +
+                                '<div class="node-pods">' + (isNotJoined ? 'Not in cluster' : node.pod_count + ' pods') + '</div>' +
                             '</div>' +
                         '</div>' +
                         '<div class="node-metrics">' +
                             '<div class="node-metric">' +
-                                '<div class="node-metric-value">' + Math.round(node.cpu_percent) + '%</div>' +
+                                '<div class="node-metric-value">' + metricsDisplay + '</div>' +
                                 '<div class="node-metric-label">CPU</div>' +
                             '</div>' +
                             '<div class="node-metric">' +
-                                '<div class="node-metric-value">' + Math.round(node.memory_percent) + '%</div>' +
+                                '<div class="node-metric-value">' + memDisplay + '</div>' +
                                 '<div class="node-metric-label">Memory</div>' +
                             '</div>' +
                         '</div>' +
@@ -964,6 +990,21 @@ func getDashboardHTML() string {
                 // Update per-node resources
                 const nodeResources = document.getElementById('nodeResources');
                 nodeResources.innerHTML = health.node_statuses.map(node => {
+                    const isNotJoined = node.status === 'NotJoined';
+                    if (isNotJoined) {
+                        return '<div class="resource-section" style="opacity: 0.5;">' +
+                            '<div class="resource-header">' +
+                                '<span class="resource-label">' + node.name + '</span>' +
+                                '<span class="resource-value" style="color: var(--ctp-overlay0);">Not Joined</span>' +
+                            '</div>' +
+                            '<div style="display: flex; gap: 8px;">' +
+                                '<div class="resource-bar" style="flex: 1; border: 1px dashed var(--ctp-overlay0);">' +
+                                '</div>' +
+                                '<div class="resource-bar" style="flex: 1; border: 1px dashed var(--ctp-overlay0);">' +
+                                '</div>' +
+                            '</div>' +
+                        '</div>';
+                    }
                     const cpuClass = getResourceClass(node.cpu_percent);
                     const memClass = getResourceClass(node.memory_percent);
                     return '<div class="resource-section">' +

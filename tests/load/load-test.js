@@ -224,7 +224,7 @@ async function runFileServiceLoad(options = {}) {
 async function runAllLoadTests(options = {}) {
     reporter.printHeader('HolmOS Load Tests');
     console.log(`  Cluster: ${config.cluster.host}`);
-    console.log(`  Namespace: ${NAMESPACE}`);
+    console.log(`  Namespace: ${config.cluster.namespace}`);
 
     const results = [];
 

@@ -1,0 +1,140 @@
+---
+# ServiceAccount for backup service
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-service
+  namespace: holm
+---
+# ClusterRole with permissions to create and monitor Jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backup-service
+rules:
+# Jobs API - create and monitor backup jobs
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Pods API - read pod status and logs
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+# Events - for monitoring job progress
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backup-service
+subjects:
+- kind: ServiceAccount
+  name: backup-service
+  namespace: holm
+roleRef:
+  kind: ClusterRole
+  name: backup-service
+  apiGroup: rbac.authorization.k8s.io
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-service
+  namespace: holm
+  labels:
+    app: backup-service
+    holmos.io/component: backup
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-service
+  template:
+    metadata:
+      labels:
+        app: backup-service
+    spec:
+      serviceAccountName: backup-service
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - node13
+                - rpi-13
+                - rpi13
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - openmediavault
+      containers:
+      - name: backup-service
+        image: 192.168.8.197:30500/backup-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: NAMESPACE
+          value: "holm"
+        - name: BACKUP_STORAGE_PATH
+          value: "/mnt/node13-ssd/backups"
+        - name: BACKUP_IMAGE
+          value: "alpine:latest"
+        - name: JOB_TIMEOUT
+          value: "300"
+        - name: POLL_TIMEOUT
+          value: "30"
+        - name: PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backup-service
+  namespace: holm
+  labels:
+    app: backup-service
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30015
+    protocol: TCP
+    name: http
+  selector:
+    app: backup-service

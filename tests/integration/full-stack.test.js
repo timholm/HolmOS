@@ -304,7 +304,7 @@ async function runFullStackIntegrationTests() {
     const results = new TestResults('Full Stack Integration');
 
     reporter.printHeader('Full Stack Integration Tests');
-    console.log(`  Namespace: ${NAMESPACE}`);
+    console.log(`  Namespace: ${config.cluster.namespace}`);
     console.log(`  Cluster: ${config.cluster.host}`);
 
     await testUserJourney(results);

@@ -1,0 +1,19 @@
+{
+  "name": "holmos",
+  "version": "1.0.0",
+  "description": "HolmOS - Personal Cloud Operating System",
+  "private": true,
+  "scripts": {
+    "test": "cd tests && npm test",
+    "test:smoke": "cd tests && npm run test:smoke",
+    "test:smoke:quick": "cd tests && npm run test:smoke:quick",
+    "test:smoke:degraded": "cd tests && npm run test:smoke:degraded",
+    "test:e2e": "cd tests && npm run test:e2e",
+    "test:integration": "cd tests && npm run test:integration",
+    "test:load": "cd tests && npm run test:load",
+    "test:health": "cd tests && npm run test:health"
+  },
+  "keywords": ["holmos", "cloud", "kubernetes", "raspberry-pi"],
+  "author": "HolmOS",
+  "license": "MIT"
+}

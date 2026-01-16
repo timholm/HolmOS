@@ -563,9 +563,74 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(store.Pods())
 }
 
+// CreateLogRequest represents a manual log entry creation request
+type CreateLogRequest struct {
+	Timestamp time.Time `json:"timestamp,omitempty"`
+	Namespace string    `json:"namespace,omitempty"`
+	Pod       string    `json:"pod,omitempty"`
+	Container string    `json:"container,omitempty"`
+	Message   string    `json:"message"`
+	Level     string    `json:"level,omitempty"`
+	Source    string    `json:"source,omitempty"`
+}
+
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	// Handle POST - create a new log entry
+	if r.Method == http.MethodPost {
+		var req CreateLogRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if req.Message == "" {
+			http.Error(w, "Message is required", http.StatusBadRequest)
+			return
+		}
+
+		// Set defaults
+		if req.Timestamp.IsZero() {
+			req.Timestamp = time.Now()
+		}
+		if req.Namespace == "" {
+			req.Namespace = "manual"
+		}
+		if req.Pod == "" {
+			req.Pod = "api"
+		}
+		if req.Container == "" {
+			req.Container = "manual-entry"
+		}
+		if req.Level == "" {
+			req.Level = detectLogLevel(req.Message)
+		}
+		if req.Source != "" {
+			req.Pod = req.Source
+		}
+
+		entry := LogEntry{
+			Timestamp: req.Timestamp,
+			Namespace: req.Namespace,
+			Pod:       req.Pod,
+			Container: req.Container,
+			Message:   req.Message,
+			Level:     strings.ToUpper(req.Level),
+		}
+
+		store.Add(entry)
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "created",
+			"message": "Log entry recorded in the chronicles",
+			"entry":   entry,
+		})
+		return
+	}
+
+	// Handle GET - list logs
 	limit := 100
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
@@ -1456,6 +1521,32 @@ const uiTemplate = `<!DOCTYPE html>
     <script>
         let streaming = false;
         let eventSource = null;
+        const API_TIMEOUT = 10000; // 10 second timeout
+
+        // Fetch with timeout wrapper
+        async function fetchWithTimeout(url, options = {}) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                return response;
+            } catch (error) {
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    throw new Error('Request timed out after ' + (API_TIMEOUT/1000) + ' seconds');
+                }
+                throw error;
+            }
+        }
+
+        function showError(container, message) {
+            container.innerHTML = '<div class="empty-state" style="color: var(--ctp-red);"><div class="empty-state-icon">&#9888;</div><p>' + escapeHtml(message) + '</p><button class="btn btn-secondary" onclick="refreshLogs()" style="margin-top: 15px;">Try Again</button></div>';
+        }
 
         document.addEventListener('DOMContentLoaded', () => {
             loadStats();
@@ -1476,7 +1567,7 @@ const uiTemplate = `<!DOCTYPE html>
 
         async function loadStats() {
             try {
-                const res = await fetch('/api/stats');
+                const res = await fetchWithTimeout('/api/stats');
                 const data = await res.json();
                 document.getElementById('total-logs').textContent = formatNumber(data.total_entries || 0);
                 document.getElementById('error-count').textContent = formatNumber(data.levels?.ERROR || 0);
@@ -1523,7 +1614,7 @@ const uiTemplate = `<!DOCTYPE html>
 
         async function loadNamespaces() {
             try {
-                const res = await fetch('/api/namespaces');
+                const res = await fetchWithTimeout('/api/namespaces');
                 const namespaces = await res.json();
                 const select = document.getElementById('filter-namespace');
                 namespaces.forEach(ns => {
@@ -1539,7 +1630,7 @@ const uiTemplate = `<!DOCTYPE html>
 
         async function loadRetentionSettings() {
             try {
-                const res = await fetch('/api/retention');
+                const res = await fetchWithTimeout('/api/retention');
                 const data = await res.json();
                 document.getElementById('retention-max-entries').value = data.max_entries;
                 document.getElementById('retention-hours').value = data.retention_hours;
@@ -1553,7 +1644,7 @@ const uiTemplate = `<!DOCTYPE html>
             const retentionHours = parseInt(document.getElementById('retention-hours').value) || 24;
 
             try {
-                const res = await fetch('/api/retention', {
+                const res = await fetchWithTimeout('/api/retention', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ max_entries: maxEntries, retention_hours: retentionHours })
@@ -1563,7 +1654,7 @@ const uiTemplate = `<!DOCTYPE html>
                 document.getElementById('settings-menu').classList.remove('show');
                 loadStats();
             } catch (e) {
-                addChatMessage('Failed to update retention settings.', 'agent');
+                addChatMessage('Failed to update retention settings: ' + (e.message || 'timeout'), 'agent');
             }
         }
 
@@ -1572,11 +1663,19 @@ const uiTemplate = `<!DOCTYPE html>
             container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
             try {
-                const res = await fetch('/api/logs');
+                const res = await fetchWithTimeout('/api/logs');
+                if (!res.ok) {
+                    throw new Error('Server returned ' + res.status);
+                }
                 const data = await res.json();
-                renderLogs(data.entries || []);
+                if (data.entries && data.entries.length > 0) {
+                    renderLogs(data.entries);
+                } else {
+                    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128220;</div><p>The chronicles await their first entry...</p></div>';
+                }
             } catch (e) {
-                container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128220;</div><p>The chronicles await their first entry...</p></div>';
+                console.error('Load logs error:', e);
+                showError(container, e.message || 'Failed to load logs');
             }
         }
 
@@ -1598,7 +1697,10 @@ const uiTemplate = `<!DOCTYPE html>
             container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
             try {
-                const res = await fetch('/api/logs/search?' + params);
+                const res = await fetchWithTimeout('/api/logs/search?' + params);
+                if (!res.ok) {
+                    throw new Error('Server returned ' + res.status);
+                }
                 const data = await res.json();
                 renderLogs(data.entries || []);
 
@@ -1607,6 +1709,7 @@ const uiTemplate = `<!DOCTYPE html>
                 }
             } catch (e) {
                 console.error('Search error:', e);
+                showError(container, e.message || 'Search failed');
             }
         }
 
@@ -1779,7 +1882,7 @@ const uiTemplate = `<!DOCTYPE html>
             input.value = '';
 
             try {
-                const res = await fetch('/api/chat', {
+                const res = await fetchWithTimeout('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message })
@@ -1787,7 +1890,7 @@ const uiTemplate = `<!DOCTYPE html>
                 const data = await res.json();
                 addChatMessage(data.response, 'agent');
             } catch (e) {
-                addChatMessage('The chronicles seem momentarily inaccessible...', 'agent');
+                addChatMessage('The chronicles seem momentarily inaccessible: ' + (e.message || 'timeout'), 'agent');
             }
         }
 

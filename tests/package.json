@@ -4,7 +4,9 @@
   "description": "End-to-end and integration tests for HolmOS",
   "main": "runner.js",
   "scripts": {
-    "test": "node runner.js",
+    "test": "node runner.js --skip-load",
+    "test:all": "node runner.js",
+    "test:quick": "node runner.js --quick",
     "test:smoke": "node smoke/smoke-tests.js",
     "test:smoke:quick": "node smoke/smoke-tests.js --quick",
     "test:smoke:degraded": "node smoke/smoke-tests.js --degraded",
@@ -16,6 +18,8 @@
     "test:files": "node e2e/file-services.test.js",
     "test:metrics": "node e2e/metrics-dashboard.test.js",
     "test:notifications": "node e2e/notification-hub.test.js",
+    "test:json": "node runner.js --skip-load --json",
+    "test:report": "node runner.js --skip-load --save-report && node report-generator.js",
     "report": "node report-generator.js"
   },
   "dependencies": {

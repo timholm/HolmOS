@@ -396,12 +396,18 @@ const chatUIHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
   <title>Chat Hub - HolmOS</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    .container { height: 100vh; display: flex; background: #1e1e2e; color: #cdd6f4; }
+    html { height: 100%; height: -webkit-fill-available; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100%;
+      height: -webkit-fill-available;
+      overflow: hidden;
+    }
+    .container { height: 100vh; height: 100dvh; display: flex; background: #1e1e2e; color: #cdd6f4; overflow: hidden; }
     .sidebar { width: 300px; background: #181825; border-right: 1px solid #313244; display: flex; flex-direction: column; overflow: hidden; }
     .sidebar-header { padding: 20px; border-bottom: 1px solid #313244; background: linear-gradient(135deg, #1e1e2e 0%, #313244 100%); }
     .sidebar-header h1 { font-size: 24px; color: #89b4fa; margin-bottom: 4px; }
@@ -471,10 +477,35 @@ const chatUIHTML = `<!DOCTYPE html>
     ::-webkit-scrollbar-thumb { background: #45475a; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #585b70; }
 
+    /* Sidebar settings section */
+    .sidebar-settings { padding: 12px; border-top: 1px solid #313244; background: #181825; }
+    .settings-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.2s; color: #a6adc8; font-size: 14px; }
+    .settings-item:hover { background: #313244; color: #cdd6f4; }
+    .settings-icon { font-size: 16px; width: 20px; text-align: center; }
+
     /* Jump to latest button */
-    .jump-to-latest { display: none; position: fixed; bottom: 90px; right: 20px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 25px; padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: all 0.2s; }
+    .jump-to-latest {
+      display: none;
+      position: fixed;
+      bottom: 90px;
+      right: 20px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 25px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      z-index: 101;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      transition: all 0.2s ease;
+      animation: slideUp 0.2s ease;
+    }
     .jump-to-latest:hover { background: #b4befe; transform: scale(1.05); }
+    .jump-to-latest:active { transform: scale(0.95); }
     .jump-to-latest.visible { display: flex; align-items: center; gap: 6px; }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
     /* Mobile hamburger menu */
     .hamburger { display: none; background: none; border: none; color: #cdd6f4; font-size: 24px; padding: 8px 12px; cursor: pointer; position: fixed; top: 12px; left: 12px; z-index: 1001; border-radius: 8px; }
@@ -486,20 +517,30 @@ const chatUIHTML = `<!DOCTYPE html>
       .sidebar { position: fixed; left: -300px; top: 0; bottom: 0; z-index: 1000; transition: left 0.3s ease; width: 280px; }
       .sidebar.open { left: 0; }
       .sidebar-overlay.open { display: block; }
-      .main { margin-left: 0; }
-      .chat-header { padding: 12px 12px 12px 56px; }
+      .main { margin-left: 0; height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+      .chat-header { padding: 12px 12px 12px 56px; flex-shrink: 0; }
       .current-agent-avatar { width: 40px; height: 40px; font-size: 18px; }
       .current-agent-info h2 { font-size: 16px; }
       .current-agent-info p { font-size: 11px; }
       .current-agent-info .personality { display: none; }
       .header-actions { gap: 4px; }
       .btn { padding: 8px 12px; font-size: 12px; }
-      #messages { padding: 12px; }
+      #messages { padding: 12px; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 12px; }
       .message { max-width: 90%; }
-      .input-area { padding: 12px; position: fixed; bottom: 0; left: 0; right: 0; background: #181825; border-top: 1px solid #313244; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+      .input-area {
+        padding: 12px;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: #181825;
+        border-top: 1px solid #313244;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        z-index: 100;
+      }
       #input { padding: 12px 16px; font-size: 16px; }
       #send { padding: 12px 20px; font-size: 14px; }
-      .welcome { padding: 20px; padding-top: 60px; }
+      .welcome { padding: 20px; padding-top: 60px; flex: 1; overflow-y: auto; }
       .welcome h2 { font-size: 24px; }
       .welcome p { font-size: 14px; }
       .agents-grid { grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -507,7 +548,9 @@ const chatUIHTML = `<!DOCTYPE html>
       .agent-card .agent-avatar { width: 36px; height: 36px; font-size: 14px; }
       .agent-card .agent-name { font-size: 11px; }
       .agent-card .agent-desc { font-size: 9px; }
-      #messages { padding-bottom: 80px; }
+      /* Reserve space for fixed input area */
+      .main.chat-active #messages { padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
+      .jump-to-latest { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); right: 16px; }
     }
   </style>
 </head>
@@ -526,6 +569,17 @@ const chatUIHTML = `<!DOCTYPE html>
       </div>
       <div class="agents-list" id="agentsList">
         <div class="agents-section-title">AI Agents</div>
+      </div>
+      <div class="sidebar-settings">
+        <div class="agents-section-title">Settings</div>
+        <div class="settings-item" onclick="clearChat()">
+          <span class="settings-icon">&#128465;</span>
+          <span>Clear Chat</span>
+        </div>
+        <div class="settings-item" onclick="showAllCapabilities()">
+          <span class="settings-icon">&#9881;</span>
+          <span>View All Capabilities</span>
+        </div>
       </div>
     </div>
     <div class="main">
@@ -636,6 +690,8 @@ const chatUIHTML = `<!DOCTYPE html>
       document.getElementById('welcomeScreen').style.display = 'none';
       document.getElementById('messages').style.display = 'flex';
       document.getElementById('inputArea').style.display = 'flex';
+      // Add chat-active class to main for mobile layout
+      document.querySelector('.main').classList.add('chat-active');
       const avatarEl = document.getElementById('currentAvatar');
       avatarEl.textContent = agent.avatar;
       if (agent.color === 'rainbow') {
@@ -652,10 +708,14 @@ const chatUIHTML = `<!DOCTYPE html>
       document.getElementById('messages').innerHTML = '';
       addMessage(agent.greeting, 'agent', agent.name, agent.color, agent.avatar, new Date().toISOString());
       document.getElementById('input').focus();
+      // Hide jump button when selecting new agent (we're at bottom)
+      document.getElementById('jumpToLatest').classList.remove('visible');
     }
 
     function addMessage(text, type, agentName, agentColor, agentAvatar, timestamp) {
       const container = document.getElementById('messages');
+      // Check if user is near bottom before adding message
+      const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
       const msgDiv = document.createElement('div');
       msgDiv.className = 'message ' + type;
       const time = timestamp ? new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
@@ -668,7 +728,13 @@ const chatUIHTML = `<!DOCTYPE html>
         msgDiv.innerHTML = '<div class="message-avatar">U</div><div class="message-bubble"><div class="message-header">You <span class="message-time">' + time + '</span></div><div class="message-content">' + escapeHtml(text) + '</div></div>';
       }
       container.appendChild(msgDiv);
-      container.scrollTop = container.scrollHeight;
+      // Auto-scroll only if user was near bottom, or if it's their own message
+      if (wasNearBottom || type === 'user') {
+        container.scrollTop = container.scrollHeight;
+      } else {
+        // Show jump button if new message arrived while scrolled up
+        document.getElementById('jumpToLatest').classList.add('visible');
+      }
     }
 
     function showTypingIndicator(data) {
@@ -705,6 +771,17 @@ const chatUIHTML = `<!DOCTYPE html>
       const agent = agents[selectedAgent];
       const caps = agent.capabilities.join(', ');
       addMessage('My capabilities include: ' + caps, 'agent', agent.name, agent.color, agent.avatar, new Date().toISOString());
+    }
+
+    function showAllCapabilities() {
+      if (!selectedAgent) {
+        alert('Please select an agent first to view capabilities.');
+        return;
+      }
+      showCapabilities();
+      if (window.innerWidth <= 768) {
+        closeSidebar();
+      }
     }
 
     function clearChat() {

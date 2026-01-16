@@ -265,7 +265,7 @@ async function runAuthFilesIntegrationTests() {
     const results = new TestResults('Auth + Files Integration');
 
     reporter.printHeader('Auth + Files Integration Tests');
-    console.log(`  Namespace: ${NAMESPACE}`);
+    console.log(`  Namespace: ${config.cluster.namespace}`);
 
     await testAuthenticatedFileList(results);
     await testUnauthenticatedFileList(results);

@@ -17,6 +17,31 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// Container Registry configuration
+const registryURL = "http://localhost:31500"
+const registryTimeout = 10 * time.Second
+
+// Registry types
+type RegistryRepo struct {
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+}
+
+type RegistryCatalog struct {
+	Repositories []string `json:"repositories"`
+}
+
+type RegistryTags struct {
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+}
+
+type RegistryError struct {
+	Endpoint string `json:"endpoint"`
+	Message  string `json:"message"`
+	Code     string `json:"code"`
+}
+
 var db *sql.DB
 var gitBase = "/data/repos"
 
@@ -72,6 +97,8 @@ func main() {
 	http.HandleFunc("/api/repos", handleRepos)
 	http.HandleFunc("/api/repos/", handleRepoActions)
 	http.HandleFunc("/api/webhooks", handleWebhooks)
+	http.HandleFunc("/api/registry/repos", handleRegistryRepos)
+	http.HandleFunc("/api/registry/repos/", handleRegistryRepoTags)
 	http.HandleFunc("/git/", handleGitProtocol)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
@@ -90,7 +117,7 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 	tmpl := `<!DOCTYPE html>
 <html>
 <head>
-    <title>HolmGit - Code Repository</title>
+    <title>HolmGit - Container Registry</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -132,6 +159,7 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
             transition: all 0.2s;
         }
         .btn:hover { background: #f5c2e7; transform: scale(1.05); }
+        .btn:disabled { background: #585b70; cursor: not-allowed; transform: none; }
         .container { padding: 20px; max-width: 1200px; margin: 0 auto; }
         .stats {
             display: grid;
@@ -152,307 +180,283 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
             background: #313244;
             border-radius: 12px;
             padding: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
             transition: all 0.2s;
             border: 1px solid transparent;
         }
-        .repo-card:hover { border-color: #cba6f7; transform: translateX(5px); }
+        .repo-card:hover { border-color: #cba6f7; }
+        .repo-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
         .repo-info h3 { color: #89b4fa; margin-bottom: 5px; }
         .repo-info p { color: #a6adc8; font-size: 14px; }
-        .repo-meta { display: flex; gap: 20px; color: #a6adc8; font-size: 14px; }
-        .repo-actions { display: flex; gap: 10px; }
-        .btn-small {
-            background: #45475a;
-            color: #cdd6f4;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        .btn-small:hover { background: #585b70; }
-        .btn-danger { background: #f38ba8; color: #1e1e2e; }
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.8);
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-        .modal.active { display: flex; }
-        .modal-content {
-            background: #313244;
-            padding: 30px;
-            border-radius: 16px;
-            width: 90%;
-            max-width: 500px;
-        }
-        .modal-content h2 { margin-bottom: 20px; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; color: #a6adc8; }
-        .form-group input, .form-group textarea {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid #45475a;
-            border-radius: 8px;
+        .pull-cmd {
             background: #1e1e2e;
-            color: #cdd6f4;
-            font-size: 16px;
-        }
-        .clone-url {
-            background: #1e1e2e;
-            padding: 10px;
+            padding: 8px 12px;
             border-radius: 6px;
             font-family: monospace;
             font-size: 12px;
-            margin-top: 10px;
+            color: #a6e3a1;
             word-break: break-all;
         }
+        .tag-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .tag {
+            background: #45475a;
+            color: #f9e2af;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        .tag.latest { background: #a6e3a1; color: #1e1e2e; }
         .empty-state {
             text-align: center;
             padding: 60px 20px;
             color: #a6adc8;
         }
         .empty-state h2 { margin-bottom: 10px; color: #cdd6f4; }
-        /* Repo detail view */
-        .repo-detail { display: none; }
-        .repo-detail.active { display: block; }
-        .breadcrumb {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 20px;
-            color: #a6adc8;
-        }
-        .breadcrumb a { color: #89b4fa; text-decoration: none; }
-        .file-list {
+        .error-state {
             background: #313244;
+            border: 2px solid #f38ba8;
             border-radius: 12px;
-            overflow: hidden;
+            padding: 30px;
+            text-align: center;
         }
-        .file-item {
+        .error-state h2 { color: #f38ba8; margin-bottom: 15px; }
+        .error-state .error-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .error-state .error-details {
+            background: #1e1e2e;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            text-align: left;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        .error-state .error-details .label {
+            color: #a6adc8;
+            margin-bottom: 5px;
+        }
+        .error-state .error-details .value {
+            color: #f9e2af;
+            word-break: break-all;
+        }
+        .error-state .error-details .message {
+            color: #f38ba8;
+            margin-top: 10px;
+        }
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+        }
+        .loading .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #45475a;
+            border-top-color: #cba6f7;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .status-bar {
             display: flex;
             align-items: center;
-            padding: 12px 20px;
-            border-bottom: 1px solid #45475a;
-            cursor: pointer;
-        }
-        .file-item:hover { background: #45475a; }
-        .file-item:last-child { border-bottom: none; }
-        .file-icon { width: 20px; margin-right: 15px; }
-        .commit-list { margin-top: 20px; }
-        .commit-item {
-            background: #313244;
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 10px;
-        }
-        .commit-hash { color: #f9e2af; font-family: monospace; }
-        .commit-msg { margin: 5px 0; }
-        .commit-meta { color: #a6adc8; font-size: 12px; }
-        .tabs {
-            display: flex;
             gap: 10px;
-            margin-bottom: 20px;
-        }
-        .tab {
             padding: 10px 20px;
-            background: #45475a;
+            background: #313244;
             border-radius: 8px;
-            cursor: pointer;
+            margin-bottom: 20px;
+            font-size: 14px;
         }
-        .tab.active { background: #cba6f7; color: #1e1e2e; }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #a6e3a1;
+        }
+        .status-dot.error { background: #f38ba8; }
+        .status-dot.loading { background: #f9e2af; animation: pulse 1s ease-in-out infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>HolmGit</h1>
-        <button class="btn" onclick="showCreateModal()">+ New Repository</button>
+        <button class="btn" onclick="loadRegistryRepos()" id="refreshBtn">Refresh</button>
     </div>
 
     <div class="container">
-        <div id="repoList">
-            <div class="stats">
-                <div class="stat-card">
-                    <div class="number" id="repoCount">0</div>
-                    <div class="label">Repositories</div>
-                </div>
-                <div class="stat-card">
-                    <div class="number" id="commitCount">0</div>
-                    <div class="label">Total Commits</div>
-                </div>
-                <div class="stat-card">
-                    <div class="number" id="totalSize">0</div>
-                    <div class="label">Storage Used</div>
-                </div>
-            </div>
-            <div class="repo-list" id="repos"></div>
+        <div class="status-bar">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Connecting to registry...</span>
         </div>
 
-        <div class="repo-detail" id="repoDetail">
-            <div class="breadcrumb">
-                <a href="#" onclick="showRepoList()">← Back</a>
-                <span>/</span>
-                <span id="currentRepo"></span>
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number" id="repoCount">-</div>
+                <div class="label">Images</div>
             </div>
-            <div class="clone-url" id="cloneUrl"></div>
-            <div class="tabs">
-                <div class="tab active" onclick="showTab('files')">Files</div>
-                <div class="tab" onclick="showTab('commits')">Commits</div>
+            <div class="stat-card">
+                <div class="number" id="tagCount">-</div>
+                <div class="label">Total Tags</div>
             </div>
-            <div id="filesTab" class="file-list"></div>
-            <div id="commitsTab" class="commit-list" style="display:none"></div>
+            <div class="stat-card">
+                <div class="number" id="registryStatus">-</div>
+                <div class="label">Registry</div>
+            </div>
         </div>
-    </div>
 
-    <div class="modal" id="createModal">
-        <div class="modal-content">
-            <h2>Create Repository</h2>
-            <div class="form-group">
-                <label>Repository Name</label>
-                <input type="text" id="repoName" placeholder="my-awesome-project">
-            </div>
-            <div class="form-group">
-                <label>Description</label>
-                <textarea id="repoDesc" rows="3" placeholder="What's this repo about?"></textarea>
-            </div>
-            <div style="display:flex;gap:10px;justify-content:flex-end">
-                <button class="btn-small" onclick="hideModal()">Cancel</button>
-                <button class="btn" onclick="createRepo()">Create</button>
+        <div id="content">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading registry data...</p>
             </div>
         </div>
     </div>
 
     <script>
-        const API = '/api/repos';
-        let currentRepoName = '';
+        const REGISTRY_API = '/api/registry/repos';
+        const REGISTRY_URL = 'localhost:31500';
+        const TIMEOUT_MS = 10000;
 
-        async function loadRepos() {
-            const res = await fetch(API);
-            const repos = await res.json();
-            const container = document.getElementById('repos');
+        async function loadRegistryRepos() {
+            const content = document.getElementById('content');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const refreshBtn = document.getElementById('refreshBtn');
+
+            // Show loading state
+            refreshBtn.disabled = true;
+            statusDot.className = 'status-dot loading';
+            statusText.textContent = 'Connecting to registry...';
+            content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading registry data...</p></div>';
+
+            // Set up timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+            try {
+                const res = await fetch(REGISTRY_API, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                const data = await res.json();
+
+                if (!res.ok || data.endpoint) {
+                    // Error response from backend
+                    showError(data);
+                    return;
+                }
+
+                // Success - show repos
+                showRepos(data);
+
+            } catch (err) {
+                clearTimeout(timeoutId);
+                if (err.name === 'AbortError') {
+                    showError({
+                        endpoint: 'http://' + REGISTRY_URL + '/v2/_catalog',
+                        message: 'Request timed out after 10 seconds',
+                        code: 'TIMEOUT'
+                    });
+                } else {
+                    showError({
+                        endpoint: 'http://' + REGISTRY_URL + '/v2/_catalog',
+                        message: err.message || 'Network error',
+                        code: 'NETWORK_ERROR'
+                    });
+                }
+            } finally {
+                refreshBtn.disabled = false;
+            }
+        }
+
+        function showRepos(repos) {
+            const content = document.getElementById('content');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+
+            statusDot.className = 'status-dot';
+            statusText.textContent = 'Connected to ' + REGISTRY_URL;
+
             document.getElementById('repoCount').textContent = repos.length;
-
-            let totalCommits = 0;
-            repos.forEach(r => totalCommits += r.commit_count || 0);
-            document.getElementById('commitCount').textContent = totalCommits;
+            let totalTags = 0;
+            repos.forEach(r => totalTags += (r.tags || []).length);
+            document.getElementById('tagCount').textContent = totalTags;
+            document.getElementById('registryStatus').textContent = 'Online';
 
             if (repos.length === 0) {
-                container.innerHTML = '<div class="empty-state"><h2>No repositories yet</h2><p>Create your first repository to get started</p></div>';
+                content.innerHTML = '<div class="empty-state"><h2>No images in registry</h2><p>Push images to ' + REGISTRY_URL + ' to see them here</p></div>';
                 return;
             }
 
-            container.innerHTML = repos.map(repo => ` + "`" + `
-                <div class="repo-card" onclick="viewRepo('${repo.name}')">
-                    <div class="repo-info">
-                        <h3>${repo.name}</h3>
-                        <p>${repo.description || 'No description'}</p>
-                    </div>
-                    <div class="repo-actions">
-                        <span class="repo-meta">${repo.commit_count || 0} commits</span>
-                        <button class="btn-small btn-danger" onclick="event.stopPropagation();deleteRepo('${repo.name}')">Delete</button>
-                    </div>
-                </div>
-            ` + "`" + `).join('');
+            content.innerHTML = '<div class="repo-list">' + repos.map(repo => {
+                const tags = repo.tags || [];
+                const pullCmd = REGISTRY_URL + '/' + repo.name + ':latest';
+                return '<div class="repo-card">' +
+                    '<div class="repo-header">' +
+                        '<div class="repo-info">' +
+                            '<h3>' + escapeHtml(repo.name) + '</h3>' +
+                            '<p>' + tags.length + ' tag' + (tags.length !== 1 ? 's' : '') + '</p>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="pull-cmd">docker pull ' + escapeHtml(pullCmd) + '</div>' +
+                    '<div class="tag-list">' +
+                        tags.map(tag => '<span class="tag' + (tag === 'latest' ? ' latest' : '') + '">' + escapeHtml(tag) + '</span>').join('') +
+                    '</div>' +
+                '</div>';
+            }).join('') + '</div>';
         }
 
-        async function createRepo() {
-            const name = document.getElementById('repoName').value.trim();
-            const desc = document.getElementById('repoDesc').value.trim();
-            if (!name) return alert('Name required');
+        function showError(error) {
+            const content = document.getElementById('content');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
 
-            await fetch(API, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name, description: desc})
-            });
-            hideModal();
-            loadRepos();
+            statusDot.className = 'status-dot error';
+            statusText.textContent = 'Connection failed';
+
+            document.getElementById('repoCount').textContent = '-';
+            document.getElementById('tagCount').textContent = '-';
+            document.getElementById('registryStatus').textContent = 'Offline';
+
+            content.innerHTML = '<div class="error-state">' +
+                '<div class="error-icon">!</div>' +
+                '<h2>Failed to connect to registry</h2>' +
+                '<p>Could not fetch repository list from the container registry.</p>' +
+                '<div class="error-details">' +
+                    '<div class="label">Endpoint:</div>' +
+                    '<div class="value">' + escapeHtml(error.endpoint || 'Unknown') + '</div>' +
+                    '<div class="message">' + escapeHtml(error.message || 'Unknown error') + '</div>' +
+                    (error.code ? '<div class="label" style="margin-top:10px">Error Code: ' + escapeHtml(error.code) + '</div>' : '') +
+                '</div>' +
+                '<button class="btn" onclick="loadRegistryRepos()" style="margin-top:15px">Retry</button>' +
+            '</div>';
         }
 
-        async function deleteRepo(name) {
-            if (!confirm('Delete ' + name + '?')) return;
-            await fetch(API + '/' + name, {method: 'DELETE'});
-            loadRepos();
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
-        async function viewRepo(name) {
-            currentRepoName = name;
-            document.getElementById('repoList').style.display = 'none';
-            document.getElementById('repoDetail').classList.add('active');
-            document.getElementById('currentRepo').textContent = name;
-            document.getElementById('cloneUrl').textContent = 'git clone http://192.168.8.197:30009/git/' + name + '.git';
-            loadFiles(name, '');
-            loadCommits(name);
-        }
-
-        function showRepoList() {
-            document.getElementById('repoList').style.display = 'block';
-            document.getElementById('repoDetail').classList.remove('active');
-        }
-
-        async function loadFiles(repo, path) {
-            const res = await fetch(API + '/' + repo + '/files?path=' + encodeURIComponent(path));
-            const files = await res.json();
-            const container = document.getElementById('filesTab');
-
-            if (!files || files.length === 0) {
-                container.innerHTML = '<div class="empty-state"><p>Empty repository. Push some code!</p></div>';
-                return;
-            }
-
-            container.innerHTML = files.map(f => ` + "`" + `
-                <div class="file-item">
-                    <span class="file-icon">${f.is_dir ? '📁' : '📄'}</span>
-                    <span>${f.name}</span>
-                </div>
-            ` + "`" + `).join('');
-        }
-
-        async function loadCommits(repo) {
-            const res = await fetch(API + '/' + repo + '/commits');
-            const commits = await res.json();
-            const container = document.getElementById('commitsTab');
-
-            if (!commits || commits.length === 0) {
-                container.innerHTML = '<div class="empty-state"><p>No commits yet</p></div>';
-                return;
-            }
-
-            container.innerHTML = commits.map(c => ` + "`" + `
-                <div class="commit-item">
-                    <span class="commit-hash">${c.hash.substring(0,7)}</span>
-                    <div class="commit-msg">${c.message}</div>
-                    <div class="commit-meta">${c.author} · ${c.date}</div>
-                </div>
-            ` + "`" + `).join('');
-        }
-
-        function showTab(tab) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
-            document.getElementById('filesTab').style.display = tab === 'files' ? 'block' : 'none';
-            document.getElementById('commitsTab').style.display = tab === 'commits' ? 'block' : 'none';
-        }
-
-        function showCreateModal() {
-            document.getElementById('createModal').classList.add('active');
-        }
-        function hideModal() {
-            document.getElementById('createModal').classList.remove('active');
-            document.getElementById('repoName').value = '';
-            document.getElementById('repoDesc').value = '';
-        }
-
-        loadRepos();
+        // Load on page load
+        loadRegistryRepos();
     </script>
 </body>
 </html>`
@@ -674,4 +678,130 @@ func getCommitCount(repoName string) int {
 
 func copyIO(dst io.Writer, src io.Reader) {
 	io.Copy(dst, src)
+}
+
+// Registry API handlers
+func handleRegistryRepos(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: registryTimeout}
+	endpoint := registryURL + "/v2/_catalog"
+
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(RegistryError{
+			Endpoint: endpoint,
+			Message:  err.Error(),
+			Code:     "CONNECTION_FAILED",
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		w.WriteHeader(resp.StatusCode)
+		json.NewEncoder(w).Encode(RegistryError{
+			Endpoint: endpoint,
+			Message:  fmt.Sprintf("Registry returned status %d: %s", resp.StatusCode, string(body)),
+			Code:     "REGISTRY_ERROR",
+		})
+		return
+	}
+
+	var catalog RegistryCatalog
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(RegistryError{
+			Endpoint: endpoint,
+			Message:  "Failed to parse registry response: " + err.Error(),
+			Code:     "PARSE_ERROR",
+		})
+		return
+	}
+
+	// Fetch tags for each repository
+	var repos []RegistryRepo
+	for _, repoName := range catalog.Repositories {
+		repo := RegistryRepo{Name: repoName}
+		tagsEndpoint := fmt.Sprintf("%s/v2/%s/tags/list", registryURL, repoName)
+		tagsResp, err := client.Get(tagsEndpoint)
+		if err == nil && tagsResp.StatusCode == http.StatusOK {
+			var tags RegistryTags
+			if json.NewDecoder(tagsResp.Body).Decode(&tags) == nil {
+				repo.Tags = tags.Tags
+			}
+			tagsResp.Body.Close()
+		}
+		if repo.Tags == nil {
+			repo.Tags = []string{}
+		}
+		repos = append(repos, repo)
+	}
+
+	if repos == nil {
+		repos = []RegistryRepo{}
+	}
+	json.NewEncoder(w).Encode(repos)
+}
+
+func handleRegistryRepoTags(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Extract repo name from path (handles nested repos like "library/nginx")
+	repoName := strings.TrimPrefix(r.URL.Path, "/api/registry/repos/")
+	repoName = strings.TrimSuffix(repoName, "/tags")
+
+	if repoName == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(RegistryError{
+			Endpoint: r.URL.Path,
+			Message:  "Repository name is required",
+			Code:     "INVALID_REQUEST",
+		})
+		return
+	}
+
+	client := &http.Client{Timeout: registryTimeout}
+	endpoint := fmt.Sprintf("%s/v2/%s/tags/list", registryURL, repoName)
+
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(RegistryError{
+			Endpoint: endpoint,
+			Message:  err.Error(),
+			Code:     "CONNECTION_FAILED",
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		w.WriteHeader(resp.StatusCode)
+		json.NewEncoder(w).Encode(RegistryError{
+			Endpoint: endpoint,
+			Message:  fmt.Sprintf("Registry returned status %d: %s", resp.StatusCode, string(body)),
+			Code:     "REGISTRY_ERROR",
+		})
+		return
+	}
+
+	var tags RegistryTags
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(RegistryError{
+			Endpoint: endpoint,
+			Message:  "Failed to parse registry response: " + err.Error(),
+			Code:     "PARSE_ERROR",
+		})
+		return
+	}
+
+	if tags.Tags == nil {
+		tags.Tags = []string{}
+	}
+	json.NewEncoder(w).Encode(tags)
 }

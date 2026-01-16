@@ -1034,8 +1034,12 @@ def get_dashboard_html():
 
         async function fetchNodes() {
             const endpoint = '/api/v1/nodes';
+            const TIMEOUT_MS = 10000;
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const timeoutId = setTimeout(() => {
+                controller.abort();
+            }, TIMEOUT_MS);
+            const startTime = Date.now();
 
             try {
                 const res = await fetch(endpoint, { signal: controller.signal });
@@ -1056,30 +1060,43 @@ def get_dashboard_html():
                 }
             } catch (err) {
                 clearTimeout(timeoutId);
-                console.error('Failed to fetch nodes:', err);
+                const elapsed = Date.now() - startTime;
+                console.error('Failed to fetch nodes:', err, 'after', elapsed, 'ms');
 
                 let errorMsg = err.message;
+                let errorType = 'Error';
                 if (err.name === 'AbortError') {
-                    errorMsg = 'Request timed out after 10 seconds';
+                    errorMsg = 'Request timed out after ' + (TIMEOUT_MS / 1000) + ' seconds';
+                    errorType = 'Timeout';
+                } else if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+                    errorMsg = 'Network error - backend may be unreachable';
+                    errorType = 'Network Error';
                 }
 
                 // Show error in the grid with diagnostics
                 const grid = document.getElementById('nodesGrid');
-                grid.innerHTML = '<div class="error-state" style="padding:40px;text-align:center;background:#2d1f1f;border-radius:12px;border:1px solid #fc8181;">' +
-                    '<div style="font-size:40px;margin-bottom:16px;">&#9888;</div>' +
-                    '<div style="font-size:18px;font-weight:600;color:#fc8181;margin-bottom:12px;">Failed to Load Nodes</div>' +
-                    '<div style="color:#e2e8f0;margin-bottom:16px;">' + errorMsg + '</div>' +
-                    '<div style="font-size:12px;color:#718096;margin-bottom:20px;">Endpoint: ' + endpoint + '<br>Time: ' + new Date().toLocaleTimeString() + '</div>' +
-                    '<button onclick="fetchNodes()" class="action-btn primary" style="margin:0 auto;">&#8635; Retry</button>' +
-                '</div>';
+                const timestamp = new Date().toISOString();
+                grid.innerHTML =
+                    '<div class="error-state" style="padding:40px;text-align:center;background:#2d1f1f;border-radius:12px;border:1px solid #fc8181;max-width:500px;margin:0 auto;">' +
+                        '<div style="font-size:48px;margin-bottom:16px;">&#9888;</div>' +
+                        '<div style="font-size:20px;font-weight:600;color:#fc8181;margin-bottom:8px;">' + errorType + '</div>' +
+                        '<div style="font-size:16px;color:#e2e8f0;margin-bottom:20px;">' + errorMsg + '</div>' +
+                        '<div style="background:#1a1a2e;border-radius:8px;padding:16px;margin-bottom:20px;text-align:left;font-family:monospace;font-size:12px;color:#a0aec0;">' +
+                            '<div style="margin-bottom:8px;"><span style="color:#718096;">Endpoint:</span> ' + window.location.origin + endpoint + '</div>' +
+                            '<div style="margin-bottom:8px;"><span style="color:#718096;">Timestamp:</span> ' + timestamp + '</div>' +
+                            '<div><span style="color:#718096;">Elapsed:</span> ' + elapsed + 'ms</div>' +
+                        '</div>' +
+                        '<button onclick="fetchNodes()" class="action-btn primary" style="padding:14px 28px;font-size:15px;">&#8635; Retry</button>' +
+                    '</div>';
 
-                showToast('Failed to fetch nodes: ' + errorMsg, 'error');
+                showToast(errorType + ': ' + errorMsg, 'error');
             }
         }
 
         async function fetchHealth() {
+            const TIMEOUT_MS = 10000;
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
             try {
                 const res = await fetch('/api/v1/health', { signal: controller.signal });
@@ -1513,11 +1530,14 @@ def get_dashboard_html():
         }
 
         async function refreshNodes() {
-            document.getElementById('nodesGrid').innerHTML = '<div class="loading"><div class="loading-spinner"></div>Refreshing nodes...</div>';
+            const grid = document.getElementById('nodesGrid');
+            grid.innerHTML = '<div class="loading"><div class="loading-spinner"></div>Refreshing nodes...</div>';
             showToast('Refreshing node status...', 'info');
 
+            const TIMEOUT_MS = 10000;
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+            const startTime = Date.now();
 
             try {
                 const res = await fetch('/api/v1/nodes/refresh', {
@@ -1525,12 +1545,42 @@ def get_dashboard_html():
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
+
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status + ': ' + res.statusText);
+                }
+
                 await fetchNodes();
             } catch (err) {
                 clearTimeout(timeoutId);
-                const errorMsg = err.name === 'AbortError' ? 'Refresh timed out after 10 seconds' : err.message;
-                showToast('Refresh failed: ' + errorMsg, 'error');
-                await fetchNodes(); // Try to show cached data
+                const elapsed = Date.now() - startTime;
+
+                let errorMsg = err.message;
+                let errorType = 'Error';
+                if (err.name === 'AbortError') {
+                    errorMsg = 'Refresh timed out after ' + (TIMEOUT_MS / 1000) + ' seconds';
+                    errorType = 'Timeout';
+                } else if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+                    errorMsg = 'Network error - backend may be unreachable';
+                    errorType = 'Network Error';
+                }
+
+                // Show error state
+                const timestamp = new Date().toISOString();
+                grid.innerHTML =
+                    '<div class="error-state" style="padding:40px;text-align:center;background:#2d1f1f;border-radius:12px;border:1px solid #fc8181;max-width:500px;margin:0 auto;">' +
+                        '<div style="font-size:48px;margin-bottom:16px;">&#9888;</div>' +
+                        '<div style="font-size:20px;font-weight:600;color:#fc8181;margin-bottom:8px;">' + errorType + '</div>' +
+                        '<div style="font-size:16px;color:#e2e8f0;margin-bottom:20px;">' + errorMsg + '</div>' +
+                        '<div style="background:#1a1a2e;border-radius:8px;padding:16px;margin-bottom:20px;text-align:left;font-family:monospace;font-size:12px;color:#a0aec0;">' +
+                            '<div style="margin-bottom:8px;"><span style="color:#718096;">Endpoint:</span> ' + window.location.origin + '/api/v1/nodes/refresh</div>' +
+                            '<div style="margin-bottom:8px;"><span style="color:#718096;">Timestamp:</span> ' + timestamp + '</div>' +
+                            '<div><span style="color:#718096;">Elapsed:</span> ' + elapsed + 'ms</div>' +
+                        '</div>' +
+                        '<button onclick="refreshNodes()" class="action-btn primary" style="padding:14px 28px;font-size:15px;">&#8635; Retry</button>' +
+                    '</div>';
+
+                showToast(errorType + ': ' + errorMsg, 'error');
             }
         }
 
@@ -1539,7 +1589,39 @@ def get_dashboard_html():
             if (e.target === this) closeModal();
         });
 
-        // Initialize
+        // Initialize with loading timeout safety
+        let initialLoadComplete = false;
+
+        // Safety timeout: if loading takes more than 10s, show error
+        const loadingTimeout = setTimeout(() => {
+            if (!initialLoadComplete) {
+                const grid = document.getElementById('nodesGrid');
+                if (grid && grid.querySelector('.loading')) {
+                    const timestamp = new Date().toISOString();
+                    grid.innerHTML =
+                        '<div class="error-state" style="padding:40px;text-align:center;background:#2d1f1f;border-radius:12px;border:1px solid #fc8181;max-width:500px;margin:0 auto;">' +
+                            '<div style="font-size:48px;margin-bottom:16px;">&#9888;</div>' +
+                            '<div style="font-size:20px;font-weight:600;color:#fc8181;margin-bottom:8px;">Loading Timeout</div>' +
+                            '<div style="font-size:16px;color:#e2e8f0;margin-bottom:20px;">Initial load took too long (>10 seconds)</div>' +
+                            '<div style="background:#1a1a2e;border-radius:8px;padding:16px;margin-bottom:20px;text-align:left;font-family:monospace;font-size:12px;color:#a0aec0;">' +
+                                '<div style="margin-bottom:8px;"><span style="color:#718096;">Endpoint:</span> ' + window.location.origin + '/api/v1/nodes</div>' +
+                                '<div><span style="color:#718096;">Timestamp:</span> ' + timestamp + '</div>' +
+                            '</div>' +
+                            '<button onclick="fetchNodes()" class="action-btn primary" style="padding:14px 28px;font-size:15px;">&#8635; Retry</button>' +
+                        '</div>';
+                    showToast('Loading timeout - click Retry to try again', 'error');
+                }
+            }
+        }, 10000);
+
+        // Wrap fetchNodes to track completion
+        const originalFetchNodes = fetchNodes;
+        fetchNodes = async function() {
+            await originalFetchNodes();
+            initialLoadComplete = true;
+            clearTimeout(loadingTimeout);
+        };
+
         fetchNodes();
         fetchHealth();
         setInterval(fetchNodes, 30000);

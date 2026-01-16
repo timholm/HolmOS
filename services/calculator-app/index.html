@@ -182,7 +182,6 @@
             grid-column: span 2;
             border-radius: 40px;
             aspect-ratio: auto;
-            height: 64px;
             justify-content: flex-start;
             padding-left: 28px;
         }
@@ -306,16 +305,29 @@
 
         /* Responsive - Mobile: hide history to prevent scrolling */
         @media (max-width: 700px) {
+            body {
+                padding: 8px;
+                overflow: hidden;
+            }
+
             .calculator-container {
                 flex-direction: column;
                 align-items: center;
                 height: 100%;
+                max-height: 100%;
                 justify-content: center;
+                overflow: hidden;
             }
 
             .calculator {
                 width: 100%;
                 max-width: 360px;
+                height: auto;
+                max-height: calc(100vh - 16px);
+                max-height: calc(100dvh - 16px);
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
             }
 
             .history-panel {
@@ -325,79 +337,67 @@
             .keyboard-hint {
                 display: none;
             }
-        }
 
-        /* Small height screens (landscape or small phones) */
-        @media (max-height: 600px) {
             .display {
-                min-height: 80px;
-                padding: 12px;
-            }
-
-            .result {
-                font-size: 40px;
+                min-height: auto;
+                flex-shrink: 0;
             }
 
             .buttons {
-                gap: 8px;
+                flex: 1;
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                grid-template-rows: repeat(5, 1fr);
             }
 
             .btn {
-                font-size: 24px;
+                aspect-ratio: unset;
+                width: 100%;
+                height: 100%;
+            }
+
+            .btn-zero {
+                height: 100%;
+                aspect-ratio: unset;
             }
         }
 
-        /* iPhone SE and small screens */
-        @media (max-width: 375px) {
+        /* iPhone SE (375x667) - smallest target */
+        @media (max-width: 700px) and (max-height: 700px) {
+            body {
+                padding: 4px;
+            }
+
             .calculator {
-                padding: 12px;
+                padding: 10px;
                 border-radius: 16px;
+                max-height: calc(100vh - 8px);
+                max-height: calc(100dvh - 8px);
             }
 
             .display {
-                min-height: 70px;
-                padding: 12px;
-                margin-bottom: 10px;
+                min-height: auto;
+                padding: 10px;
+                margin-bottom: 8px;
                 border-radius: 12px;
             }
 
             .expression {
                 font-size: 14px;
+                min-height: 18px;
+                margin-bottom: 4px;
             }
 
             .result {
-                font-size: 44px;
+                font-size: 38px;
             }
 
-            .buttons {
-                gap: 8px;
-            }
-
-            .btn {
-                font-size: 22px;
-                width: 60px;
-                height: 60px;
-            }
-
-            .btn.zero {
-                width: 128px;
-            }
-        }
-
-        /* Very small height (iPhone SE landscape, notch phones) */
-        @media (max-height: 500px) {
-            .calculator {
-                padding: 8px;
-            }
-
-            .display {
-                min-height: 60px;
-                padding: 8px;
-                margin-bottom: 8px;
-            }
-
-            .result {
+            .result.small {
                 font-size: 32px;
+            }
+
+            .result.smaller {
+                font-size: 26px;
             }
 
             .buttons {
@@ -406,32 +406,152 @@
 
             .btn {
                 font-size: 20px;
-                width: 52px;
-                height: 52px;
-            }
-
-            .btn.zero {
-                width: 110px;
             }
         }
 
-        /* Ensure calculator fits in viewport */
-        @media (max-height: 700px) and (min-height: 600px) {
+        /* Very small height - iPhone SE and similar */
+        @media (max-width: 700px) and (max-height: 680px) {
+            body {
+                padding: 2px;
+            }
+
             .calculator {
-                padding: 14px;
+                padding: 8px;
+                border-radius: 14px;
+                max-height: calc(100vh - 4px);
+                max-height: calc(100dvh - 4px);
             }
 
             .display {
-                min-height: 90px;
-                padding: 14px;
+                padding: 8px;
+                margin-bottom: 6px;
+                border-radius: 10px;
+            }
+
+            .expression {
+                font-size: 12px;
+                min-height: 16px;
+                margin-bottom: 2px;
+            }
+
+            .result {
+                font-size: 34px;
+            }
+
+            .result.small {
+                font-size: 28px;
+            }
+
+            .result.smaller {
+                font-size: 22px;
+            }
+
+            .buttons {
+                gap: 5px;
+            }
+
+            .btn {
+                font-size: 18px;
+            }
+        }
+
+        /* Larger iPhones (390x844 and up) - more space available */
+        @media (max-width: 700px) and (min-height: 800px) {
+            .calculator {
+                padding: 16px;
+            }
+
+            .display {
+                padding: 16px;
+                margin-bottom: 12px;
+            }
+
+            .expression {
+                font-size: 16px;
+                min-height: 20px;
+                margin-bottom: 6px;
             }
 
             .result {
                 font-size: 48px;
             }
 
+            .result.small {
+                font-size: 38px;
+            }
+
+            .result.smaller {
+                font-size: 30px;
+            }
+
+            .buttons {
+                gap: 10px;
+            }
+
             .btn {
                 font-size: 26px;
+            }
+        }
+
+        /* iPhone Pro Max (430x932) - most space */
+        @media (max-width: 700px) and (min-height: 900px) {
+            .calculator {
+                padding: 20px;
+            }
+
+            .display {
+                padding: 20px;
+                margin-bottom: 14px;
+            }
+
+            .expression {
+                font-size: 18px;
+                min-height: 22px;
+                margin-bottom: 8px;
+            }
+
+            .result {
+                font-size: 52px;
+            }
+
+            .buttons {
+                gap: 12px;
+            }
+
+            .btn {
+                font-size: 28px;
+            }
+        }
+
+        /* Landscape orientation - hide entirely or show minimal */
+        @media (max-width: 700px) and (orientation: landscape) {
+            .calculator {
+                padding: 6px;
+                max-height: calc(100vh - 4px);
+                max-height: calc(100dvh - 4px);
+            }
+
+            .display {
+                padding: 6px;
+                margin-bottom: 4px;
+            }
+
+            .expression {
+                font-size: 10px;
+                min-height: 12px;
+                margin-bottom: 2px;
+            }
+
+            .result {
+                font-size: 24px;
+            }
+
+            .buttons {
+                gap: 4px;
+            }
+
+            .btn {
+                font-size: 14px;
             }
         }
 

@@ -334,132 +334,105 @@ UI_HTML = '''<!DOCTYPE html>
             --ctp-overlay1: #7f849c; --ctp-overlay0: #6c7086; --ctp-surface2: #585b70;
             --ctp-surface1: #45475a; --ctp-surface0: #313244; --ctp-base: #1e1e2e;
             --ctp-mantle: #181825; --ctp-crust: #11111b;
+            --accent: #cba6f7;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { height: 100%; overflow-x: hidden; }
-        body { font-family: 'SF Pro Display', system-ui, sans-serif; background: var(--ctp-base); color: var(--ctp-text); min-height: 100vh; overflow-x: hidden; }
-        
-        .header { background: linear-gradient(135deg, var(--ctp-surface0) 0%, var(--ctp-mantle) 100%); padding: 25px 30px; border-bottom: 2px solid var(--ctp-pink); }
-        .header-content { max-width: 1400px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
-        .logo { display: flex; align-items: center; gap: 15px; }
-        .logo-icon { font-size: 2.5em; }
-        .logo h1 { font-size: 1.8em; color: var(--ctp-pink); }
-        .logo p { color: var(--ctp-subtext0); font-size: 0.9em; }
-        .status-indicators { display: flex; gap: 15px; }
-        .status-dot { display: flex; align-items: center; gap: 8px; padding: 8px 15px; background: var(--ctp-surface0); border-radius: 20px; font-size: 0.85em; }
-        .dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 2s infinite; }
+        html, body { height: 100%; overflow: hidden; }
+        body { font-family: 'SF Pro Display', system-ui, sans-serif; background: var(--ctp-base); color: var(--ctp-text); display: flex; flex-direction: column; }
+
+        .header { background: linear-gradient(135deg, var(--ctp-surface0) 0%, var(--ctp-mantle) 100%); padding: 15px 20px; border-bottom: 1px solid var(--ctp-surface1); flex-shrink: 0; }
+        .header-content { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
+        .logo { display: flex; align-items: center; gap: 12px; }
+        .logo-icon { font-size: 1.8em; }
+        .logo h1 { font-size: 1.3em; color: var(--accent); }
+        .logo p { color: var(--ctp-subtext0); font-size: 0.75em; }
+        .status-indicators { display: flex; gap: 10px; }
+        .status-dot { display: flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--ctp-surface0); border-radius: 15px; font-size: 0.75em; }
+        .dot { width: 6px; height: 6px; border-radius: 50%; }
         .dot.green { background: var(--ctp-green); }
         .dot.yellow { background: var(--ctp-yellow); }
         .dot.red { background: var(--ctp-red); }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        
-        .main { max-width: 1400px; margin: 0 auto; padding: 30px; display: grid; grid-template-columns: 1fr 400px; gap: 30px; }
-        @media (max-width: 1000px) { .main { grid-template-columns: 1fr; } }
-        
-        .section { background: var(--ctp-surface0); border-radius: 16px; padding: 25px; border: 1px solid var(--ctp-surface1); }
-        .section-title { font-size: 1.3em; color: var(--ctp-pink); margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
-        
-        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab { padding: 10px 20px; background: var(--ctp-surface1); border: none; border-radius: 10px; color: var(--ctp-subtext0); cursor: pointer; transition: all 0.2s; }
-        .tab:hover { background: var(--ctp-surface2); }
-        .tab.active { background: var(--ctp-pink); color: var(--ctp-crust); }
-        
-        .app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; max-height: 400px; overflow-y: auto; }
-        .app-card { background: var(--ctp-mantle); border-radius: 12px; padding: 20px; border: 1px solid var(--ctp-surface1); cursor: pointer; transition: all 0.2s; }
-        .app-card:hover { transform: translateY(-3px); border-color: var(--ctp-blue); box-shadow: 0 8px 25px rgba(137, 180, 250, 0.15); }
-        .app-icon { font-size: 2em; margin-bottom: 10px; }
-        .app-name { font-weight: 600; color: var(--ctp-text); margin-bottom: 5px; }
-        .app-desc { font-size: 0.8em; color: var(--ctp-subtext0); margin-bottom: 10px; }
+
+        .content-area { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 20px; padding-bottom: 80px; }
+
+        .tab-view { display: none; max-width: 1200px; margin: 0 auto; }
+        .tab-view.active { display: block; }
+
+        .view-title { font-size: 1.5em; color: var(--accent); margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+
+        /* Featured Tab */
+        .featured-banner { background: linear-gradient(135deg, var(--ctp-surface0), var(--ctp-mantle)); border-radius: 16px; padding: 30px; margin-bottom: 25px; border: 1px solid var(--ctp-surface1); }
+        .featured-banner h2 { color: var(--accent); margin-bottom: 10px; }
+        .featured-banner p { color: var(--ctp-subtext0); margin-bottom: 20px; }
+        .featured-apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px; }
+
+        /* App Cards */
+        .app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+        .app-card { background: var(--ctp-surface0); border-radius: 12px; padding: 20px; border: 1px solid var(--ctp-surface1); cursor: pointer; transition: all 0.2s; }
+        .app-card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: 0 8px 25px rgba(203, 166, 247, 0.15); }
+        .app-card.featured { background: linear-gradient(135deg, var(--ctp-surface0), var(--ctp-surface1)); border-color: var(--accent); }
+        .app-icon { font-size: 2.5em; margin-bottom: 12px; }
+        .app-name { font-weight: 600; color: var(--ctp-text); margin-bottom: 5px; font-size: 1.1em; }
+        .app-desc { font-size: 0.85em; color: var(--ctp-subtext0); margin-bottom: 12px; line-height: 1.4; }
         .app-tags { display: flex; flex-wrap: wrap; gap: 5px; }
-        .tag { background: var(--ctp-surface1); padding: 3px 8px; border-radius: 10px; font-size: 0.7em; color: var(--ctp-blue); }
-        
-        .chat-container { display: flex; flex-direction: column; height: 500px; }
-        .chat-messages { flex: 1; overflow-y: auto; padding: 15px; background: var(--ctp-mantle); border-radius: 12px; margin-bottom: 15px; }
-        .message { margin-bottom: 15px; padding: 12px 15px; border-radius: 12px; max-width: 90%; }
-        .message.user { background: var(--ctp-surface1); margin-left: auto; }
-        .message.ai { background: linear-gradient(135deg, var(--ctp-surface0), var(--ctp-surface1)); border-left: 3px solid var(--ctp-pink); }
-        .message.system { background: var(--ctp-surface0); border-left: 3px solid var(--ctp-yellow); font-size: 0.9em; }
-        .message-header { font-size: 0.75em; color: var(--ctp-subtext0); margin-bottom: 5px; display: flex; align-items: center; gap: 5px; }
-        .message-content { line-height: 1.5; }
-        .message-content pre { background: var(--ctp-crust); padding: 10px; border-radius: 8px; overflow-x: auto; margin-top: 10px; font-size: 0.85em; }
-        
-        .chat-input { display: flex; gap: 10px; }
-        .chat-input textarea { flex: 1; padding: 15px; background: var(--ctp-mantle); border: 2px solid var(--ctp-surface1); border-radius: 12px; color: var(--ctp-text); font-family: inherit; font-size: 0.95em; resize: none; min-height: 60px; }
-        .chat-input textarea:focus { outline: none; border-color: var(--ctp-pink); }
-        .chat-input textarea::placeholder { color: var(--ctp-overlay0); }
-        
-        .btn { padding: 12px 20px; border: none; border-radius: 10px; font-size: 0.95em; cursor: pointer; transition: all 0.2s; font-weight: 600; }
-        .btn-primary { background: linear-gradient(135deg, var(--ctp-pink), var(--ctp-mauve)); color: var(--ctp-crust); }
-        .btn-primary:hover { transform: scale(1.02); box-shadow: 0 5px 20px rgba(245, 194, 231, 0.3); }
-        .btn-secondary { background: var(--ctp-surface1); color: var(--ctp-text); }
-        .btn-deploy { background: var(--ctp-green); color: var(--ctp-crust); padding: 8px 15px; font-size: 0.85em; }
-        
-        .build-progress { margin-top: 20px; }
-        .build-item { background: var(--ctp-mantle); border-radius: 10px; padding: 15px; margin-bottom: 10px; border-left: 3px solid var(--ctp-blue); }
-        .build-item.running { border-left-color: var(--ctp-yellow); animation: buildPulse 1.5s infinite; }
-        .build-item.succeeded { border-left-color: var(--ctp-green); }
-        .build-item.failed { border-left-color: var(--ctp-red); }
-        @keyframes buildPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-        .build-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        .build-name { font-weight: 600; color: var(--ctp-text); }
-        .build-status { padding: 4px 10px; border-radius: 15px; font-size: 0.75em; font-weight: 600; }
-        .status-pending { background: rgba(249, 226, 175, 0.2); color: var(--ctp-yellow); }
-        .status-running { background: rgba(250, 179, 135, 0.2); color: var(--ctp-peach); }
-        .status-succeeded { background: rgba(166, 227, 161, 0.2); color: var(--ctp-green); }
-        .status-failed { background: rgba(243, 139, 168, 0.2); color: var(--ctp-red); }
-        .build-info { font-size: 0.8em; color: var(--ctp-subtext0); }
-        .build-quote { font-style: italic; color: var(--ctp-peach); margin-top: 8px; font-size: 0.85em; }
-        
-        .template-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px; }
-        .template-card { background: var(--ctp-mantle); padding: 12px; border-radius: 10px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s; }
-        .template-card:hover { border-color: var(--ctp-pink); }
-        .template-card.selected { border-color: var(--ctp-green); background: rgba(166, 227, 161, 0.1); }
-        .template-name { font-weight: 600; font-size: 0.9em; color: var(--ctp-text); }
-        .template-desc { font-size: 0.75em; color: var(--ctp-subtext0); }
-        
+        .tag { background: var(--ctp-surface1); padding: 4px 10px; border-radius: 12px; font-size: 0.7em; color: var(--ctp-blue); }
+        .tag.new { background: rgba(166, 227, 161, 0.2); color: var(--ctp-green); }
+
+        /* Installed Tab */
+        .installed-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .installed-count { background: var(--ctp-surface0); padding: 8px 16px; border-radius: 20px; font-size: 0.85em; color: var(--ctp-subtext0); }
+
+        /* Updates Tab */
+        .update-card { background: var(--ctp-surface0); border-radius: 12px; padding: 20px; margin-bottom: 15px; border: 1px solid var(--ctp-surface1); display: flex; align-items: center; gap: 15px; }
+        .update-icon { font-size: 2em; }
+        .update-info { flex: 1; }
+        .update-name { font-weight: 600; color: var(--ctp-text); }
+        .update-version { font-size: 0.8em; color: var(--ctp-subtext0); margin-top: 3px; }
+        .update-btn { background: var(--accent); color: var(--ctp-crust); border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .update-btn:hover { transform: scale(1.05); }
+        .update-all-btn { background: var(--ctp-green); color: var(--ctp-crust); border: none; padding: 10px 20px; border-radius: 10px; font-weight: 600; cursor: pointer; margin-bottom: 20px; }
+
+        /* Bottom Tab Bar */
+        .bottom-tabs { position: fixed; bottom: 0; left: 0; right: 0; background: var(--ctp-mantle); border-top: 1px solid var(--ctp-surface1); padding: 8px 0; padding-bottom: max(8px, env(safe-area-inset-bottom)); z-index: 100; flex-shrink: 0; }
+        .bottom-tabs-inner { display: flex; justify-content: space-around; max-width: 500px; margin: 0 auto; }
+        .bottom-tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 16px; border: none; background: none; color: var(--ctp-overlay0); font-size: 11px; cursor: pointer; transition: all 0.2s; min-width: 70px; }
+        .bottom-tab:hover { color: var(--ctp-subtext0); }
+        .bottom-tab.active { color: var(--accent); }
+        .bottom-tab.active .tab-icon { transform: scale(1.1); }
+        .tab-icon { font-size: 24px; transition: transform 0.2s; }
+        .tab-label { font-weight: 500; }
+
+        /* Loading & Empty States */
+        .loading { text-align: center; padding: 40px; }
+        .spinner { width: 40px; height: 40px; border: 3px solid var(--ctp-surface1); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 15px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--ctp-subtext0); }
+        .empty-icon { font-size: 4em; margin-bottom: 20px; opacity: 0.5; }
+        .empty-text { font-size: 1.1em; margin-bottom: 10px; }
+        .empty-subtext { font-size: 0.9em; color: var(--ctp-overlay0); }
+
+        /* Modal */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 1000; }
         .modal.active { display: flex; }
-        .modal-content { background: var(--ctp-surface0); padding: 30px; border-radius: 16px; max-width: 500px; width: 90%; }
-        .modal h3 { color: var(--ctp-pink); margin-bottom: 20px; }
-        .modal input, .modal select { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid var(--ctp-surface1); border-radius: 10px; background: var(--ctp-mantle); color: var(--ctp-text); }
+        .modal-content { background: var(--ctp-surface0); padding: 30px; border-radius: 16px; max-width: 400px; width: 90%; }
+        .modal h3 { color: var(--accent); margin-bottom: 20px; }
+        .modal input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid var(--ctp-surface1); border-radius: 10px; background: var(--ctp-mantle); color: var(--ctp-text); }
         .modal-buttons { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; }
-        
-        .loading { text-align: center; padding: 30px; }
-        .spinner { width: 40px; height: 40px; border: 3px solid var(--ctp-surface1); border-top-color: var(--ctp-pink); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 15px; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        
-        .empty-state { text-align: center; padding: 40px; color: var(--ctp-subtext0); }
-        .empty-icon { font-size: 3em; margin-bottom: 15px; }
+        .btn { padding: 10px 20px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn-primary { background: var(--accent); color: var(--ctp-crust); }
+        .btn-secondary { background: var(--ctp-surface1); color: var(--ctp-text); }
+        .btn-deploy { background: var(--ctp-green); color: var(--ctp-crust); }
 
-        /* Mobile bottom tabs */
-        .bottom-tabs { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--ctp-mantle); border-top: 1px solid var(--ctp-surface1); padding: 8px 0; padding-bottom: max(8px, env(safe-area-inset-bottom)); z-index: 100; }
-        .bottom-tabs-inner { display: flex; justify-content: space-around; }
-        .bottom-tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 16px; border: none; background: none; color: var(--ctp-subtext0); font-size: 10px; cursor: pointer; }
-        .bottom-tab.active { color: var(--ctp-pink); }
-        .bottom-tab-icon { font-size: 22px; }
-
-        @media (max-width: 768px) {
-            .header { padding: 15px; }
+        @media (max-width: 600px) {
+            .header { padding: 12px 15px; }
             .header-content { flex-direction: column; gap: 10px; }
-            .logo h1 { font-size: 1.4em; }
-            .status-indicators { flex-wrap: wrap; justify-content: center; }
-            .main { grid-template-columns: 1fr; padding: 15px; padding-bottom: 90px; gap: 15px; }
-            .tabs { display: none; }
-            .bottom-tabs { display: block; }
-            .section { padding: 15px; border-radius: 12px; }
-            .section-title { font-size: 1.1em; margin-bottom: 12px; }
-            .app-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; max-height: none; overflow: visible; }
+            .logo h1 { font-size: 1.1em; }
+            .status-indicators { display: none; }
+            .content-area { padding: 15px; }
+            .app-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
             .app-card { padding: 15px; }
-            .app-icon { font-size: 1.5em; }
-            .app-name { font-size: 0.9em; }
-            .chat-container { height: auto; min-height: 300px; }
-            .chat-messages { height: 250px; }
-            .chat-input textarea { min-height: 45px; font-size: 16px; }
-            .template-grid { grid-template-columns: 1fr; }
-            .right-panel { display: none; }
-            .right-panel.active { display: block; }
-            .left-panel { display: block; }
-            .left-panel.hidden { display: none; }
+            .app-icon { font-size: 2em; }
+            .featured-apps { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -480,74 +453,66 @@ UI_HTML = '''<!DOCTYPE html>
             </div>
         </div>
     </header>
-    
-    <main class="main">
-        <div class="left-panel">
-            <section class="section">
-                <h2 class="section-title">📦 App Registry</h2>
-                <div class="tabs">
-                    <button class="tab active" onclick="showTab('installed')">Installed</button>
-                    <button class="tab" onclick="showTab('templates')">Templates</button>
-                    <button class="tab" onclick="showTab('builds')">Builds</button>
-                </div>
-                
-                <div id="installedTab" class="tab-content">
-                    <div class="app-grid" id="appGrid">
-                        <div class="loading"><div class="spinner"></div><p>Loading apps...</p></div>
-                    </div>
-                </div>
-                
-                <div id="templatesTab" class="tab-content" style="display:none">
-                    <div class="template-grid" id="templateGrid"></div>
-                </div>
-                
-                <div id="buildsTab" class="tab-content" style="display:none">
-                    <div id="buildsList" class="build-progress"></div>
-                </div>
-            </section>
+
+    <div class="content-area">
+        <!-- Featured Tab -->
+        <div id="featuredView" class="tab-view active">
+            <h1 class="view-title">⭐ Featured</h1>
+            <div class="featured-banner">
+                <h2>Welcome to AI App Store</h2>
+                <p>Discover and deploy apps built with Merchant AI. Browse featured apps below or check the Apps tab for the full catalog.</p>
+            </div>
+            <div class="featured-apps" id="featuredGrid">
+                <div class="loading"><div class="spinner"></div><p>Loading featured apps...</p></div>
+            </div>
         </div>
-        
-        <div class="right-panel">
-            <section class="section chat-container">
-                <h2 class="section-title">🤖 Merchant AI</h2>
-                <div class="chat-messages" id="chatMessages">
-                    <div class="message ai">
-                        <div class="message-header">🏪 Merchant</div>
-                        <div class="message-content">
-                            Welcome! I'm Merchant, your AI app builder.<br><br>
-                            Tell me what app you need:<br>
-                            • "I need a todo list"<br>
-                            • "Build me a timer app"<br>
-                            • "Create a note-taking app"<br><br>
-                            Or browse templates in the Templates tab!
-                        </div>
-                    </div>
-                </div>
-                <div class="chat-input">
-                    <textarea id="chatInput" placeholder="Describe the app you want..." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
-                    <button class="btn btn-primary" onclick="sendMessage()">🚀</button>
-                </div>
-            </section>
+
+        <!-- Apps Tab -->
+        <div id="appsView" class="tab-view">
+            <h1 class="view-title">⊞ All Apps</h1>
+            <div class="app-grid" id="appGrid">
+                <div class="loading"><div class="spinner"></div><p>Loading apps...</p></div>
+            </div>
         </div>
-    </main>
-    
+
+        <!-- Installed Tab -->
+        <div id="installedView" class="tab-view">
+            <h1 class="view-title">✓ Installed</h1>
+            <div class="installed-header">
+                <span>Your deployed applications</span>
+                <span class="installed-count" id="installedCount">0 apps</span>
+            </div>
+            <div class="app-grid" id="installedGrid">
+                <div class="loading"><div class="spinner"></div><p>Loading installed apps...</p></div>
+            </div>
+        </div>
+
+        <!-- Updates Tab -->
+        <div id="updatesView" class="tab-view">
+            <h1 class="view-title">↻ Updates</h1>
+            <div id="updatesContainer">
+                <div class="loading"><div class="spinner"></div><p>Checking for updates...</p></div>
+            </div>
+        </div>
+    </div>
+
     <nav class="bottom-tabs">
         <div class="bottom-tabs-inner">
-            <button class="bottom-tab active" onclick="mobileTab('apps')">
-                <span class="bottom-tab-icon">📦</span>
-                <span>Apps</span>
+            <button class="bottom-tab active" onclick="switchTab('featured')" data-tab="featured">
+                <span class="tab-icon">⭐</span>
+                <span class="tab-label">Featured</span>
             </button>
-            <button class="bottom-tab" onclick="mobileTab('templates')">
-                <span class="bottom-tab-icon">📋</span>
-                <span>Templates</span>
+            <button class="bottom-tab" onclick="switchTab('apps')" data-tab="apps">
+                <span class="tab-icon">⊞</span>
+                <span class="tab-label">Apps</span>
             </button>
-            <button class="bottom-tab" onclick="mobileTab('builds')">
-                <span class="bottom-tab-icon">🔨</span>
-                <span>Builds</span>
+            <button class="bottom-tab" onclick="switchTab('installed')" data-tab="installed">
+                <span class="tab-icon">✓</span>
+                <span class="tab-label">Installed</span>
             </button>
-            <button class="bottom-tab" onclick="mobileTab('chat')">
-                <span class="bottom-tab-icon">🤖</span>
-                <span>Chat</span>
+            <button class="bottom-tab" onclick="switchTab('updates')" data-tab="updates">
+                <span class="tab-icon">↻</span>
+                <span class="tab-label">Updates</span>
             </button>
         </div>
     </nav>
@@ -564,61 +529,84 @@ UI_HTML = '''<!DOCTYPE html>
             </div>
         </div>
     </div>
-    
+
     <script>
         let currentApp = null;
-        let sessionId = 'session-' + Date.now();
-        let buildEventSource = null;
-        
-        // Initialize
+        let allApps = [];
+        let installedApps = [];
+
         document.addEventListener('DOMContentLoaded', () => {
             loadApps();
-            loadTemplates();
-            startBuildStream();
             checkServices();
-            setInterval(loadBuilds, 5000);
-            setInterval(checkServices, 10000);
+            setInterval(checkServices, 15000);
         });
-        
+
+        function switchTab(tab) {
+            document.querySelectorAll('.bottom-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+
+            document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
+            document.getElementById(tab + 'View').classList.add('active');
+
+            if (tab === 'updates') loadUpdates();
+            if (tab === 'installed') loadInstalled();
+        }
+
         async function checkServices() {
             try {
-                const resp = await fetch('/health');
+                await fetch('/health');
                 document.getElementById('registryDot').className = 'dot green';
             } catch { document.getElementById('registryDot').className = 'dot red'; }
-            
+
             try {
                 const resp = await fetch('/merchant/catalog');
                 document.getElementById('merchantDot').className = resp.ok ? 'dot green' : 'dot yellow';
             } catch { document.getElementById('merchantDot').className = 'dot red'; }
-            
+
             try {
                 const resp = await fetch('/forge/builds');
                 document.getElementById('forgeDot').className = resp.ok ? 'dot green' : 'dot yellow';
             } catch { document.getElementById('forgeDot').className = 'dot red'; }
         }
-        
-        function showTab(tab) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
-            event.target.classList.add('active');
-            document.getElementById(tab + 'Tab').style.display = 'block';
-            if (tab === 'builds') loadBuilds();
-        }
-        
+
         async function loadApps() {
             try {
                 const resp = await fetch('/apps');
                 const data = await resp.json();
-                renderApps(data.apps || []);
+                allApps = data.apps || [];
+                renderFeatured(allApps);
+                renderAllApps(allApps);
+                renderInstalled(allApps);
             } catch (e) {
-                document.getElementById('appGrid').innerHTML = '<div class="empty-state"><div class="empty-icon">📭</div><p>Failed to load apps</p></div>';
+                showError('featuredGrid', 'Failed to load apps');
+                showError('appGrid', 'Failed to load apps');
             }
         }
-        
-        function renderApps(apps) {
+
+        function renderFeatured(apps) {
+            const grid = document.getElementById('featuredGrid');
+            if (apps.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⭐</div><div class="empty-text">No featured apps yet</div><div class="empty-subtext">Apps will appear here once available</div></div>';
+                return;
+            }
+            const featured = apps.slice(0, 6);
+            grid.innerHTML = featured.map(app => `
+                <div class="app-card featured" onclick="showDeploy('${app.name}')">
+                    <div class="app-icon">${app.icon}</div>
+                    <div class="app-name">${app.name}</div>
+                    <div class="app-desc">${app.description}</div>
+                    <div class="app-tags">
+                        <span class="tag new">Featured</span>
+                        ${app.tags.slice(0, 2).map(t => `<span class="tag">${t}</span>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderAllApps(apps) {
             const grid = document.getElementById('appGrid');
             if (apps.length === 0) {
-                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No apps yet. Build one with Merchant!</p></div>';
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⊞</div><div class="empty-text">No apps available</div><div class="empty-subtext">Build your first app with Merchant AI</div></div>';
                 return;
             }
             grid.innerHTML = apps.map(app => `
@@ -626,137 +614,95 @@ UI_HTML = '''<!DOCTYPE html>
                     <div class="app-icon">${app.icon}</div>
                     <div class="app-name">${app.name}</div>
                     <div class="app-desc">${app.description}</div>
-                    <div class="app-tags">${app.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+                    <div class="app-tags">${app.tags.slice(0, 3).map(t => `<span class="tag">${t}</span>`).join('')}</div>
                 </div>
             `).join('');
         }
-        
-        async function loadTemplates() {
-            try {
-                const resp = await fetch('/merchant/catalog');
-                const data = await resp.json();
-                renderTemplates(data.templates || []);
-            } catch (e) {
-                document.getElementById('templateGrid').innerHTML = '<p>Failed to load templates</p>';
-            }
-        }
-        
-        function renderTemplates(templates) {
-            const grid = document.getElementById('templateGrid');
-            grid.innerHTML = templates.map(t => `
-                <div class="template-card" onclick="selectTemplate('${t.name}')">
-                    <div class="template-name">${t.name}</div>
-                    <div class="template-desc">${t.description}</div>
-                </div>
-            `).join('');
-        }
-        
-        function selectTemplate(name) {
-            document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
-            event.target.closest('.template-card').classList.add('selected');
-            document.getElementById('chatInput').value = `Build me a ${name.replace(/-/g, ' ')}`;
-            document.getElementById('chatInput').focus();
-        }
-        
-        async function loadBuilds() {
-            try {
-                const resp = await fetch('/forge/builds');
-                const builds = await resp.json();
-                renderBuilds(builds);
-            } catch (e) {
-                console.error('Failed to load builds:', e);
-            }
-        }
-        
-        function renderBuilds(builds) {
-            const list = document.getElementById('buildsList');
-            if (!builds || builds.length === 0) {
-                list.innerHTML = '<div class="empty-state"><div class="empty-icon">🔨</div><p>No builds yet</p></div>';
+
+        function renderInstalled(apps) {
+            const grid = document.getElementById('installedGrid');
+            const countEl = document.getElementById('installedCount');
+
+            // For demo purposes, show all apps as "installed"
+            installedApps = apps;
+            countEl.textContent = `${apps.length} apps`;
+
+            if (apps.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-text">No installed apps</div><div class="empty-subtext">Deploy apps from the Apps tab</div></div>';
                 return;
             }
-            list.innerHTML = builds.slice(0, 10).map(b => `
-                <div class="build-item ${b.status}">
-                    <div class="build-header">
-                        <span class="build-name">${b.name}</span>
-                        <span class="build-status status-${b.status}">${b.status}</span>
+            grid.innerHTML = apps.map(app => `
+                <div class="app-card" onclick="showDeploy('${app.name}')">
+                    <div class="app-icon">${app.icon}</div>
+                    <div class="app-name">${app.name}</div>
+                    <div class="app-desc">${app.description}</div>
+                    <div class="app-tags">
+                        <span class="tag" style="background: rgba(166, 227, 161, 0.2); color: var(--ctp-green);">Installed</span>
                     </div>
-                    <div class="build-info">
-                        ${b.image}<br>
-                        ${b.duration || 'In progress...'}
-                    </div>
-                    ${b.forge_quote ? `<div class="build-quote">"${b.forge_quote}"</div>` : ''}
                 </div>
             `).join('');
         }
-        
-        function startBuildStream() {
-            buildEventSource = new EventSource('/build/stream/' + sessionId);
-            buildEventSource.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.builds) renderBuilds(data.builds);
-                } catch (e) {}
-            };
+
+        function loadInstalled() {
+            renderInstalled(allApps);
         }
-        
-        async function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            if (!message) return;
-            
-            const messages = document.getElementById('chatMessages');
-            messages.innerHTML += `<div class="message user"><div class="message-header">You</div><div class="message-content">${escapeHtml(message)}</div></div>`;
-            input.value = '';
-            
-            messages.innerHTML += `<div class="message system" id="thinking"><div class="message-header">⏳ Processing</div><div class="message-content">Merchant is thinking...</div></div>`;
-            messages.scrollTop = messages.scrollHeight;
-            
-            try {
-                const resp = await fetch('/merchant/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message, session_id: sessionId })
-                });
-                const data = await resp.json();
-                
-                document.getElementById('thinking')?.remove();
-                
-                let content = escapeHtml(data.response || 'No response');
-                if (data.build_id) {
-                    content += `<br><br><span class="tag" style="background: var(--ctp-green); color: var(--ctp-crust);">Build Started: ${data.build_id}</span>`;
-                    showTab('builds');
-                    setTimeout(loadBuilds, 1000);
-                    setTimeout(loadApps, 5000);
-                }
-                
-                messages.innerHTML += `<div class="message ai"><div class="message-header">🏪 Merchant</div><div class="message-content">${content.replace(/\\n/g, '<br>')}</div></div>`;
-            } catch (e) {
-                document.getElementById('thinking')?.remove();
-                messages.innerHTML += `<div class="message system"><div class="message-header">❌ Error</div><div class="message-content">${e.message}</div></div>`;
+
+        function loadUpdates() {
+            const container = document.getElementById('updatesContainer');
+
+            if (allApps.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="empty-icon">↻</div><div class="empty-text">No updates available</div><div class="empty-subtext">All your apps are up to date</div></div>';
+                return;
             }
-            messages.scrollTop = messages.scrollHeight;
+
+            // Simulate some updates available
+            const updates = allApps.slice(0, 3);
+            if (updates.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="empty-icon">✓</div><div class="empty-text">All apps up to date</div><div class="empty-subtext">Check back later for updates</div></div>';
+                return;
+            }
+
+            container.innerHTML = `
+                <button class="update-all-btn" onclick="updateAll()">Update All (${updates.length})</button>
+                ${updates.map(app => `
+                    <div class="update-card">
+                        <div class="update-icon">${app.icon}</div>
+                        <div class="update-info">
+                            <div class="update-name">${app.name}</div>
+                            <div class="update-version">New version available</div>
+                        </div>
+                        <button class="update-btn" onclick="updateApp('${app.name}')">Update</button>
+                    </div>
+                `).join('')}
+            `;
         }
-        
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+
+        function updateApp(name) {
+            alert('Updating ' + name + '...');
         }
-        
+
+        function updateAll() {
+            alert('Updating all apps...');
+        }
+
+        function showError(gridId, message) {
+            document.getElementById(gridId).innerHTML = `<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-text">${message}</div></div>`;
+        }
+
         function showDeploy(name) {
             currentApp = name;
             document.getElementById('deployAppName').textContent = 'Deploy: ' + name;
             document.getElementById('deployModal').classList.add('active');
         }
-        
+
         function closeModal() {
             document.getElementById('deployModal').classList.remove('active');
         }
-        
+
         async function confirmDeploy() {
             const tag = document.getElementById('deployTag').value || 'latest';
             const port = parseInt(document.getElementById('deployPort').value) || 8080;
-            
+
             try {
                 const resp = await fetch('/apps/' + currentApp + '/deploy', {
                     method: 'POST',
@@ -764,44 +710,16 @@ UI_HTML = '''<!DOCTYPE html>
                     body: JSON.stringify({ tag, port })
                 });
                 const data = await resp.json();
-                
-                const messages = document.getElementById('chatMessages');
+
                 if (data.status === 'deployed') {
-                    messages.innerHTML += `<div class="message system"><div class="message-header">✅ Deployed</div><div class="message-content">${currentApp} deployed successfully!</div></div>`;
+                    alert(currentApp + ' deployed successfully!');
                 } else {
-                    messages.innerHTML += `<div class="message system"><div class="message-header">❌ Error</div><div class="message-content">${data.error}</div></div>`;
+                    alert('Deploy error: ' + data.error);
                 }
-                messages.scrollTop = messages.scrollHeight;
             } catch (e) {
                 alert('Deploy failed: ' + e.message);
             }
             closeModal();
-        }
-
-        function mobileTab(tab) {
-            document.querySelectorAll('.bottom-tab').forEach(t => t.classList.remove('active'));
-            event.target.closest('.bottom-tab').classList.add('active');
-
-            const leftPanel = document.querySelector('.left-panel');
-            const rightPanel = document.querySelector('.right-panel');
-
-            if (tab === 'chat') {
-                leftPanel.classList.add('hidden');
-                rightPanel.classList.add('active');
-            } else {
-                leftPanel.classList.remove('hidden');
-                rightPanel.classList.remove('active');
-
-                document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
-                if (tab === 'apps') {
-                    document.getElementById('installedTab').style.display = 'block';
-                } else if (tab === 'templates') {
-                    document.getElementById('templatesTab').style.display = 'block';
-                } else if (tab === 'builds') {
-                    document.getElementById('buildsTab').style.display = 'block';
-                    loadBuilds();
-                }
-            }
         }
     </script>
 </body>

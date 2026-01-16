@@ -125,16 +125,36 @@ type AutoDeployRule struct {
 }
 
 type HealthCheckStatus struct {
-	Deployment    string    `json:"deployment"`
-	Namespace     string    `json:"namespace"`
-	Image         string    `json:"image"`
-	Status        string    `json:"status"`
-	StartTime     time.Time `json:"startTime"`
-	LastCheck     time.Time `json:"lastCheck"`
-	Attempts      int       `json:"attempts"`
-	MaxAttempts   int       `json:"maxAttempts"`
-	Message       string    `json:"message"`
-	PodStatuses   []PodStatus `json:"podStatuses"`
+	Deployment        string      `json:"deployment"`
+	Namespace         string      `json:"namespace"`
+	Image             string      `json:"image"`
+	Status            string      `json:"status"`
+	StartTime         time.Time   `json:"startTime"`
+	LastCheck         time.Time   `json:"lastCheck"`
+	Attempts          int         `json:"attempts"`
+	MaxAttempts       int         `json:"maxAttempts"`
+	Message           string      `json:"message"`
+	PodStatuses       []PodStatus `json:"podStatuses"`
+	RolloutStatus     *RolloutStatus `json:"rolloutStatus,omitempty"`
+}
+
+type RolloutStatus struct {
+	Replicas            int32  `json:"replicas"`
+	UpdatedReplicas     int32  `json:"updatedReplicas"`
+	ReadyReplicas       int32  `json:"readyReplicas"`
+	AvailableReplicas   int32  `json:"availableReplicas"`
+	UnavailableReplicas int32  `json:"unavailableReplicas"`
+	ProgressDeadline    bool   `json:"progressDeadline"`
+	Stalled             bool   `json:"stalled"`
+	StalledReason       string `json:"stalledReason,omitempty"`
+	Conditions          []RolloutCondition `json:"conditions,omitempty"`
+}
+
+type RolloutCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
 }
 
 type PodStatus struct {
@@ -1105,9 +1125,12 @@ func checkDeploymentHealth(key string, hc *HealthCheckStatus) {
 	ctx := context.Background()
 	dep, err := clientset.AppsV1().Deployments(hc.Namespace).Get(ctx, hc.Deployment, metav1.GetOptions{})
 	if err != nil {
-		updateHealthCheckStatus(key, "failed", fmt.Sprintf("Failed to get deployment: %v", err), nil)
+		updateHealthCheckStatusFull(key, "failed", fmt.Sprintf("Failed to get deployment: %v", err), nil, nil)
 		return
 	}
+
+	// Build rollout status from deployment
+	rolloutStatus := buildRolloutStatus(dep)
 
 	// Get pod statuses
 	pods, err := clientset.CoreV1().Pods(hc.Namespace).List(ctx, metav1.ListOptions{
@@ -1118,17 +1141,31 @@ func checkDeploymentHealth(key string, hc *HealthCheckStatus) {
 	if err == nil {
 		for _, pod := range pods.Items {
 			ready := false
+			message := pod.Status.Message
 			for _, cond := range pod.Status.Conditions {
 				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
 					ready = true
 					break
+				}
+				// Capture waiting container reasons
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionFalse && cond.Message != "" {
+					message = cond.Message
+				}
+			}
+			// Check container statuses for more detailed error messages
+			for _, cs := range pod.Status.ContainerStatuses {
+				if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+					message = fmt.Sprintf("%s: %s", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+				}
+				if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" {
+					message = fmt.Sprintf("%s: %s (exit code %d)", cs.State.Terminated.Reason, cs.State.Terminated.Message, cs.State.Terminated.ExitCode)
 				}
 			}
 			podStatuses = append(podStatuses, PodStatus{
 				Name:    pod.Name,
 				Ready:   ready,
 				Phase:   string(pod.Status.Phase),
-				Message: pod.Status.Message,
+				Message: message,
 			})
 		}
 	}
@@ -1137,11 +1174,21 @@ func checkDeploymentHealth(key string, hc *HealthCheckStatus) {
 	hc.Attempts++
 	hc.LastCheck = time.Now()
 	hc.PodStatuses = podStatuses
+	hc.RolloutStatus = rolloutStatus
 	healthCheckMu.Unlock()
 
+	// Check if rollout is stalled due to deployment conditions
+	if rolloutStatus.Stalled {
+		updateHealthCheckStatusFull(key, "failed", fmt.Sprintf("Rollout stalled: %s", rolloutStatus.StalledReason), podStatuses, rolloutStatus)
+		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, "", "health-check", "failed", fmt.Sprintf("Rollout stalled: %s", rolloutStatus.StalledReason), time.Since(hc.StartTime).Seconds())
+		log.Printf("Health check failed for %s/%s: rollout stalled - %s", hc.Namespace, hc.Deployment, rolloutStatus.StalledReason)
+		return
+	}
+
 	// Check if deployment is ready
-	if dep.Status.ReadyReplicas >= *dep.Spec.Replicas && dep.Status.UpdatedReplicas >= *dep.Spec.Replicas {
-		updateHealthCheckStatus(key, "healthy", "Deployment is healthy and ready", podStatuses)
+	if dep.Status.ReadyReplicas >= *dep.Spec.Replicas && dep.Status.UpdatedReplicas >= *dep.Spec.Replicas && dep.Status.AvailableReplicas >= *dep.Spec.Replicas {
+		updateHealthCheckStatusFull(key, "healthy", "Deployment is healthy and ready", podStatuses, rolloutStatus)
+		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, "", "health-check", "success", "Rollout completed successfully", time.Since(hc.StartTime).Seconds())
 		addToHistory(hc.Deployment, hc.Image, "", "health-check", "success", time.Since(hc.StartTime).Seconds(), "")
 		log.Printf("Health check passed for %s/%s", hc.Namespace, hc.Deployment)
 		return
@@ -1149,16 +1196,69 @@ func checkDeploymentHealth(key string, hc *HealthCheckStatus) {
 
 	// Check if max attempts reached
 	if hc.Attempts >= hc.MaxAttempts {
-		updateHealthCheckStatus(key, "failed", "Max health check attempts reached", podStatuses)
+		updateHealthCheckStatusFull(key, "failed", "Max health check attempts reached", podStatuses, rolloutStatus)
 		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, "", "health-check", "failed", "Health check timed out", time.Since(hc.StartTime).Seconds())
 		log.Printf("Health check failed for %s/%s: max attempts reached", hc.Namespace, hc.Deployment)
 		return
 	}
 
-	updateHealthCheckStatus(key, "checking", fmt.Sprintf("Waiting for rollout (%d/%d ready)", dep.Status.ReadyReplicas, *dep.Spec.Replicas), podStatuses)
+	msg := fmt.Sprintf("Rollout in progress: %d/%d updated, %d/%d ready, %d/%d available",
+		rolloutStatus.UpdatedReplicas, rolloutStatus.Replicas,
+		rolloutStatus.ReadyReplicas, rolloutStatus.Replicas,
+		rolloutStatus.AvailableReplicas, rolloutStatus.Replicas)
+	updateHealthCheckStatusFull(key, "checking", msg, podStatuses, rolloutStatus)
+}
+
+// buildRolloutStatus extracts rollout status from deployment conditions
+func buildRolloutStatus(dep *appsv1.Deployment) *RolloutStatus {
+	rs := &RolloutStatus{
+		Replicas:            dep.Status.Replicas,
+		UpdatedReplicas:     dep.Status.UpdatedReplicas,
+		ReadyReplicas:       dep.Status.ReadyReplicas,
+		AvailableReplicas:   dep.Status.AvailableReplicas,
+		UnavailableReplicas: dep.Status.UnavailableReplicas,
+		Stalled:             false,
+	}
+
+	// Check deployment conditions for stalled rollout
+	for _, cond := range dep.Status.Conditions {
+		rc := RolloutCondition{
+			Type:    string(cond.Type),
+			Status:  string(cond.Status),
+			Reason:  cond.Reason,
+			Message: cond.Message,
+		}
+		rs.Conditions = append(rs.Conditions, rc)
+
+		// Detect stalled rollout from Progressing condition
+		if cond.Type == appsv1.DeploymentProgressing {
+			if cond.Status == corev1.ConditionFalse {
+				rs.Stalled = true
+				rs.StalledReason = fmt.Sprintf("%s: %s", cond.Reason, cond.Message)
+			}
+			// Check for ProgressDeadlineExceeded
+			if cond.Reason == "ProgressDeadlineExceeded" {
+				rs.ProgressDeadline = true
+				rs.Stalled = true
+				rs.StalledReason = cond.Message
+			}
+		}
+
+		// Detect replica failure
+		if cond.Type == appsv1.DeploymentReplicaFailure && cond.Status == corev1.ConditionTrue {
+			rs.Stalled = true
+			rs.StalledReason = fmt.Sprintf("ReplicaFailure: %s", cond.Message)
+		}
+	}
+
+	return rs
 }
 
 func updateHealthCheckStatus(key, status, message string, podStatuses []PodStatus) {
+	updateHealthCheckStatusFull(key, status, message, podStatuses, nil)
+}
+
+func updateHealthCheckStatusFull(key, status, message string, podStatuses []PodStatus, rolloutStatus *RolloutStatus) {
 	healthCheckMu.Lock()
 	defer healthCheckMu.Unlock()
 	if hc, ok := pendingHealthChecks[key]; ok {
@@ -1166,6 +1266,9 @@ func updateHealthCheckStatus(key, status, message string, podStatuses []PodStatu
 		hc.Message = message
 		if podStatuses != nil {
 			hc.PodStatuses = podStatuses
+		}
+		if rolloutStatus != nil {
+			hc.RolloutStatus = rolloutStatus
 		}
 		if status == "healthy" || status == "failed" {
 			// Remove from pending after a delay
@@ -1475,14 +1578,14 @@ func handleEventStream(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 
 	lastEventCount := 0
-	lastHealthCheckCount := 0
+	lastHealthCheckHash := ""
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			// Send deployment updates
+			// Send deployment updates with live rollout status
 			deploymentsMu.RLock()
 			deps := make([]*DeploymentInfo, 0, len(deployments))
 			for _, d := range deployments {
@@ -1505,27 +1608,53 @@ func handleEventStream(w http.ResponseWriter, r *http.Request) {
 				lastEventCount = currentEventCount
 			}
 
-			// Send health check updates
+			// Always send health checks with rollout status for active rollouts
 			healthCheckMu.RLock()
-			currentHealthCount := len(pendingHealthChecks)
-			healthCheckMu.RUnlock()
-
-			if currentHealthCount != lastHealthCheckCount {
-				healthCheckMu.RLock()
-				sendSSEEvent(w, flusher, "health-checks", pendingHealthChecks)
-				healthCheckMu.RUnlock()
-				lastHealthCheckCount = currentHealthCount
-			}
-
-			// Always send health checks during active checks
-			healthCheckMu.RLock()
+			hasActiveChecks := false
 			for _, hc := range pendingHealthChecks {
 				if hc.Status == "checking" || hc.Status == "pending" {
-					sendSSEEvent(w, flusher, "health-checks", pendingHealthChecks)
+					hasActiveChecks = true
 					break
 				}
 			}
+
+			// Compute a simple hash to detect changes
+			currentHash := fmt.Sprintf("%d-%v", len(pendingHealthChecks), hasActiveChecks)
+			for _, hc := range pendingHealthChecks {
+				currentHash += fmt.Sprintf("-%s-%d", hc.Status, hc.Attempts)
+			}
 			healthCheckMu.RUnlock()
+
+			// Send health checks if changed or if there are active checks
+			if currentHash != lastHealthCheckHash || hasActiveChecks {
+				healthCheckMu.RLock()
+				sendSSEEvent(w, flusher, "health-checks", pendingHealthChecks)
+				healthCheckMu.RUnlock()
+				lastHealthCheckHash = currentHash
+			}
+
+			// Send rollout progress for each active deployment
+			if hasActiveChecks {
+				healthCheckMu.RLock()
+				for key, hc := range pendingHealthChecks {
+					if hc.Status == "checking" || hc.Status == "pending" {
+						progress := map[string]interface{}{
+							"key":           key,
+							"deployment":    hc.Deployment,
+							"namespace":     hc.Namespace,
+							"status":        hc.Status,
+							"message":       hc.Message,
+							"attempts":      hc.Attempts,
+							"maxAttempts":   hc.MaxAttempts,
+							"rolloutStatus": hc.RolloutStatus,
+							"podStatuses":   hc.PodStatuses,
+							"elapsed":       time.Since(hc.StartTime).Seconds(),
+						}
+						sendSSEEvent(w, flusher, "rollout-progress", progress)
+					}
+				}
+				healthCheckMu.RUnlock()
+			}
 		}
 	}
 }

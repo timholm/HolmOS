@@ -237,6 +237,7 @@ func main() {
 
 	// Build logs
 	http.HandleFunc("/api/logs/", handleLogs)
+	http.HandleFunc("/api/logs-stream/", handleLogsStream)
 
 	// Kaniko builds
 	http.HandleFunc("/api/build", handleBuild)
@@ -596,6 +597,8 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 	}
 
 	addLogLine(logID, "info", "Kaniko job created, waiting for pod to start...")
+	addLogLine(logID, "info", "")
+	addLogLine(logID, "info", "=== PHASE: PENDING ===")
 
 	// Wait for job completion with real-time log streaming
 	timeout := time.After(time.Duration(stage.Timeout) * time.Second)
@@ -645,7 +648,21 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 			// Report phase changes
 			phase := string(pod.Status.Phase)
 			if phase != lastPhase {
-				addLogLine(logID, "info", fmt.Sprintf("Pod phase: %s", phase))
+				phaseMsg := ""
+				switch phase {
+				case "Pending":
+					phaseMsg = "=== PHASE: PENDING (waiting for resources) ==="
+				case "Running":
+					phaseMsg = "=== PHASE: RUNNING ==="
+				case "Succeeded":
+					phaseMsg = "=== PHASE: SUCCEEDED ==="
+				case "Failed":
+					phaseMsg = "=== PHASE: FAILED ==="
+				default:
+					phaseMsg = fmt.Sprintf("=== PHASE: %s ===", strings.ToUpper(phase))
+				}
+				addLogLine(logID, "info", "")
+				addLogLine(logID, "info", phaseMsg)
 				lastPhase = phase
 			}
 
@@ -653,22 +670,30 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 			for _, initStatus := range pod.Status.InitContainerStatuses {
 				if initStatus.Name == "git-clone" {
 					if initStatus.State.Running != nil {
-						addLogLine(logID, "info", "Git clone in progress...")
-						// Stream init container logs
+						// Stream init container logs in real-time
 						streamInitContainerLogs(ctx, pod.Name, "git-clone", logID)
 					} else if initStatus.State.Terminated != nil {
 						if initStatus.State.Terminated.ExitCode != 0 {
-							addLogLine(logID, "error", fmt.Sprintf("Git clone failed with exit code %d", initStatus.State.Terminated.ExitCode))
+							addLogLine(logID, "error", "")
+							addLogLine(logID, "error", "========================================")
+							addLogLine(logID, "error", "        GIT CLONE FAILED")
+							addLogLine(logID, "error", "========================================")
+							addLogLine(logID, "error", fmt.Sprintf("Exit Code: %d", initStatus.State.Terminated.ExitCode))
+							if initStatus.State.Terminated.Reason != "" {
+								addLogLine(logID, "error", fmt.Sprintf("Reason: %s", initStatus.State.Terminated.Reason))
+							}
+							addLogLine(logID, "error", "")
+							addLogLine(logID, "error", "--- Last 50 lines of git-clone logs ---")
+
 							// Get the failure logs
 							logs := getContainerLogs(ctx, pod.Name, "git-clone")
-							if logs != "" {
-								for _, line := range strings.Split(logs, "\n") {
-									if line != "" {
-										addLogLine(logID, "error", fmt.Sprintf("[git-clone] %s", line))
-									}
-								}
-							}
+							showLastNLines(logID, logs, 50, "git-clone")
+
+							addLogLine(logID, "error", "========================================")
 							return fmt.Errorf("git clone failed: exit code %d", initStatus.State.Terminated.ExitCode)
+						} else {
+							// Git clone succeeded, stream final logs
+							streamInitContainerLogs(ctx, pod.Name, "git-clone", logID)
 						}
 					} else if initStatus.State.Waiting != nil {
 						reason := initStatus.State.Waiting.Reason
@@ -718,33 +743,92 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 			}
 
 			if k8sJob.Status.Failed > 0 {
-				// Get all logs for debugging
-				addLogLine(logID, "error", "=== BUILD FAILED ===")
-				streamPodLogs(ctx, jobName, logID, &lastLogOffset, true)
+				addLogLine(logID, "error", "")
+				addLogLine(logID, "error", "========================================")
+				addLogLine(logID, "error", "           BUILD FAILED")
+				addLogLine(logID, "error", "========================================")
+				addLogLine(logID, "error", "")
 
 				// Get detailed failure info
+				var failedContainer string
+				var exitCode int32
+				var failReason string
+
 				if len(pods.Items) > 0 {
 					pod := &pods.Items[0]
-					for _, cs := range pod.Status.ContainerStatuses {
-						if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
-							addLogLine(logID, "error", fmt.Sprintf("Container %s failed: %s (exit code %d)",
-								cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.ExitCode))
-						}
-					}
+
+					// Check init containers first
 					for _, cs := range pod.Status.InitContainerStatuses {
 						if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
-							addLogLine(logID, "error", fmt.Sprintf("Init container %s failed: %s (exit code %d)",
-								cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.ExitCode))
+							failedContainer = cs.Name
+							exitCode = cs.State.Terminated.ExitCode
+							failReason = cs.State.Terminated.Reason
+							if cs.State.Terminated.Message != "" {
+								failReason = cs.State.Terminated.Message
+							}
+
+							addLogLine(logID, "error", fmt.Sprintf("FAILED CONTAINER: %s (init)", failedContainer))
+							addLogLine(logID, "error", fmt.Sprintf("EXIT CODE: %d", exitCode))
+							if failReason != "" {
+								addLogLine(logID, "error", fmt.Sprintf("REASON: %s", failReason))
+							}
+							addLogLine(logID, "error", "")
+							addLogLine(logID, "error", "--- Last 50 lines of logs ---")
+
+							// Get last 50 lines of init container logs
+							logs := getContainerLogs(ctx, pod.Name, cs.Name)
+							showLastNLines(logID, logs, 50, cs.Name)
+							break
 						}
 					}
+
+					// Check main containers
+					if failedContainer == "" {
+						for _, cs := range pod.Status.ContainerStatuses {
+							if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+								failedContainer = cs.Name
+								exitCode = cs.State.Terminated.ExitCode
+								failReason = cs.State.Terminated.Reason
+								if cs.State.Terminated.Message != "" {
+									failReason = cs.State.Terminated.Message
+								}
+
+								addLogLine(logID, "error", fmt.Sprintf("FAILED CONTAINER: %s", failedContainer))
+								addLogLine(logID, "error", fmt.Sprintf("EXIT CODE: %d", exitCode))
+								if failReason != "" {
+									addLogLine(logID, "error", fmt.Sprintf("REASON: %s", failReason))
+								}
+								addLogLine(logID, "error", "")
+								addLogLine(logID, "error", "--- Last 50 lines of logs ---")
+
+								// Get last 50 lines of container logs
+								logs := getContainerLogs(ctx, pod.Name, cs.Name)
+								showLastNLines(logID, logs, 50, cs.Name)
+								break
+							}
+						}
+					}
+
+					// Show pod events if available
+					addLogLine(logID, "error", "")
+					addLogLine(logID, "error", "--- Pod Status ---")
+					addLogLine(logID, "error", fmt.Sprintf("Pod: %s", pod.Name))
+					addLogLine(logID, "error", fmt.Sprintf("Phase: %s", pod.Status.Phase))
+					if pod.Status.Message != "" {
+						addLogLine(logID, "error", fmt.Sprintf("Message: %s", pod.Status.Message))
+					}
 				}
-				return fmt.Errorf("Kaniko build failed - see logs above for details")
+
+				addLogLine(logID, "error", "")
+				addLogLine(logID, "error", "========================================")
+
+				return fmt.Errorf("build failed: container %s exited with code %d", failedContainer, exitCode)
 			}
 		}
 	}
 }
 
-// streamPodLogs streams logs from the kaniko container
+// streamPodLogs streams logs from the kaniko container with improved real-time output
 func streamPodLogs(ctx context.Context, jobName, logID string, offset *int64, final bool) {
 	pods, err := clientset.CoreV1().Pods("holm").List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
@@ -754,10 +838,14 @@ func streamPodLogs(ctx context.Context, jobName, logID string, offset *int64, fi
 	}
 
 	pod := &pods.Items[0]
-	sinceSeconds := int64(30)
 	opts := &corev1.PodLogOptions{
-		Container:    "kaniko",
-		SinceSeconds: &sinceSeconds,
+		Container: "kaniko",
+	}
+
+	// For real-time streaming, use sinceSeconds only if not final
+	if !final {
+		sinceSeconds := int64(30)
+		opts.SinceSeconds = &sinceSeconds
 	}
 
 	logs, err := clientset.CoreV1().Pods("holm").GetLogs(pod.Name, opts).Do(ctx).Raw()
@@ -774,10 +862,13 @@ func streamPodLogs(ctx context.Context, jobName, logID string, offset *int64, fi
 			if line != "" {
 				// Determine log level from content
 				level := "info"
-				if strings.Contains(strings.ToLower(line), "error") ||
-					strings.Contains(strings.ToLower(line), "failed") {
+				lowerLine := strings.ToLower(line)
+				if strings.Contains(lowerLine, "error") ||
+					strings.Contains(lowerLine, "failed") ||
+					strings.Contains(lowerLine, "cannot") ||
+					strings.Contains(lowerLine, "fatal") {
 					level = "error"
-				} else if strings.Contains(strings.ToLower(line), "warn") {
+				} else if strings.Contains(lowerLine, "warn") {
 					level = "warn"
 				}
 				addLogLine(logID, level, fmt.Sprintf("[kaniko] %s", line))
@@ -787,17 +878,42 @@ func streamPodLogs(ctx context.Context, jobName, logID string, offset *int64, fi
 	}
 }
 
-// streamInitContainerLogs gets logs from an init container
+// initContainerLogOffsets tracks which init container logs we've already streamed
+var initContainerLogOffsets = make(map[string]int64)
+var initContainerLogOffsetsMu sync.Mutex
+
+// streamInitContainerLogs gets logs from an init container with offset tracking for incremental streaming
 func streamInitContainerLogs(ctx context.Context, podName, containerName, logID string) {
+	key := podName + "/" + containerName
+
+	initContainerLogOffsetsMu.Lock()
+	offset := initContainerLogOffsets[key]
+	initContainerLogOffsetsMu.Unlock()
+
 	logs := getContainerLogs(ctx, podName, containerName)
-	if logs != "" {
-		lines := strings.Split(logs, "\n")
+	if logs != "" && int64(len(logs)) > offset {
+		newLogs := logs[offset:]
+		lines := strings.Split(newLogs, "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line != "" {
-				addLogLine(logID, "info", fmt.Sprintf("[%s] %s", containerName, line))
+				// Detect log level
+				level := "info"
+				lowerLine := strings.ToLower(line)
+				if strings.Contains(lowerLine, "error") ||
+					strings.Contains(lowerLine, "fatal") ||
+					strings.Contains(lowerLine, "failed") {
+					level = "error"
+				} else if strings.Contains(lowerLine, "warn") {
+					level = "warn"
+				}
+				addLogLine(logID, level, fmt.Sprintf("[%s] %s", containerName, line))
 			}
 		}
+
+		initContainerLogOffsetsMu.Lock()
+		initContainerLogOffsets[key] = int64(len(logs))
+		initContainerLogOffsetsMu.Unlock()
 	}
 }
 
@@ -813,8 +929,35 @@ func getContainerLogs(ctx context.Context, podName, containerName string) string
 	return string(logs)
 }
 
+// showLastNLines adds the last N lines of logs to the build log
+func showLastNLines(logID, logs string, n int, containerName string) {
+	if logs == "" {
+		addLogLine(logID, "warn", "(no logs available)")
+		return
+	}
+
+	lines := strings.Split(logs, "\n")
+	start := 0
+	if len(lines) > n {
+		start = len(lines) - n
+	}
+
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			// Detect log level
+			level := "error"
+			addLogLine(logID, level, fmt.Sprintf("[%s] %s", containerName, line))
+		}
+	}
+}
+
 func executeDeploy(execution *PipelineExecution, stage PipelineStage, job *BuildJob, logID string) error {
-	addLogLine(logID, "info", fmt.Sprintf("=== DEPLOY STAGE: %s ===", job.Repo))
+	addLogLine(logID, "info", "")
+	addLogLine(logID, "info", "========================================")
+	addLogLine(logID, "info", fmt.Sprintf("  DEPLOY STAGE: %s", job.Repo))
+	addLogLine(logID, "info", "========================================")
+	addLogLine(logID, "info", "")
 
 	// Determine deployment name and image
 	deploymentName := strings.ToLower(job.Repo)
@@ -825,22 +968,37 @@ func executeDeploy(execution *PipelineExecution, stage PipelineStage, job *Build
 	deploymentName = strings.ReplaceAll(deploymentName, " ", "-")
 
 	image := fmt.Sprintf("%s/%s:latest", registryURL, deploymentName)
-	addLogLine(logID, "info", fmt.Sprintf("Target deployment: %s", deploymentName))
-	addLogLine(logID, "info", fmt.Sprintf("Image: %s", image))
+	addLogLine(logID, "info", fmt.Sprintf("[deploy] Target deployment: %s", deploymentName))
+	addLogLine(logID, "info", fmt.Sprintf("[deploy] Target namespace: holm"))
+	addLogLine(logID, "info", fmt.Sprintf("[deploy] Image: %s", image))
+	addLogLine(logID, "info", fmt.Sprintf("[deploy] Execution ID: %s", execution.ID))
+	addLogLine(logID, "info", "")
+
+	// Determine timeout
+	timeout := stage.Timeout
+	if timeout <= 0 {
+		timeout = 300 // default 5 minutes
+	}
 
 	// First, try to update deployment directly if we have k8s client
 	if clientset != nil {
-		addLogLine(logID, "info", "Attempting direct Kubernetes deployment update...")
+		addLogLine(logID, "info", "[deploy] Connecting to Kubernetes cluster...")
 		ctx := context.Background()
 
 		// Check if deployment exists
+		addLogLine(logID, "info", fmt.Sprintf("[deploy] Looking for deployment '%s' in namespace 'holm'...", deploymentName))
 		deployment, err := clientset.AppsV1().Deployments("holm").Get(ctx, deploymentName, metav1.GetOptions{})
 		if err != nil {
-			addLogLine(logID, "warn", fmt.Sprintf("Deployment %s not found in cluster: %v", deploymentName, err))
-			addLogLine(logID, "info", "Will try deploy-controller instead...")
+			addLogLine(logID, "warn", fmt.Sprintf("[deploy] Deployment %s not found in cluster: %v", deploymentName, err))
+			addLogLine(logID, "info", "[deploy] Will try deploy-controller as fallback...")
 		} else {
 			// Update the deployment image
-			addLogLine(logID, "info", fmt.Sprintf("Found deployment with %d replicas", *deployment.Spec.Replicas))
+			replicas := int32(1)
+			if deployment.Spec.Replicas != nil {
+				replicas = *deployment.Spec.Replicas
+			}
+			addLogLine(logID, "info", fmt.Sprintf("[deploy] Found deployment: %s (replicas: %d)", deploymentName, replicas))
+			addLogLine(logID, "info", fmt.Sprintf("[deploy] Current generation: %d", deployment.Generation))
 
 			// Update container images
 			updated := false
@@ -849,85 +1007,163 @@ func executeDeploy(execution *PipelineExecution, stage PipelineStage, job *Build
 				oldImage := container.Image
 				if strings.Contains(oldImage, deploymentName) || i == 0 {
 					container.Image = image
-					addLogLine(logID, "info", fmt.Sprintf("Updating container %s: %s -> %s", container.Name, oldImage, image))
+					addLogLine(logID, "info", fmt.Sprintf("[deploy] Updating container '%s':", container.Name))
+					addLogLine(logID, "info", fmt.Sprintf("[deploy]   Old image: %s", oldImage))
+					addLogLine(logID, "info", fmt.Sprintf("[deploy]   New image: %s", image))
 					updated = true
 				}
 			}
 
 			if updated {
-				// Add annotation to force rollout
+				// Add annotations to deployment metadata for tracking
+				if deployment.Annotations == nil {
+					deployment.Annotations = make(map[string]string)
+				}
+				deployment.Annotations["cicd.holm/deployed-at"] = time.Now().Format(time.RFC3339)
+				deployment.Annotations["cicd.holm/execution-id"] = execution.ID
+				deployment.Annotations["cicd.holm/commit"] = job.Commit
+				deployment.Annotations["cicd.holm/branch"] = job.Branch
+				deployment.Annotations["cicd.holm/repo"] = job.Repo
+
+				// Add annotation to pod template to force rollout
 				if deployment.Spec.Template.Annotations == nil {
 					deployment.Spec.Template.Annotations = make(map[string]string)
 				}
 				deployment.Spec.Template.Annotations["cicd.holm/deployed-at"] = time.Now().Format(time.RFC3339)
 				deployment.Spec.Template.Annotations["cicd.holm/execution-id"] = execution.ID
 
+				addLogLine(logID, "info", "")
+				addLogLine(logID, "info", "[deploy] Applying deployment update...")
 				_, err = clientset.AppsV1().Deployments("holm").Update(ctx, deployment, metav1.UpdateOptions{})
 				if err != nil {
-					addLogLine(logID, "error", fmt.Sprintf("Failed to update deployment: %v", err))
+					addLogLine(logID, "error", fmt.Sprintf("[deploy] Failed to update deployment: %v", err))
 					return fmt.Errorf("failed to update deployment: %v", err)
 				}
-				addLogLine(logID, "info", "Deployment updated successfully")
+				addLogLine(logID, "info", "[deploy] Deployment update applied successfully")
+				addLogLine(logID, "info", "")
 
 				// Watch rollout status
-				addLogLine(logID, "info", "Monitoring rollout status...")
-				rolloutSuccess := watchRolloutStatus(ctx, deploymentName, logID)
+				addLogLine(logID, "info", "[deploy] Monitoring rollout progress...")
+				addLogLine(logID, "info", "----------------------------------------")
+				rolloutSuccess, rolloutErr := watchRolloutStatusWithTimeout(ctx, deploymentName, logID, timeout)
+				addLogLine(logID, "info", "----------------------------------------")
+
 				if !rolloutSuccess {
+					addLogLine(logID, "error", "")
+					addLogLine(logID, "error", "========================================")
+					addLogLine(logID, "error", "  DEPLOYMENT FAILED")
+					addLogLine(logID, "error", "========================================")
+					if rolloutErr != "" {
+						return fmt.Errorf("deployment rollout failed: %s", rolloutErr)
+					}
 					return fmt.Errorf("deployment rollout failed")
 				}
 
-				addLogLine(logID, "info", "=== DEPLOYMENT SUCCESSFUL ===")
+				addLogLine(logID, "info", "")
+				addLogLine(logID, "info", "========================================")
+				addLogLine(logID, "info", "  DEPLOYMENT SUCCESSFUL")
+				addLogLine(logID, "info", "========================================")
+				addLogLine(logID, "info", fmt.Sprintf("[deploy] Deployment '%s' is now running", deploymentName))
+				addLogLine(logID, "info", fmt.Sprintf("[deploy] Image: %s", image))
 				return nil
 			}
 		}
 	}
 
 	// Fallback: Call deploy-controller to trigger deployment
-	addLogLine(logID, "info", "Triggering deployment via deploy-controller...")
-	deployPayload := map[string]string{
-		"deployment": deploymentName,
-		"namespace":  "holm",
-		"image":      image,
+	addLogLine(logID, "info", "")
+	addLogLine(logID, "info", "[deploy] Triggering deployment via deploy-controller service...")
+	deployPayload := map[string]interface{}{
+		"deployment":  deploymentName,
+		"namespace":   "holm",
+		"image":       image,
+		"executionId": execution.ID,
+		"commit":      job.Commit,
+		"branch":      job.Branch,
 	}
 
 	data, _ := json.Marshal(deployPayload)
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Post("http://deploy-controller.holm.svc.cluster.local:8080/api/deploy",
 		"application/json", bytes.NewReader(data))
 
 	if err != nil {
-		addLogLine(logID, "error", fmt.Sprintf("Failed to call deploy-controller: %v", err))
+		addLogLine(logID, "error", fmt.Sprintf("[deploy] Failed to call deploy-controller: %v", err))
+		addLogLine(logID, "error", "")
+		addLogLine(logID, "error", "========================================")
+		addLogLine(logID, "error", "  DEPLOYMENT FAILED")
+		addLogLine(logID, "error", "========================================")
 		return fmt.Errorf("deployment failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	addLogLine(logID, "info", fmt.Sprintf("Deploy-controller response (HTTP %d): %s", resp.StatusCode, string(body)))
+	addLogLine(logID, "info", fmt.Sprintf("[deploy] Deploy-controller response (HTTP %d)", resp.StatusCode))
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != 200 && resp.StatusCode != 202 {
+		addLogLine(logID, "error", fmt.Sprintf("[deploy] Error response: %s", string(body)))
+		addLogLine(logID, "error", "")
+		addLogLine(logID, "error", "========================================")
+		addLogLine(logID, "error", "  DEPLOYMENT FAILED")
+		addLogLine(logID, "error", "========================================")
 		return fmt.Errorf("deploy-controller returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	addLogLine(logID, "info", "=== DEPLOYMENT TRIGGERED ===")
+	addLogLine(logID, "info", "[deploy] Deployment triggered via deploy-controller")
+
+	// If we have k8s client, still watch the rollout
+	if clientset != nil {
+		addLogLine(logID, "info", "")
+		addLogLine(logID, "info", "[deploy] Monitoring rollout progress...")
+		addLogLine(logID, "info", "----------------------------------------")
+		ctx := context.Background()
+		rolloutSuccess, rolloutErr := watchRolloutStatusWithTimeout(ctx, deploymentName, logID, timeout)
+		addLogLine(logID, "info", "----------------------------------------")
+
+		if !rolloutSuccess {
+			addLogLine(logID, "error", "")
+			addLogLine(logID, "error", "========================================")
+			addLogLine(logID, "error", "  DEPLOYMENT FAILED")
+			addLogLine(logID, "error", "========================================")
+			if rolloutErr != "" {
+				return fmt.Errorf("deployment rollout failed: %s", rolloutErr)
+			}
+			return fmt.Errorf("deployment rollout failed")
+		}
+	}
+
+	addLogLine(logID, "info", "")
+	addLogLine(logID, "info", "========================================")
+	addLogLine(logID, "info", "  DEPLOYMENT SUCCESSFUL")
+	addLogLine(logID, "info", "========================================")
 	return nil
 }
 
-// watchRolloutStatus monitors a deployment rollout and reports progress
-func watchRolloutStatus(ctx context.Context, deploymentName, logID string) bool {
-	timeout := time.After(120 * time.Second)
+// watchRolloutStatusWithTimeout monitors a deployment rollout and reports progress with configurable timeout
+func watchRolloutStatusWithTimeout(ctx context.Context, deploymentName, logID string, timeoutSeconds int) (bool, string) {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 120
+	}
+
+	timeout := time.After(time.Duration(timeoutSeconds) * time.Second)
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
+
+	startTime := time.Now()
+	lastStatus := ""
 
 	for {
 		select {
 		case <-timeout:
-			addLogLine(logID, "error", "Deployment rollout timed out after 120 seconds")
-			return false
+			addLogLine(logID, "error", fmt.Sprintf("[deploy] Rollout timed out after %d seconds", timeoutSeconds))
+			return false, fmt.Sprintf("timed out after %d seconds", timeoutSeconds)
 
 		case <-ticker.C:
+			elapsed := int(time.Since(startTime).Seconds())
+
 			deployment, err := clientset.AppsV1().Deployments("holm").Get(ctx, deploymentName, metav1.GetOptions{})
 			if err != nil {
-				addLogLine(logID, "warn", fmt.Sprintf("Failed to get deployment status: %v", err))
+				addLogLine(logID, "warn", fmt.Sprintf("[deploy] Failed to get deployment status: %v", err))
 				continue
 			}
 
@@ -940,27 +1176,96 @@ func watchRolloutStatus(ctx context.Context, deploymentName, logID string) bool 
 			updatedReplicas := deployment.Status.UpdatedReplicas
 			availableReplicas := deployment.Status.AvailableReplicas
 			readyReplicas := deployment.Status.ReadyReplicas
+			observedGeneration := deployment.Status.ObservedGeneration
 
-			addLogLine(logID, "info", fmt.Sprintf("Rollout status: %d/%d updated, %d/%d ready, %d available",
-				updatedReplicas, desiredReplicas, readyReplicas, desiredReplicas, availableReplicas))
+			statusLine := fmt.Sprintf("[deploy] Rollout: %d/%d updated, %d/%d ready, %d available (gen: %d, %ds elapsed)",
+				updatedReplicas, desiredReplicas, readyReplicas, desiredReplicas, availableReplicas, observedGeneration, elapsed)
+
+			// Only log if status changed
+			if statusLine != lastStatus {
+				addLogLine(logID, "info", statusLine)
+				lastStatus = statusLine
+			}
 
 			// Check for rollout completion
-			if updatedReplicas == desiredReplicas &&
+			if deployment.Status.ObservedGeneration >= deployment.Generation &&
+				updatedReplicas == desiredReplicas &&
 				readyReplicas == desiredReplicas &&
 				availableReplicas == desiredReplicas {
-				addLogLine(logID, "info", "Rollout completed successfully")
-				return true
+				addLogLine(logID, "info", fmt.Sprintf("[deploy] Rollout completed in %d seconds", elapsed))
+				return true, ""
 			}
 
 			// Check for rollout issues in conditions
 			for _, cond := range deployment.Status.Conditions {
-				if cond.Type == "Progressing" && cond.Status == "False" {
-					addLogLine(logID, "error", fmt.Sprintf("Rollout stalled: %s", cond.Message))
-					return false
+				if cond.Type == "Progressing" {
+					if cond.Status == "False" {
+						addLogLine(logID, "error", fmt.Sprintf("[deploy] Rollout stalled: %s", cond.Message))
+						// Get pod status for debugging
+						checkDeploymentPodStatus(ctx, deploymentName, logID)
+						return false, cond.Message
+					}
+					// Check for deadline exceeded
+					if cond.Reason == "ProgressDeadlineExceeded" {
+						addLogLine(logID, "error", "[deploy] Rollout deadline exceeded")
+						checkDeploymentPodStatus(ctx, deploymentName, logID)
+						return false, "progress deadline exceeded"
+					}
 				}
 				if cond.Type == "Available" && cond.Status == "False" {
-					addLogLine(logID, "warn", fmt.Sprintf("Deployment not available: %s", cond.Message))
+					addLogLine(logID, "warn", fmt.Sprintf("[deploy] Deployment not yet available: %s", cond.Message))
 				}
+				if cond.Type == "ReplicaFailure" && cond.Status == "True" {
+					addLogLine(logID, "error", fmt.Sprintf("[deploy] Replica failure: %s", cond.Message))
+					checkDeploymentPodStatus(ctx, deploymentName, logID)
+					return false, cond.Message
+				}
+			}
+		}
+	}
+}
+
+// checkDeploymentPodStatus gets status of pods for debugging deployment failures
+func checkDeploymentPodStatus(ctx context.Context, deploymentName, logID string) {
+	addLogLine(logID, "info", "")
+	addLogLine(logID, "info", "[deploy] --- Pod Status ---")
+
+	pods, err := clientset.CoreV1().Pods("holm").List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", deploymentName),
+	})
+	if err != nil {
+		addLogLine(logID, "warn", fmt.Sprintf("[deploy] Failed to list pods: %v", err))
+		return
+	}
+
+	if len(pods.Items) == 0 {
+		addLogLine(logID, "warn", "[deploy] No pods found for this deployment")
+		return
+	}
+
+	for _, pod := range pods.Items {
+		addLogLine(logID, "info", fmt.Sprintf("[deploy] Pod: %s (Phase: %s)", pod.Name, pod.Status.Phase))
+
+		// Check container statuses
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+				addLogLine(logID, "warn", fmt.Sprintf("[deploy]   Container %s waiting: %s - %s",
+					cs.Name, cs.State.Waiting.Reason, cs.State.Waiting.Message))
+			}
+			if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+				addLogLine(logID, "error", fmt.Sprintf("[deploy]   Container %s terminated: exit code %d - %s",
+					cs.Name, cs.State.Terminated.ExitCode, cs.State.Terminated.Reason))
+			}
+			if !cs.Ready && cs.RestartCount > 0 {
+				addLogLine(logID, "warn", fmt.Sprintf("[deploy]   Container %s: not ready, %d restarts",
+					cs.Name, cs.RestartCount))
+			}
+		}
+
+		// Check conditions
+		for _, cond := range pod.Status.Conditions {
+			if cond.Status == "False" && cond.Message != "" {
+				addLogLine(logID, "warn", fmt.Sprintf("[deploy]   Condition %s: %s", cond.Type, cond.Message))
 			}
 		}
 	}
@@ -1638,38 +1943,139 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Support streaming via query param
-	if r.URL.Query().Get("stream") == "true" {
-		// Server-sent events for log streaming
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
+	json.NewEncoder(w).Encode(log)
+}
 
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+// handleLogsStream provides Server-Sent Events for real-time log streaming by execution ID
+func handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	execID := strings.TrimPrefix(r.URL.Path, "/api/logs-stream/")
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Track which log lines we've already sent per log ID
+	sentLines := make(map[string]int)
+	lastStatus := ""
+
+	// Send initial connection event
+	fmt.Fprintf(w, "event: connected\ndata: {\"execId\":\"%s\"}\n\n", execID)
+	flusher.Flush()
+
+	for {
+		// Check if client disconnected
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+		}
+
+		// Get execution status
+		executionsMu.RLock()
+		var execution *PipelineExecution
+		for _, e := range executions {
+			if e.ID == execID {
+				execution = e
+				break
+			}
+		}
+		executionsMu.RUnlock()
+
+		if execution == nil {
+			fmt.Fprintf(w, "event: error\ndata: {\"message\":\"Execution not found\"}\n\n")
+			flusher.Flush()
 			return
 		}
 
-		lastIndex := 0
-		for {
+		// Send status update if changed
+		if execution.Status != lastStatus {
+			statusData := map[string]interface{}{
+				"status":    execution.Status,
+				"stages":    execution.Stages,
+				"startedAt": execution.StartedAt,
+			}
+			if execution.CompletedAt != nil {
+				statusData["completedAt"] = execution.CompletedAt
+				statusData["duration"] = execution.Duration
+			}
+			data, _ := json.Marshal(statusData)
+			fmt.Fprintf(w, "event: status\ndata: %s\n\n", data)
+			flusher.Flush()
+			lastStatus = execution.Status
+		}
+
+		// Get all logs for this execution and send new lines
+		buildLogsMu.RLock()
+		for logID, logEntry := range buildLogs {
+			if logEntry.ExecutionID != execID {
+				continue
+			}
+
+			startIdx := sentLines[logID]
+			if startIdx < len(logEntry.Lines) {
+				for i := startIdx; i < len(logEntry.Lines); i++ {
+					line := logEntry.Lines[i]
+					lineData := map[string]interface{}{
+						"logId":     logID,
+						"stage":     logEntry.Stage,
+						"timestamp": line.Timestamp,
+						"level":     line.Level,
+						"message":   line.Message,
+						"index":     i,
+					}
+					data, _ := json.Marshal(lineData)
+					fmt.Fprintf(w, "event: log\ndata: %s\n\n", data)
+				}
+				sentLines[logID] = len(logEntry.Lines)
+			}
+		}
+		buildLogsMu.RUnlock()
+		flusher.Flush()
+
+		// If execution is complete, send final event and close
+		if execution.Status == "success" || execution.Status == "failed" {
+			// Give a moment for any final logs to arrive
+			time.Sleep(500 * time.Millisecond)
+
+			// Send any remaining logs
 			buildLogsMu.RLock()
-			currentLog := buildLogs[logID]
-			lines := currentLog.Lines[lastIndex:]
-			lastIndex = len(currentLog.Lines)
+			for logID, logEntry := range buildLogs {
+				if logEntry.ExecutionID != execID {
+					continue
+				}
+				startIdx := sentLines[logID]
+				if startIdx < len(logEntry.Lines) {
+					for i := startIdx; i < len(logEntry.Lines); i++ {
+						line := logEntry.Lines[i]
+						lineData := map[string]interface{}{
+							"logId":     logID,
+							"stage":     logEntry.Stage,
+							"timestamp": line.Timestamp,
+							"level":     line.Level,
+							"message":   line.Message,
+							"index":     i,
+						}
+						data, _ := json.Marshal(lineData)
+						fmt.Fprintf(w, "event: log\ndata: %s\n\n", data)
+					}
+				}
+			}
 			buildLogsMu.RUnlock()
 
-			for _, line := range lines {
-				data, _ := json.Marshal(line)
-				fmt.Fprintf(w, "data: %s\n\n", data)
-			}
+			fmt.Fprintf(w, "event: complete\ndata: {\"status\":\"%s\"}\n\n", execution.Status)
 			flusher.Flush()
-
-			time.Sleep(1 * time.Second)
+			return
 		}
-	}
 
-	json.NewEncoder(w).Encode(log)
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func handleBuild(w http.ResponseWriter, r *http.Request) {

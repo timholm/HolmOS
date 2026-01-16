@@ -234,21 +234,102 @@
         .log-line {
             display: flex;
             gap: 12px;
-            padding: 4px 0;
+            padding: 2px 0;
+            line-height: 1.4;
         }
         .log-time {
             color: #71717a;
             flex-shrink: 0;
+            font-size: 11px;
         }
         .log-level {
             flex-shrink: 0;
             width: 50px;
+            font-size: 11px;
         }
         .log-level.info { color: #60a5fa; }
         .log-level.warn { color: #eab308; }
         .log-level.error { color: #ef4444; }
         .log-message {
             color: #e4e4e7;
+            word-break: break-word;
+        }
+        .log-message.error-msg {
+            color: #ef4444;
+            font-weight: 500;
+        }
+        .build-failed-banner {
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid rgba(239, 68, 68, 0.5);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .build-failed-banner h3 {
+            color: #ef4444;
+            margin-bottom: 8px;
+            font-size: 18px;
+        }
+        .build-failed-banner .details {
+            color: #fca5a5;
+            font-size: 14px;
+        }
+        .build-success-banner {
+            background: rgba(34, 197, 94, 0.2);
+            border: 1px solid rgba(34, 197, 94, 0.5);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .build-success-banner h3 {
+            color: #22c55e;
+            margin-bottom: 8px;
+            font-size: 18px;
+        }
+        .phase-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .phase-pending {
+            background: rgba(113, 113, 122, 0.2);
+            color: #a1a1aa;
+        }
+        .phase-running {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }
+        .phase-succeeded {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        .phase-failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        .streaming-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #60a5fa;
+            font-size: 12px;
+        }
+        .streaming-dot {
+            width: 8px;
+            height: 8px;
+            background: #60a5fa;
+            border-radius: 50%;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
         }
         .stats-grid {
             display: grid;
@@ -289,6 +370,22 @@
         }
         .running-indicator {
             animation: pulse 2s infinite;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        .btn-quick-build {
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+            font-weight: 600;
+        }
+        .btn-quick-build:hover {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
         }
     </style>
 </head>
@@ -333,7 +430,7 @@
                 <div class="card-header">
                     <span class="card-title">Pipelines</span>
                     <div class="actions">
-                        <button class="btn btn-secondary" onclick="showQuickBuild()">Quick Build</button>
+                        <button class="btn btn-quick-build" onclick="showQuickBuild()">Quick Build</button>
                         <button class="btn btn-primary" onclick="showCreatePipeline()">+ New Pipeline</button>
                     </div>
                 </div>
@@ -743,26 +840,62 @@
                 closeQuickBuildModal();
                 form.reset();
 
-                // Switch to executions tab and auto-refresh
+                // Show toast notification
+                showToast(`Build queued for ${repo}`, 'info');
+
+                // Switch to executions tab
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
                 document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
                 document.querySelector('[data-tab="executions"]').classList.add('active');
                 document.getElementById('executions').classList.add('active');
 
-                // Wait a moment and then show logs for the new execution
-                setTimeout(async () => {
+                // Poll for the execution to appear and open logs
+                let attempts = 0;
+                const maxAttempts = 20;
+                const pollForExecution = async () => {
+                    attempts++;
                     await loadExecutions();
-                    // Find the latest execution and open its logs
-                    if (executions && executions.length > 0) {
-                        viewLogs(executions[0].id);
-                    }
-                }, 2000);
 
-                alert('Build queued! Opening logs...');
+                    // Find a running execution for this repo
+                    const newExec = executions.find(ex =>
+                        ex.repo === repo && (ex.status === 'running' || ex.status === 'pending')
+                    ) || (executions.length > 0 ? executions[0] : null);
+
+                    if (newExec) {
+                        viewLogs(newExec.id);
+                    } else if (attempts < maxAttempts) {
+                        setTimeout(pollForExecution, 500);
+                    }
+                };
+
+                setTimeout(pollForExecution, 1000);
             } catch (e) {
                 alert('Failed to queue build: ' + e.message);
             }
         });
+
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                padding: 12px 20px;
+                background: ${type === 'error' ? 'rgba(239, 68, 68, 0.9)' : 'rgba(59, 130, 246, 0.9)'};
+                color: white;
+                border-radius: 8px;
+                font-size: 14px;
+                z-index: 1000;
+                animation: slideIn 0.3s ease;
+            `;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
 
         async function triggerPipeline(id) {
             try {
@@ -807,101 +940,222 @@
             }
         }
 
-        let logRefreshInterval = null;
+        let logEventSource = null;
         let currentExecId = null;
+        let currentLogLines = [];
+        let currentExecution = null;
 
         async function viewLogs(execId) {
             currentExecId = execId;
+            currentLogLines = [];
+            currentExecution = null;
             document.getElementById('logs-modal').classList.add('active');
-            await refreshLogs(execId);
 
-            // Auto-refresh logs every 2 seconds for running builds
-            if (logRefreshInterval) {
-                clearInterval(logRefreshInterval);
+            // First, load existing logs
+            await loadInitialLogs(execId);
+
+            // Then start SSE stream for real-time updates
+            startLogStream(execId);
+        }
+
+        async function loadInitialLogs(execId) {
+            try {
+                const [logsResp, execResp] = await Promise.all([
+                    fetch(API_BASE + `/api/executions/${execId}/logs`),
+                    fetch(API_BASE + `/api/executions/${execId}`)
+                ]);
+
+                const logs = await logsResp.json();
+                currentExecution = await execResp.json();
+
+                // Collect all log lines
+                currentLogLines = [];
+                for (const [id, log] of Object.entries(logs)) {
+                    log.lines.forEach((line, idx) => {
+                        currentLogLines.push({
+                            ...line,
+                            stage: log.stage,
+                            logId: id,
+                            index: idx
+                        });
+                    });
+                }
+
+                // Sort by timestamp
+                currentLogLines.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+                renderLogs();
+            } catch (e) {
+                console.error('Failed to load initial logs:', e);
             }
-            logRefreshInterval = setInterval(() => {
-                refreshLogs(execId);
-            }, 2000);
+        }
+
+        function startLogStream(execId) {
+            // Close existing stream
+            if (logEventSource) {
+                logEventSource.close();
+            }
+
+            logEventSource = new EventSource(API_BASE + `/api/logs-stream/${execId}`);
+
+            logEventSource.addEventListener('connected', (e) => {
+                console.log('Log stream connected:', e.data);
+            });
+
+            logEventSource.addEventListener('status', (e) => {
+                const data = JSON.parse(e.data);
+                if (currentExecution) {
+                    currentExecution.status = data.status;
+                    currentExecution.stages = data.stages || currentExecution.stages;
+                    if (data.completedAt) {
+                        currentExecution.completedAt = data.completedAt;
+                        currentExecution.duration = data.duration;
+                    }
+                }
+                renderLogs();
+            });
+
+            logEventSource.addEventListener('log', (e) => {
+                const data = JSON.parse(e.data);
+                // Check if we already have this log line
+                const exists = currentLogLines.some(l =>
+                    l.logId === data.logId && l.index === data.index
+                );
+                if (!exists) {
+                    currentLogLines.push({
+                        timestamp: data.timestamp,
+                        level: data.level,
+                        message: data.message,
+                        stage: data.stage,
+                        logId: data.logId,
+                        index: data.index
+                    });
+                    renderLogs(true); // Auto-scroll on new logs
+                }
+            });
+
+            logEventSource.addEventListener('complete', (e) => {
+                const data = JSON.parse(e.data);
+                if (currentExecution) {
+                    currentExecution.status = data.status;
+                }
+                renderLogs();
+                logEventSource.close();
+                logEventSource = null;
+            });
+
+            logEventSource.addEventListener('error', (e) => {
+                console.error('SSE error:', e);
+                // Fallback to polling
+                if (logEventSource) {
+                    logEventSource.close();
+                    logEventSource = null;
+                }
+            });
         }
 
         async function refreshLogs(execId) {
-            try {
-                const resp = await fetch(API_BASE + `/api/executions/${execId}/logs`);
-                const logs = await resp.json();
+            await loadInitialLogs(execId);
+        }
 
-                // Also get execution status
-                const execResp = await fetch(API_BASE + `/api/executions/${execId}`);
-                const execution = await execResp.json();
+        function renderLogs(autoScroll = false) {
+            const content = document.getElementById('log-content');
+            const wasNearBottom = content.scrollHeight - content.scrollTop < content.clientHeight + 100;
+            let html = '';
 
-                const content = document.getElementById('log-content');
-                let html = '';
-
-                // Show execution header
-                html += `<div style="margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px;">`;
-                html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
-                html += `<strong>${execution.pipelineName || 'Build'} #${execution.buildNumber || '?'}</strong>`;
-                html += `<span class="status-pill status-${execution.status} ${execution.status === 'running' ? 'running-indicator' : ''}">${execution.status}</span>`;
-                html += `</div>`;
-                html += `<div style="font-size: 12px; color: #71717a; margin-top: 5px;">`;
-                html += `${execution.repo || '-'} / ${execution.branch || '-'} @ ${(execution.commit || '-').substring(0, 7)}`;
-                html += `</div>`;
-                html += `</div>`;
-
-                // Show stages
-                if (execution.stages && execution.stages.length > 0) {
-                    html += `<div style="margin-bottom: 15px;">`;
-                    execution.stages.forEach(stage => {
-                        const statusIcon = stage.status === 'success' ? '&#10003;' :
-                                          stage.status === 'failed' ? '&#10007;' :
-                                          stage.status === 'running' ? '&#9679;' : '&#9675;';
-                        const statusColor = stage.status === 'success' ? '#22c55e' :
-                                           stage.status === 'failed' ? '#ef4444' :
-                                           stage.status === 'running' ? '#60a5fa' : '#71717a';
-                        html += `<span style="display: inline-block; margin-right: 15px; color: ${statusColor};">`;
-                        html += `<span style="margin-right: 5px;">${statusIcon}</span>${stage.name}`;
-                        if (stage.duration) html += ` (${stage.duration.toFixed(1)}s)`;
-                        html += `</span>`;
-                    });
-                    html += `</div>`;
-                }
-
-                // Show logs
-                const logEntries = Object.entries(logs);
-                if (logEntries.length === 0) {
-                    html += '<div style="color: #71717a; padding: 20px; text-align: center;">Waiting for logs...</div>';
-                } else {
-                    for (const [id, log] of logEntries) {
-                        html += `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1);">`;
-                        html += `<div style="color: #a1a1aa; font-size: 12px; margin-bottom: 8px; text-transform: uppercase;">${log.stage}</div>`;
-                        log.lines.forEach(line => {
-                            const time = new Date(line.timestamp).toLocaleTimeString();
-                            const levelClass = line.level === 'error' ? 'error' : line.level === 'warn' ? 'warn' : 'info';
-                            html += `<div class="log-line">
-                                <span class="log-time">${time}</span>
-                                <span class="log-level ${levelClass}">[${line.level.toUpperCase().padEnd(5)}]</span>
-                                <span class="log-message">${escapeHtml(line.message)}</span>
-                            </div>`;
-                        });
-                        html += `</div>`;
-                    }
-                }
-
+            if (!currentExecution) {
+                html = '<div style="color: #71717a; padding: 20px; text-align: center;">Loading...</div>';
                 content.innerHTML = html;
+                return;
+            }
 
-                // Auto-scroll to bottom if near bottom
-                if (content.scrollHeight - content.scrollTop < content.clientHeight + 100) {
-                    content.scrollTop = content.scrollHeight;
+            // Show build result banner for completed builds
+            if (currentExecution.status === 'failed') {
+                html += `<div class="build-failed-banner">`;
+                html += `<h3>BUILD FAILED</h3>`;
+                html += `<div class="details">`;
+                if (currentExecution.duration) {
+                    html += `Duration: ${currentExecution.duration.toFixed(1)}s`;
                 }
+                html += `</div></div>`;
+            } else if (currentExecution.status === 'success') {
+                html += `<div class="build-success-banner">`;
+                html += `<h3>BUILD SUCCESSFUL</h3>`;
+                html += `<div class="details" style="color: #86efac;">`;
+                if (currentExecution.duration) {
+                    html += `Duration: ${currentExecution.duration.toFixed(1)}s`;
+                }
+                html += `</div></div>`;
+            }
 
-                // Stop auto-refresh if build is done
-                if (execution.status !== 'running') {
-                    if (logRefreshInterval) {
-                        clearInterval(logRefreshInterval);
-                        logRefreshInterval = null;
+            // Show execution header
+            html += `<div style="margin-bottom: 15px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px;">`;
+            html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
+            html += `<strong>${currentExecution.pipelineName || 'Build'} #${currentExecution.buildNumber || '?'}</strong>`;
+            html += `<div style="display: flex; align-items: center; gap: 10px;">`;
+            if (currentExecution.status === 'running') {
+                html += `<span class="streaming-indicator"><span class="streaming-dot"></span>Live</span>`;
+            }
+            html += `<span class="phase-indicator phase-${currentExecution.status}">${currentExecution.status.toUpperCase()}</span>`;
+            html += `</div></div>`;
+            html += `<div style="font-size: 12px; color: #71717a; margin-top: 8px;">`;
+            html += `${currentExecution.repo || '-'} / ${currentExecution.branch || '-'} @ ${(currentExecution.commit || '-').substring(0, 7)}`;
+            html += `</div>`;
+            html += `</div>`;
+
+            // Show stages with better visualization
+            if (currentExecution.stages && currentExecution.stages.length > 0) {
+                html += `<div style="margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px;">`;
+                currentExecution.stages.forEach(stage => {
+                    const statusIcon = stage.status === 'success' ? '&#10003;' :
+                                      stage.status === 'failed' ? '&#10007;' :
+                                      stage.status === 'running' ? '&#9679;' : '&#9675;';
+                    const phaseClass = stage.status === 'success' ? 'phase-succeeded' :
+                                      stage.status === 'failed' ? 'phase-failed' :
+                                      stage.status === 'running' ? 'phase-running' : 'phase-pending';
+                    html += `<span class="phase-indicator ${phaseClass}">`;
+                    html += `<span>${statusIcon}</span> ${stage.name}`;
+                    if (stage.duration) html += ` (${stage.duration.toFixed(1)}s)`;
+                    if (stage.status === 'running') html += ` <span class="streaming-dot"></span>`;
+                    html += `</span>`;
+                });
+                html += `</div>`;
+            }
+
+            // Show logs
+            if (currentLogLines.length === 0) {
+                html += '<div style="color: #71717a; padding: 20px; text-align: center;">Waiting for logs...</div>';
+            } else {
+                html += `<div style="background: #0a0a0f; border-radius: 6px; padding: 12px;">`;
+                let lastStage = '';
+                currentLogLines.forEach(line => {
+                    // Show stage header when stage changes
+                    if (line.stage !== lastStage) {
+                        if (lastStage !== '') {
+                            html += `<div style="height: 10px;"></div>`;
+                        }
+                        html += `<div style="color: #a1a1aa; font-size: 11px; margin-bottom: 8px; text-transform: uppercase; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">${line.stage}</div>`;
+                        lastStage = line.stage;
                     }
-                }
-            } catch (e) {
-                console.error('Failed to load logs:', e);
+
+                    const time = new Date(line.timestamp).toLocaleTimeString();
+                    const levelClass = line.level === 'error' ? 'error' : line.level === 'warn' ? 'warn' : 'info';
+                    const msgClass = line.level === 'error' ? 'error-msg' : '';
+
+                    html += `<div class="log-line">
+                        <span class="log-time">${time}</span>
+                        <span class="log-level ${levelClass}">[${line.level.toUpperCase().padEnd(5)}]</span>
+                        <span class="log-message ${msgClass}">${escapeHtml(line.message)}</span>
+                    </div>`;
+                });
+                html += `</div>`;
+            }
+
+            content.innerHTML = html;
+
+            // Auto-scroll if we were near the bottom or explicitly requested
+            if (autoScroll || wasNearBottom) {
+                content.scrollTop = content.scrollHeight;
             }
         }
 
@@ -913,11 +1167,13 @@
 
         function closeLogsModal() {
             document.getElementById('logs-modal').classList.remove('active');
-            if (logRefreshInterval) {
-                clearInterval(logRefreshInterval);
-                logRefreshInterval = null;
+            if (logEventSource) {
+                logEventSource.close();
+                logEventSource = null;
             }
             currentExecId = null;
+            currentLogLines = [];
+            currentExecution = null;
         }
 
         // Initial load

@@ -5,7 +5,7 @@ PI_HOST := 192.168.8.197
 PI_USER := rpi1
 REGISTRY := 10.110.67.87:5000
 
-.PHONY: help status deploy build ssh sync push pull health logs
+.PHONY: help status deploy build ssh sync push pull health logs test smoke
 
 help:
 	@echo "HolmOS Commands:"
@@ -19,6 +19,12 @@ help:
 	@echo "  make logs S=    - View logs for service"
 	@echo "  make restart S= - Restart service"
 	@echo "  make shell S=   - Exec into service pod"
+	@echo ""
+	@echo "Testing Commands:"
+	@echo "  make test       - Run all tests"
+	@echo "  make smoke      - Run smoke tests (3 core tests)"
+	@echo "  make smoke-quick    - Quick single service check"
+	@echo "  make smoke-degraded - Allow partial failures"
 
 status:
 	@sshpass -p "$(PI_PASS)" ssh -o StrictHostKeyChecking=no $(PI_USER)@$(PI_HOST) \
@@ -99,3 +105,16 @@ nodes:
 top:
 	@sshpass -p "$(PI_PASS)" ssh -o StrictHostKeyChecking=no $(PI_USER)@$(PI_HOST) \
 		"kubectl top nodes; echo '---'; kubectl top pods -n holm | head -20"
+
+# Testing commands
+test:
+	@cd tests && npm test
+
+smoke:
+	@cd tests && npm run test:smoke
+
+smoke-quick:
+	@cd tests && npm run test:smoke:quick
+
+smoke-degraded:
+	@cd tests && npm run test:smoke:degraded

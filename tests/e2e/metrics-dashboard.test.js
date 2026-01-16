@@ -107,7 +107,7 @@ async function testPodsFilterByNamespace(results) {
 
     try {
         const startTime = Date.now();
-        const response = await utils.client.get(`${METRICS_BASE}/api/pods?namespace=${NAMESPACE}`);
+        const response = await utils.client.get(`${METRICS_BASE}/api/pods?namespace=${config.cluster.namespace}`);
         const responseTime = Date.now() - startTime;
 
         if (response.status === 200) {

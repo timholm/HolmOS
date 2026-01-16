@@ -33,23 +33,15 @@ spec:
     spec:
       affinity:
         nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values:
-                      - rpi-13
-                      - rpi13
-                      - node13
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
               - key: kubernetes.io/hostname
-                operator: NotIn
+                operator: In
                 values:
-                - openmediavault
+                  - rpi-13
+                  - rpi13
+                  - node13
       containers:
       - name: file-web-nautilus
         image: 192.168.8.197:30500/file-web-nautilus:latest

@@ -404,8 +404,22 @@ spec:
                 try {
                     healthChecks = JSON.parse(e.data);
                     renderHealthChecks();
+                    renderDeployments(); // Update deployment cards with health check status
                     document.getElementById('health-count').textContent = Object.keys(healthChecks).length;
                 } catch(err) { console.error('SSE health-checks error:', err); }
+            });
+
+            eventSource.addEventListener('rollout-progress', (e) => {
+                try {
+                    const progress = JSON.parse(e.data);
+                    // Update specific deployment card with rollout progress
+                    const key = progress.key;
+                    if (healthChecks[key]) {
+                        healthChecks[key] = {...healthChecks[key], ...progress};
+                        renderHealthChecks();
+                        renderDeployments();
+                    }
+                } catch(err) { console.error('SSE rollout-progress error:', err); }
             });
 
             eventSource.onerror = () => {
@@ -453,6 +467,7 @@ spec:
             document.getElementById('deps-grid').innerHTML=deps.map(d=>{
                 const hc = healthChecks[`${d.namespace}/${d.name}`];
                 const healthStatus = hc ? hc.status : 'none';
+                const rs = hc && hc.rolloutStatus;
                 return `
                 <div class="card">
                     <div class="card-header">
@@ -464,15 +479,23 @@ spec:
                             ${hc ? `<span class="health-indicator"><span class="health-dot ${healthStatus}"></span>${healthStatus}</span>` : ''}
                         </p>
                         <div class="image-tag">${d.image||'No image'}</div>
-                        ${hc && hc.status === 'checking' ? `
-                            <div class="progress-bar">
-                                <div class="progress-fill" style="width: ${Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                        ${hc && (hc.status === 'checking' || hc.status === 'pending') ? `
+                            <div class="rollout-progress" style="margin-top:0.5rem;padding:0.5rem;background:var(--ctp-surface1);border-radius:4px;font-size:0.75rem">
+                                ${rs ? `
+                                    <div>Updated: ${rs.updatedReplicas}/${rs.replicas} | Ready: ${rs.readyReplicas}/${rs.replicas} | Available: ${rs.availableReplicas}/${rs.replicas}</div>
+                                    ${rs.stalled ? `<div style="color:var(--ctp-red);margin-top:0.25rem">Stalled: ${rs.stalledReason}</div>` : ''}
+                                ` : `<div>${hc.message}</div>`}
+                                <div class="progress-bar" style="margin-top:0.25rem">
+                                    <div class="progress-fill ${rs && rs.stalled ? 'failed' : ''}" style="width: ${Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                                </div>
                             </div>
                         ` : ''}
                         <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
                             <button class="btn btn-primary btn-sm" onclick="showDeployModal('${d.name}','${d.image||''}')">Deploy</button>
+                            <button class="btn btn-success btn-sm" onclick="restartDeployment('${d.name}')">Restart</button>
                             <button class="btn btn-danger btn-sm" onclick="showRollbackModal('${d.name}')">Rollback</button>
                             <button class="btn btn-secondary btn-sm" onclick="showScaleModal('${d.name}',${d.replicas})">Scale</button>
+                            <button class="btn btn-secondary btn-sm" onclick="viewLogs('${d.name}')">Logs</button>
                             <button class="btn btn-secondary btn-sm" onclick="showHistory('${d.name}')">History</button>
                         </div>
                     </div>
@@ -481,7 +504,9 @@ spec:
 
             // Health checks list
             const hcList = Object.entries(healthChecks);
-            document.getElementById('health-list').innerHTML = hcList.length ? hcList.map(([key, hc]) => `
+            document.getElementById('health-list').innerHTML = hcList.length ? hcList.map(([key, hc]) => {
+                const rs = hc.rolloutStatus;
+                return `
                 <div class="health-check-card ${hc.status}">
                     <div style="display:flex;justify-content:space-between;align-items:center">
                         <div>
@@ -492,10 +517,36 @@ spec:
                     </div>
                     <p style="margin-top:0.5rem;font-size:0.85rem">${hc.message}</p>
                     <div class="image-tag">${hc.image}</div>
+                    ${rs ? `
+                        <div style="margin-top:0.5rem;padding:0.5rem;background:var(--ctp-surface1);border-radius:4px;font-size:0.8rem">
+                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem;text-align:center">
+                                <div><span style="color:var(--ctp-blue)">${rs.updatedReplicas}/${rs.replicas}</span><br><small>Updated</small></div>
+                                <div><span style="color:var(--ctp-green)">${rs.readyReplicas}/${rs.replicas}</span><br><small>Ready</small></div>
+                                <div><span style="color:var(--ctp-teal)">${rs.availableReplicas}/${rs.replicas}</span><br><small>Available</small></div>
+                            </div>
+                            ${rs.stalled ? `<div style="color:var(--ctp-red);margin-top:0.5rem;padding:0.25rem;background:rgba(243,139,168,0.1);border-radius:4px">Stalled: ${rs.stalledReason}</div>` : ''}
+                            ${rs.conditions && rs.conditions.length ? `
+                                <details style="margin-top:0.5rem">
+                                    <summary style="cursor:pointer;color:var(--ctp-subtext0)">Deployment Conditions</summary>
+                                    <div style="margin-top:0.25rem;font-size:0.7rem">
+                                        ${rs.conditions.map(c => `
+                                            <div style="padding:0.25rem;border-left:2px solid ${c.status === 'True' ? 'var(--ctp-green)' : c.status === 'False' ? 'var(--ctp-red)' : 'var(--ctp-yellow)'};padding-left:0.5rem;margin-top:0.25rem">
+                                                <strong>${c.type}</strong>: ${c.status} (${c.reason})<br>
+                                                <span style="color:var(--ctp-subtext0)">${c.message}</span>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </details>
+                            ` : ''}
+                        </div>
+                    ` : ''}
                     ${hc.podStatuses && hc.podStatuses.length ? `
                         <div style="margin-top:0.5rem">
                             ${hc.podStatuses.map(p => `
-                                <span class="pod-status ${p.ready ? 'ready' : 'not-ready'}">${p.name.split('-').slice(-2).join('-')} (${p.phase})</span>
+                                <div class="pod-status ${p.ready ? 'ready' : 'not-ready'}" style="display:block;margin-bottom:0.25rem">
+                                    ${p.name.split('-').slice(-2).join('-')} (${p.phase})
+                                    ${p.message ? `<br><small style="opacity:0.8">${p.message}</small>` : ''}
+                                </div>
                             `).join('')}
                         </div>
                     ` : ''}
@@ -506,7 +557,7 @@ spec:
                         Started: ${new Date(hc.startTime).toLocaleString()} | Last check: ${new Date(hc.lastCheck).toLocaleString()}
                     </div>
                 </div>
-            `).join('') : '<p style="color:var(--ctp-subtext0)">No active health checks</p>';
+            `}).join('') : '<p style="color:var(--ctp-subtext0)">No active health checks</p>';
 
             // Events list
             document.getElementById('events-list').innerHTML=evts.map(e=>`
@@ -840,6 +891,7 @@ spec:
             document.getElementById('deps-grid').innerHTML = deps.map(d => {
                 const hc = healthChecks[`${d.namespace}/${d.name}`];
                 const healthStatus = hc ? hc.status : 'none';
+                const rs = hc && hc.rolloutStatus;
                 return `
                 <div class="card">
                     <div class="card-header">
@@ -851,9 +903,15 @@ spec:
                             ${hc ? `<span class="health-indicator"><span class="health-dot ${healthStatus}"></span>${healthStatus}</span>` : ''}
                         </p>
                         <div class="image-tag">${d.image || 'No image'}</div>
-                        ${hc && hc.status === 'checking' ? `
-                            <div class="progress-bar">
-                                <div class="progress-fill" style="width: ${Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                        ${hc && (hc.status === 'checking' || hc.status === 'pending') ? `
+                            <div class="rollout-progress" style="margin-top:0.5rem;padding:0.5rem;background:var(--ctp-surface1);border-radius:4px;font-size:0.75rem">
+                                ${rs ? `
+                                    <div>Updated: ${rs.updatedReplicas}/${rs.replicas} | Ready: ${rs.readyReplicas}/${rs.replicas} | Available: ${rs.availableReplicas}/${rs.replicas}</div>
+                                    ${rs.stalled ? `<div style="color:var(--ctp-red);margin-top:0.25rem">Stalled: ${rs.stalledReason}</div>` : ''}
+                                ` : `<div>${hc.message}</div>`}
+                                <div class="progress-bar" style="margin-top:0.25rem">
+                                    <div class="progress-fill ${rs && rs.stalled ? 'failed' : ''}" style="width: ${Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                                </div>
                             </div>
                         ` : ''}
                         <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
@@ -897,21 +955,49 @@ spec:
 
         function renderHealthChecks() {
             const hcList = Object.entries(healthChecks);
-            document.getElementById('health-list').innerHTML = hcList.length ? hcList.map(([key, hc]) => `
+            document.getElementById('health-list').innerHTML = hcList.length ? hcList.map(([key, hc]) => {
+                const rs = hc.rolloutStatus;
+                return `
                 <div class="health-check-card ${hc.status}">
                     <div style="display:flex;justify-content:space-between;align-items:center">
                         <div>
                             <strong>${hc.deployment}</strong>
                             <span class="status-badge status-${hc.status}" style="margin-left:0.5rem">${hc.status}</span>
                         </div>
-                        <span style="font-size:0.75rem;color:var(--ctp-subtext0)">${hc.attempts}/${hc.maxAttempts} checks</span>
+                        <span style="font-size:0.75rem;color:var(--ctp-subtext0)">${hc.attempts}/${hc.maxAttempts} checks${hc.elapsed ? ` (${hc.elapsed.toFixed(0)}s)` : ''}</span>
                     </div>
                     <p style="margin-top:0.5rem;font-size:0.85rem">${hc.message}</p>
                     <div class="image-tag">${hc.image}</div>
+                    ${rs ? `
+                        <div style="margin-top:0.5rem;padding:0.5rem;background:var(--ctp-surface1);border-radius:4px;font-size:0.8rem">
+                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem;text-align:center">
+                                <div><span style="color:var(--ctp-blue)">${rs.updatedReplicas}/${rs.replicas}</span><br><small>Updated</small></div>
+                                <div><span style="color:var(--ctp-green)">${rs.readyReplicas}/${rs.replicas}</span><br><small>Ready</small></div>
+                                <div><span style="color:var(--ctp-teal)">${rs.availableReplicas}/${rs.replicas}</span><br><small>Available</small></div>
+                            </div>
+                            ${rs.stalled ? `<div style="color:var(--ctp-red);margin-top:0.5rem;padding:0.25rem;background:rgba(243,139,168,0.1);border-radius:4px">Stalled: ${rs.stalledReason}</div>` : ''}
+                            ${rs.conditions && rs.conditions.length ? `
+                                <details style="margin-top:0.5rem">
+                                    <summary style="cursor:pointer;color:var(--ctp-subtext0)">Deployment Conditions</summary>
+                                    <div style="margin-top:0.25rem;font-size:0.7rem">
+                                        ${rs.conditions.map(c => `
+                                            <div style="padding:0.25rem;border-left:2px solid ${c.status === 'True' ? 'var(--ctp-green)' : c.status === 'False' ? 'var(--ctp-red)' : 'var(--ctp-yellow)'};padding-left:0.5rem;margin-top:0.25rem">
+                                                <strong>${c.type}</strong>: ${c.status} (${c.reason})<br>
+                                                <span style="color:var(--ctp-subtext0)">${c.message}</span>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </details>
+                            ` : ''}
+                        </div>
+                    ` : ''}
                     ${hc.podStatuses && hc.podStatuses.length ? `
                         <div style="margin-top:0.5rem">
                             ${hc.podStatuses.map(p => `
-                                <span class="pod-status ${p.ready ? 'ready' : 'not-ready'}">${p.name.split('-').slice(-2).join('-')} (${p.phase})</span>
+                                <div class="pod-status ${p.ready ? 'ready' : 'not-ready'}" style="display:block;margin-bottom:0.25rem">
+                                    ${p.name.split('-').slice(-2).join('-')} (${p.phase})
+                                    ${p.message ? `<br><small style="opacity:0.8">${p.message}</small>` : ''}
+                                </div>
                             `).join('')}
                         </div>
                     ` : ''}
@@ -922,7 +1008,7 @@ spec:
                         Started: ${new Date(hc.startTime).toLocaleString()} | Last check: ${new Date(hc.lastCheck).toLocaleString()}
                     </div>
                 </div>
-            `).join('') : '<p style="color:var(--ctp-subtext0)">No active health checks</p>';
+            `}).join('') : '<p style="color:var(--ctp-subtext0)">No active health checks</p>';
         }
 
         function viewLogs(name) {

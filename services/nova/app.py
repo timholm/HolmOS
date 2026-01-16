@@ -356,6 +356,15 @@ DASHBOARD_HTML = '''
             animation: alertPulse 2s infinite;
         }
 
+        .node-card.unknown {
+            border-left: 3px solid var(--overlay0);
+            opacity: 0.7;
+        }
+
+        .node-card.unknown .node-name {
+            color: var(--overlay1);
+        }
+
         @keyframes alertPulse {
             0%, 100% { box-shadow: 0 0 0 0 rgba(243, 139, 168, 0.4); }
             50% { box-shadow: 0 0 0 10px rgba(243, 139, 168, 0); }
@@ -1376,12 +1385,26 @@ DASHBOARD_HTML = '''
         }
 
         async function fetchDashboardData() {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);  // 10 second timeout
+
             try {
-                const response = await fetch('/api/dashboard');
+                const response = await fetch('/api/dashboard', { signal: controller.signal });
+                clearTimeout(timeoutId);
                 clusterData = await response.json();
                 updateDashboard();
             } catch (error) {
-                showToast('Failed to fetch cluster data', 'error');
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    showToast('Request timed out after 10s - showing cached data', 'error');
+                } else {
+                    showToast('Failed to fetch cluster data', 'error');
+                }
+                // Still update dashboard with whatever data we have (including hardcoded nodes)
+                if (!clusterData.nodes || clusterData.nodes.length === 0) {
+                    clusterData = { nodes: [], pods: [], deployments: [], metrics: { cpu_avg: 0, mem_avg: 0 }, error: true };
+                }
+                updateDashboard();
             }
         }
 
@@ -1391,15 +1414,25 @@ DASHBOARD_HTML = '''
             const deployments = clusterData.deployments || [];
 
             const nodesHealthy = nodes.filter(n => n.status === 'Ready').length;
+            const nodesUnknown = nodes.filter(n => n.status === 'Unknown').length;
             const totalNodes = nodes.length;
             const podsRunning = pods.filter(p => p.status === 'Running').length;
             const totalPods = pods.length;
 
-            // Status bar
+            // Status bar - show unknown nodes with different styling
+            let nodeStatusColor = 'green';
+            let nodeStatusText = `${nodesHealthy}/${totalNodes} Nodes`;
+            if (nodesHealthy < totalNodes && nodesUnknown > 0) {
+                nodeStatusColor = 'yellow';
+                nodeStatusText = `${nodesHealthy} Ready, ${nodesUnknown} Unknown / ${totalNodes}`;
+            } else if (nodesHealthy < totalNodes) {
+                nodeStatusColor = 'yellow';
+            }
+
             document.getElementById('statusBar').innerHTML = `
                 <div class="status-pill">
-                    <span class="status-dot ${nodesHealthy === totalNodes ? 'green' : 'yellow'}"></span>
-                    <span>${nodesHealthy}/${totalNodes} Nodes</span>
+                    <span class="status-dot ${nodeStatusColor}"></span>
+                    <span>${nodeStatusText}</span>
                 </div>
                 <div class="status-pill">
                     <span class="status-dot ${podsRunning === totalPods ? 'green' : 'yellow'}"></span>
@@ -1412,9 +1445,17 @@ DASHBOARD_HTML = '''
             `;
 
             // Cluster health
-            document.getElementById('clusterHealth').innerHTML = nodesHealthy === totalNodes ?
-                '<span style="color: var(--green); font-size: 1.2rem;">&#10003; Healthy</span>' :
-                '<span style="color: var(--yellow); font-size: 1.2rem;">&#9888; Degraded</span>';
+            let healthStatus;
+            if (nodesHealthy === totalNodes) {
+                healthStatus = '<span style="color: var(--green); font-size: 1.2rem;">&#10003; Healthy</span>';
+            } else if (nodesUnknown === totalNodes) {
+                healthStatus = '<span style="color: var(--overlay0); font-size: 1.2rem;">&#8230; Connecting</span>';
+            } else if (nodesUnknown > 0) {
+                healthStatus = '<span style="color: var(--yellow); font-size: 1.2rem;">&#9888; Partial</span>';
+            } else {
+                healthStatus = '<span style="color: var(--yellow); font-size: 1.2rem;">&#9888; Degraded</span>';
+            }
+            document.getElementById('clusterHealth').innerHTML = healthStatus;
 
             // CPU/Memory bars
             const cpuAvg = clusterData.metrics?.cpu_avg || 0;
@@ -1428,7 +1469,14 @@ DASHBOARD_HTML = '''
             const nodeGrid = document.getElementById('nodeGrid');
             nodeGrid.innerHTML = nodes.map(node => {
                 const isControlPlane = node.roles?.includes('control-plane');
-                const statusClass = node.status === 'Ready' ? 'healthy' : 'unhealthy';
+                let statusClass;
+                if (node.status === 'Ready') {
+                    statusClass = 'healthy';
+                } else if (node.status === 'Unknown') {
+                    statusClass = 'unknown';
+                } else {
+                    statusClass = 'unhealthy';
+                }
 
                 return `
                     <div class="node-card ${statusClass} ${isControlPlane ? 'control-plane' : ''}"
@@ -1443,6 +1491,7 @@ DASHBOARD_HTML = '''
                             <span class="gauge-label">MEM</span>
                         </div>
                         <span class="node-role ${isControlPlane ? 'control-plane' : ''}">${node.roles || 'worker'}</span>
+                        ${node.status === 'Unknown' ? '<div style="font-size: 0.6rem; color: var(--overlay0); margin-top: 4px;">Not in K8s</div>' : ''}
                     </div>
                 `;
             }).join('');
@@ -1742,21 +1791,54 @@ except Exception as e:
     print(f"Kubernetes client not available: {e}")
     USE_K8S_CLIENT = False
 
+# All 13 cluster nodes - hardcoded for display even if not in k8s yet
+CLUSTER_NODES = [
+    {"name": "rpi-1", "roles": "control-plane", "is_control_plane": True},
+    {"name": "rpi-2", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-3", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-4", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-5", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-6", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-7", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-8", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-9", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-10", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-11", "roles": "worker", "is_control_plane": False},
+    {"name": "rpi-12", "roles": "worker", "is_control_plane": False},
+    {"name": "openmediavault", "roles": "storage", "is_control_plane": False},
+]
+
+# API timeout in seconds
+API_TIMEOUT_SECONDS = 10
+
 def get_nodes_detailed():
-    """Get detailed node information with metrics."""
+    """Get detailed node information with metrics for all 13 cluster nodes."""
+    # Start with all known nodes marked as Unknown
+    nodes_by_name = {}
+    for known_node in CLUSTER_NODES:
+        nodes_by_name[known_node["name"]] = {
+            "name": known_node["name"],
+            "status": "Unknown",
+            "roles": known_node["roles"],
+            "cpu": 0,
+            "mem": 0
+        }
+
     if not USE_K8S_CLIENT:
-        return []
+        # Return all nodes with Unknown status if k8s client unavailable
+        return list(nodes_by_name.values())
 
     try:
-        nodes_list = v1.list_node()
-        nodes = []
+        # Set a timeout for the API call
+        nodes_list = v1.list_node(_request_timeout=API_TIMEOUT_SECONDS)
 
         # Try to get metrics
         metrics = {}
         try:
             custom_api = client.CustomObjectsApi()
             node_metrics = custom_api.list_cluster_custom_object(
-                "metrics.k8s.io", "v1beta1", "nodes"
+                "metrics.k8s.io", "v1beta1", "nodes",
+                _request_timeout=API_TIMEOUT_SECONDS
             )
             for item in node_metrics.get("items", []):
                 name = item["metadata"]["name"]
@@ -1823,18 +1905,20 @@ def get_nodes_detailed():
             cpu_pct = int((node_metrics.get("cpu_cores", 0) / cpu_alloc_val) * 100) if cpu_alloc_val else 0
             mem_pct = int((node_metrics.get("mem_bytes", 0) / mem_alloc_val) * 100) if mem_alloc_val else 0
 
-            nodes.append({
+            # Update the node in our map (or add if it's a new node not in CLUSTER_NODES)
+            nodes_by_name[name] = {
                 "name": name,
                 "status": status,
                 "roles": ",".join(roles) if roles else "worker",
                 "cpu": min(cpu_pct, 100),
                 "mem": min(mem_pct, 100)
-            })
+            }
 
-        return nodes
+        return list(nodes_by_name.values())
     except Exception as e:
-        print(f"Failed to get nodes: {e}")
-        return []
+        print(f"Failed to get nodes from k8s (timeout or error): {e}")
+        # Return all nodes with Unknown status on error/timeout
+        return list(nodes_by_name.values())
 
 def get_pods_detailed():
     """Get detailed pod information."""
@@ -1842,7 +1926,7 @@ def get_pods_detailed():
         return []
 
     try:
-        pods_list = v1.list_pod_for_all_namespaces()
+        pods_list = v1.list_pod_for_all_namespaces(_request_timeout=API_TIMEOUT_SECONDS)
         pods = []
 
         for pod in pods_list.items:
@@ -1860,7 +1944,7 @@ def get_pods_detailed():
 
         return pods
     except Exception as e:
-        print(f"Failed to get pods: {e}")
+        print(f"Failed to get pods (timeout or error): {e}")
         return []
 
 def get_deployments_detailed():
@@ -1869,7 +1953,7 @@ def get_deployments_detailed():
         return []
 
     try:
-        deployments_list = apps_v1.list_deployment_for_all_namespaces()
+        deployments_list = apps_v1.list_deployment_for_all_namespaces(_request_timeout=API_TIMEOUT_SECONDS)
         deployments = []
 
         for deploy in deployments_list.items:
@@ -1883,7 +1967,7 @@ def get_deployments_detailed():
 
         return deployments
     except Exception as e:
-        print(f"Failed to get deployments: {e}")
+        print(f"Failed to get deployments (timeout or error): {e}")
         return []
 
 def get_top_pods():
@@ -1894,7 +1978,8 @@ def get_top_pods():
     try:
         custom_api = client.CustomObjectsApi()
         pod_metrics = custom_api.list_cluster_custom_object(
-            "metrics.k8s.io", "v1beta1", "pods"
+            "metrics.k8s.io", "v1beta1", "pods",
+            _request_timeout=API_TIMEOUT_SECONDS
         )
 
         pods = []

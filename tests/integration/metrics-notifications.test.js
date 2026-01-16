@@ -266,7 +266,7 @@ async function runMetricsNotificationsIntegrationTests() {
     const results = new TestResults('Metrics + Notifications Integration');
 
     reporter.printHeader('Metrics + Notifications Integration Tests');
-    console.log(`  Namespace: ${NAMESPACE}`);
+    console.log(`  Namespace: ${config.cluster.namespace}`);
 
     await testMetricsAlertToNotification(results);
     await testClusterStatusNotification(results);

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/creack/pty"
@@ -153,6 +156,7 @@ func main() {
 	http.HandleFunc("/api/hosts/delete", handleDeleteHost)
 	http.HandleFunc("/api/hosts/init", handleInitHosts)
 	http.HandleFunc("/api/themes", handleThemes)
+	http.HandleFunc("/api/exec", handleExec)
 	http.HandleFunc("/ws/terminal", handleTerminal)
 	http.HandleFunc("/ws/kubectl", handleKubectl)
 	http.HandleFunc("/ws/local", handleLocalShell)
@@ -174,6 +178,109 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
+}
+
+// handleExec executes a command with a 10-second timeout and returns the output
+func handleExec(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Method not allowed",
+		})
+		return
+	}
+
+	var req struct {
+		Command string `json:"command"`
+		Timeout int    `json:"timeout"` // optional, defaults to 10 seconds
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Invalid JSON: " + err.Error(),
+		})
+		return
+	}
+
+	if req.Command == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Command is required",
+		})
+		return
+	}
+
+	// Default timeout of 10 seconds, max 60 seconds
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = 10
+	}
+	if timeout > 60 {
+		timeout = 60
+	}
+
+	log.Printf("Executing command: %s (timeout: %ds)", req.Command, timeout)
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	// Execute command with timeout using context
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", req.Command)
+	cmd.Env = []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin:/sbin",
+		"HOME=/root",
+		"TERM=xterm-256color",
+	}
+	// Preserve KUBERNETES_* env vars for in-cluster auth
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "KUBERNETES_") {
+			cmd.Env = append(cmd.Env, e)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// Check if it was a timeout
+	if ctx.Err() == context.DeadlineExceeded {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("Command timed out after %d seconds", timeout),
+			"stdout":  stdout.String(),
+			"stderr":  stderr.String(),
+		})
+		return
+	}
+
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+			"stdout":  stdout.String(),
+			"stderr":  stderr.String(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"stdout":  stdout.String(),
+		"stderr":  stderr.String(),
+	})
 }
 
 func handleThemes(w http.ResponseWriter, r *http.Request) {
@@ -509,9 +616,29 @@ func handleKubectl(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("kubectl shell connection")
 
-	// Start kubectl with bash
-	cmd := exec.Command("/bin/sh")
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// Start bash shell for kubectl access
+	// Use bash for better command-line experience, fall back to sh
+	shell := "/bin/bash"
+	if _, err := os.Stat(shell); os.IsNotExist(err) {
+		shell = "/bin/sh"
+	}
+
+	cmd := exec.Command(shell)
+	// Set up environment for in-cluster kubectl access
+	// Remove any KUBECONFIG to force in-cluster config usage
+	env := []string{
+		"TERM=xterm-256color",
+		"HOME=/root",
+		"PATH=/usr/local/bin:/usr/bin:/bin:/sbin",
+		"PS1=\\[\\033[1;34m\\]kubectl\\[\\033[0m\\]:\\[\\033[1;32m\\]\\w\\[\\033[0m\\]$ ",
+	}
+	// Preserve KUBERNETES_* env vars for in-cluster auth
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "KUBERNETES_") {
+			env = append(env, e)
+		}
+	}
+	cmd.Env = env
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {

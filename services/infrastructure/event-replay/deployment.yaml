@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-replay
+  namespace: holm-system
+  labels:
+    app: event-replay
+    component: infrastructure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: event-replay
+  template:
+    metadata:
+      labels:
+        app: event-replay
+        component: infrastructure
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: event-replay
+        image: 10.110.67.87:5000/holm/event-replay:v1
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: HTTP_PORT
+          value: "8080"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: url
+              optional: true
+        - name: NATS_URL
+          value: "nats://event-broker:4222"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-replay
+  namespace: holm-system
+  labels:
+    app: event-replay
+spec:
+  selector:
+    app: event-replay
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

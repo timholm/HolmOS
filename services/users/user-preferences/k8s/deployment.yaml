@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-preferences
+  namespace: holm
+  labels:
+    app: user-preferences
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-preferences
+  template:
+    metadata:
+      labels:
+        app: user-preferences
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - openmediavault
+      containers:
+      - name: user-preferences
+        image: 10.110.67.87:5000/user-preferences:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: user-preferences-db-secret
+              key: database-url
+        - name: PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-preferences
+  namespace: holm
+  labels:
+    app: user-preferences
+spec:
+  selector:
+    app: user-preferences
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: user-preferences-db-secret
+  namespace: holm
+type: Opaque
+stringData:
+  database-url: "postgres://holm:holm-secret-123@postgres.holm.svc.cluster.local:5432/holm?sslmode=disable"

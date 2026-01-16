@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: health-aggregator
+  namespace: holm-system
+  labels:
+    app: health-aggregator
+    component: infrastructure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: health-aggregator
+  template:
+    metadata:
+      labels:
+        app: health-aggregator
+        component: infrastructure
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: health-aggregator
+        image: 10.110.67.87:5000/holm/health-aggregator:v1
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: HTTP_PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: health-aggregator
+  namespace: holm-system
+  labels:
+    app: health-aggregator
+spec:
+  selector:
+    app: health-aggregator
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

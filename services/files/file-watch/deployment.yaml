@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file-watch
+  namespace: holm
+  labels:
+    app: file-watch
+    component: files
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: file-watch
+  template:
+    metadata:
+      labels:
+        app: file-watch
+        component: files
+    spec:
+      containers:
+      - name: file-watch
+        image: 10.110.67.87:5000/holm/file-watch:v1
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: holm-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: file-watch
+  namespace: holm
+spec:
+  selector:
+    app: file-watch
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP

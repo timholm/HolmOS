@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-file-encrypt
+spec:
+  initContainers:
+  - name: copy-source
+    image: public.ecr.aws/docker/library/busybox:1.36
+    command: ['sh', '-c', 'ls -la /source && cp -L /source/* /workspace/ && ls -la /workspace/']
+    volumeMounts:
+    - name: source
+      mountPath: /source
+    - name: workspace
+      mountPath: /workspace
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - --dockerfile=/workspace/Dockerfile
+    - --context=/workspace
+    - --destination=10.110.67.87:5000/file-encrypt:latest
+    - --insecure
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  restartPolicy: Never
+  volumes:
+  - name: source
+    configMap:
+      name: file-encrypt-source
+  - name: workspace
+    emptyDir: {}

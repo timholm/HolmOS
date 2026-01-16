@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file-encrypt
+  namespace: holm
+  labels:
+    app: file-encrypt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: file-encrypt
+  template:
+    metadata:
+      labels:
+        app: file-encrypt
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - openmediavault
+      containers:
+      - name: file-encrypt
+        image: 10.110.67.87:5000/file-encrypt:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: data
+        hostPath:
+          path: /data
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: file-encrypt
+  namespace: holm
+spec:
+  selector:
+    app: file-encrypt
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP

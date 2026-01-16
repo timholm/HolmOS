@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file-share-create
+  namespace: holm
+  labels:
+    app: file-share-create
+    component: files
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: file-share-create
+  template:
+    metadata:
+      labels:
+        app: file-share-create
+        component: files
+    spec:
+      containers:
+      - name: file-share-create
+        image: 10.110.67.87:5000/holm/file-share-create:v1
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: holm-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: file-share-create
+  namespace: holm
+spec:
+  selector:
+    app: file-share-create
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP

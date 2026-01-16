@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-storage
+  namespace: holm
+  labels:
+    app: backup-storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-storage
+  template:
+    metadata:
+      labels:
+        app: backup-storage
+    spec:
+      containers:
+      - name: backup-storage
+        image: 10.110.67.87:5000/backup-storage:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DB_HOST
+          value: "postgres.holm.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: backup-storage-db-secret
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: backup-storage-db-secret
+              key: password
+        - name: DB_NAME
+          value: "backups"
+        - name: SERVER_PORT
+          value: "8080"
+        - name: BACKUP_DIR
+          value: "/data/backups"
+        volumeMounts:
+        - name: backup-data
+          mountPath: /data/backups
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: backup-data
+        persistentVolumeClaim:
+          claimName: backup-storage-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backup-storage
+  namespace: holm
+  labels:
+    app: backup-storage
+spec:
+  selector:
+    app: backup-storage
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP

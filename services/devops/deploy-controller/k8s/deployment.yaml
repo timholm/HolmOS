@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deploy-controller
+  namespace: holm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: deploy-controller
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments/status"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: deploy-controller
+subjects:
+- kind: ServiceAccount
+  name: deploy-controller
+  namespace: holm
+roleRef:
+  kind: ClusterRole
+  name: deploy-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-controller
+  namespace: holm
+  labels:
+    app: deploy-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deploy-controller
+  template:
+    metadata:
+      labels:
+        app: deploy-controller
+    spec:
+      serviceAccountName: deploy-controller
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - openmediavault
+      containers:
+      - name: deploy-controller
+        image: 10.110.67.87:5000/holm/deploy-controller:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: REGISTRY_URL
+          value: "http://10.110.67.87:5000"
+        - name: NAMESPACE
+          value: "holm"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deploy-controller
+  namespace: holm
+spec:
+  selector:
+    app: deploy-controller
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP

@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: deploy-controller-build-pvc
+  namespace: holm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deploy-controller-build
+  namespace: holm
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: deploy-controller-build
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                - openmediavault
+      initContainers:
+      - name: fetch-source
+        image: alpine/git:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Create source directory structure
+          mkdir -p /workspace/source
+
+          # Copy the source files from ConfigMap
+          cp /source/* /workspace/source/
+
+          echo "Source files prepared:"
+          ls -la /workspace/source/
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: source-files
+          mountPath: /source
+      containers:
+      - name: kaniko
+        image: gcr.io/kaniko-project/executor:latest
+        args:
+        - "--dockerfile=/workspace/source/Dockerfile"
+        - "--context=/workspace/source"
+        - "--destination=10.110.67.87:5000/holm/deploy-controller:latest"
+        - "--insecure"
+        - "--skip-tls-verify"
+        - "--cache=false"
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+      restartPolicy: Never
+      volumes:
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: deploy-controller-build-pvc
+      - name: source-files
+        configMap:
+          name: deploy-controller-source

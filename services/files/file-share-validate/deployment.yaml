@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file-share-validate
+  namespace: holm
+  labels:
+    app: file-share-validate
+    component: files
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: file-share-validate
+  template:
+    metadata:
+      labels:
+        app: file-share-validate
+        component: files
+    spec:
+      containers:
+      - name: file-share-validate
+        image: 10.110.67.87:5000/holm/file-share-validate:v1
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: holm-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: file-share-validate
+  namespace: holm
+spec:
+  selector:
+    app: file-share-validate
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP

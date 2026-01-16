@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-sync
+  namespace: holm-system
+  labels:
+    app: config-sync
+    component: infrastructure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-sync
+  template:
+    metadata:
+      labels:
+        app: config-sync
+        component: infrastructure
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: config-sync
+        image: 10.110.67.87:5000/holm/config-sync:v1
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: HTTP_PORT
+          value: "8080"
+        - name: CONFIG_PATH
+          value: "/etc/holm/config"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/holm/config
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: config-volume
+        configMap:
+          name: holm-config
+          optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: config-sync
+  namespace: holm-system
+  labels:
+    app: config-sync
+spec:
+  selector:
+    app: config-sync
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

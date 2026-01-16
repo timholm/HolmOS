@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-file-convert
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  tolerations:
+  - key: "node-role.kubernetes.io/control-plane"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--dockerfile=/workspace/Dockerfile"
+    - "--context=/workspace"
+    - "--destination=10.110.67.87:5000/file-convert:latest"
+    - "--insecure"
+    - "--insecure-pull"
+    - "--skip-tls-verify"
+    - "--cache=false"
+    volumeMounts:
+    - name: build-context
+      mountPath: /workspace
+  restartPolicy: Never
+  volumes:
+  - name: build-context
+    hostPath:
+      path: /tmp/holm-services/files/file-convert
+      type: Directory

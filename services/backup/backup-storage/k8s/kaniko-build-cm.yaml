@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-backup-storage
+  namespace: holm
+spec:
+  initContainers:
+  - name: setup-workspace
+    image: busybox:1.36
+    command:
+    - sh
+    - -c
+    - |
+      cp /src/main.go /workspace/main.go
+      cp /src/go.mod /workspace/go.mod
+      cp /src/go.sum /workspace/go.sum
+      cp /src/Dockerfile /workspace/Dockerfile
+      ls -la /workspace/
+    volumeMounts:
+    - name: source-code
+      mountPath: /src
+    - name: workspace
+      mountPath: /workspace
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--dockerfile=/workspace/Dockerfile"
+    - "--context=/workspace"
+    - "--destination=10.110.67.87:5000/backup-storage:latest"
+    - "--insecure"
+    - "--skip-tls-verify"
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  restartPolicy: Never
+  volumes:
+  - name: source-code
+    configMap:
+      name: backup-storage-src
+  - name: workspace
+    emptyDir: {}

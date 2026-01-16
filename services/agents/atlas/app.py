@@ -1,0 +1,646 @@
+"""
+Atlas - The File Manager AI Agent
+"Everything in its place."
+"""
+
+import os
+import json
+import shutil
+import zipfile
+import tarfile
+import mimetypes
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uvicorn
+
+app = FastAPI(
+    title="Atlas - File Manager AI Agent",
+    description="AI agent for file system operations. Everything in its place.",
+    version="1.0.0"
+)
+
+# Configuration
+DATA_ROOT = os.environ.get("DATA_ROOT", "/data")
+
+# Request/Response Models
+class ChatContext(BaseModel):
+    current_path: Optional[str] = "/data"
+    user_id: Optional[str] = "admin"
+
+class ChatRequest(BaseModel):
+    message: str
+    context: Optional[ChatContext] = None
+
+class FileInfo(BaseModel):
+    name: str
+    path: str
+    size: int
+    size_human: str
+    is_directory: bool
+    modified: str
+    modified_ago: str
+    mime_type: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    agent: str = "atlas"
+    message: str
+    data: Optional[Dict[str, Any]] = None
+
+class Capability(BaseModel):
+    name: str
+    description: str
+    examples: List[str]
+
+class CapabilitiesResponse(BaseModel):
+    agent: str = "atlas"
+    personality: Dict[str, str]
+    capabilities: List[Capability]
+
+class HealthResponse(BaseModel):
+    status: str
+    agent: str
+    catchphrase: str
+
+
+def human_readable_size(size_bytes: int) -> str:
+    """Convert bytes to human readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} PB"
+
+
+def time_ago(timestamp: float) -> str:
+    """Convert timestamp to human readable time ago."""
+    now = datetime.now().timestamp()
+    diff = now - timestamp
+
+    if diff < 60:
+        return "just now"
+    elif diff < 3600:
+        minutes = int(diff / 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    elif diff < 86400:
+        hours = int(diff / 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif diff < 604800:
+        days = int(diff / 86400)
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    else:
+        weeks = int(diff / 604800)
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+
+
+def get_file_icon(path: Path, is_dir: bool) -> str:
+    """Get appropriate emoji icon for file type."""
+    if is_dir:
+        return "📁"
+
+    suffix = path.suffix.lower()
+    icon_map = {
+        '.pdf': '📄',
+        '.doc': '📝', '.docx': '📝',
+        '.xls': '📊', '.xlsx': '📊',
+        '.ppt': '📽️', '.pptx': '📽️',
+        '.txt': '📃',
+        '.md': '📃',
+        '.py': '🐍',
+        '.js': '📜',
+        '.json': '📋',
+        '.xml': '📋',
+        '.html': '🌐',
+        '.css': '🎨',
+        '.jpg': '📷', '.jpeg': '📷', '.png': '📷', '.gif': '📷', '.bmp': '📷',
+        '.mp3': '🎵', '.wav': '🎵', '.flac': '🎵',
+        '.mp4': '🎬', '.avi': '🎬', '.mkv': '🎬', '.mov': '🎬',
+        '.zip': '📦', '.tar': '📦', '.gz': '📦', '.rar': '📦', '.7z': '📦',
+        '.exe': '⚙️', '.sh': '⚙️', '.bat': '⚙️',
+    }
+    return icon_map.get(suffix, '📄')
+
+
+def get_file_info(path: Path) -> FileInfo:
+    """Get detailed file information."""
+    stat = path.stat()
+    is_dir = path.is_dir()
+    mime_type = None if is_dir else mimetypes.guess_type(str(path))[0]
+
+    return FileInfo(
+        name=path.name,
+        path=str(path),
+        size=stat.st_size if not is_dir else 0,
+        size_human=human_readable_size(stat.st_size) if not is_dir else "-",
+        is_directory=is_dir,
+        modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        modified_ago=time_ago(stat.st_mtime),
+        mime_type=mime_type
+    )
+
+
+def safe_path(base: str, user_path: str) -> Path:
+    """Ensure path is within allowed directory."""
+    base_path = Path(base).resolve()
+    target = (base_path / user_path).resolve()
+
+    if not str(target).startswith(str(base_path)):
+        raise ValueError("Access denied: Path outside allowed directory")
+
+    return target
+
+
+class AtlasAgent:
+    """Atlas AI Agent for file management."""
+
+    def __init__(self):
+        self.name = "Atlas"
+        self.catchphrase = "Everything in its place."
+
+    def process_message(self, message: str, context: ChatContext) -> ChatResponse:
+        """Process user message and return appropriate response."""
+        message_lower = message.lower().strip()
+        current_path = context.current_path or DATA_ROOT
+
+        # Ensure data directory exists
+        os.makedirs(DATA_ROOT, exist_ok=True)
+
+        try:
+            # List files / show recent
+            if any(kw in message_lower for kw in ['list', 'show', 'recent', 'what', "what's"]):
+                return self._handle_list(message_lower, current_path)
+
+            # Search for files
+            elif any(kw in message_lower for kw in ['find', 'search', 'where', 'locate']):
+                return self._handle_search(message_lower, current_path)
+
+            # Compress files
+            elif any(kw in message_lower for kw in ['compress', 'zip', 'archive', 'tar']):
+                return self._handle_compress(message_lower, current_path)
+
+            # Decompress files
+            elif any(kw in message_lower for kw in ['decompress', 'unzip', 'extract', 'untar']):
+                return self._handle_decompress(message_lower, current_path)
+
+            # Move files
+            elif 'move' in message_lower:
+                return self._handle_move(message_lower, current_path)
+
+            # Copy files
+            elif 'copy' in message_lower:
+                return self._handle_copy(message_lower, current_path)
+
+            # Delete files
+            elif any(kw in message_lower for kw in ['delete', 'remove', 'rm']):
+                return self._handle_delete(message_lower, current_path)
+
+            # Preview file
+            elif any(kw in message_lower for kw in ['preview', 'view', 'read', 'cat']):
+                return self._handle_preview(message_lower, current_path)
+
+            # File info
+            elif any(kw in message_lower for kw in ['info', 'details', 'metadata', 'size']):
+                return self._handle_info(message_lower, current_path)
+
+            # Help
+            elif any(kw in message_lower for kw in ['help', 'what can you', 'capabilities']):
+                return self._handle_help()
+
+            # Greeting
+            elif any(kw in message_lower for kw in ['hello', 'hi', 'hey', 'greetings']):
+                return ChatResponse(
+                    message=f"Hello! I'm Atlas, your file management assistant. {self.catchphrase} How can I help you organize your files today?",
+                    data={"suggested_actions": ["list files", "search", "organize"]}
+                )
+
+            # Default response
+            else:
+                return ChatResponse(
+                    message=f"I'm not quite sure what you'd like me to do. I can help you list, search, move, copy, compress, or delete files. What would you like to do?",
+                    data={"suggested_actions": ["list files", "search for files", "compress folder"]}
+                )
+
+        except Exception as e:
+            return ChatResponse(
+                message=f"I encountered an issue: {str(e)}. Please check the path and try again.",
+                data={"error": str(e)}
+            )
+
+    def _handle_list(self, message: str, current_path: str) -> ChatResponse:
+        """Handle file listing requests."""
+        # Determine which directory to list
+        if 'download' in message:
+            target_dir = safe_path(DATA_ROOT, "downloads")
+        elif 'document' in message:
+            target_dir = safe_path(DATA_ROOT, "documents")
+        else:
+            target_dir = Path(current_path)
+
+        if not target_dir.exists():
+            os.makedirs(target_dir, exist_ok=True)
+            return ChatResponse(
+                message=f"The directory {target_dir} was empty, so I created it for you. It's ready for your files!",
+                data={"path": str(target_dir), "files": []}
+            )
+
+        files = []
+        for item in sorted(target_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)[:20]:
+            file_info = get_file_info(item)
+            files.append(file_info.model_dump())
+
+        if not files:
+            return ChatResponse(
+                message=f"The directory {target_dir} is empty. Would you like me to help you organize some files here?",
+                data={"path": str(target_dir), "files": []}
+            )
+
+        # Format response
+        file_list = []
+        for f in files[:10]:
+            icon = get_file_icon(Path(f['path']), f['is_directory'])
+            size_str = f['size_human'] if not f['is_directory'] else "folder"
+            file_list.append(f"{icon} {f['name']} ({size_str}) - {f['modified_ago']}")
+
+        response_msg = f"Here are the files in {target_dir}:\n" + "\n".join(file_list)
+        if len(files) > 10:
+            response_msg += f"\n\n...and {len(files) - 10} more files."
+        response_msg += "\n\nWould you like me to organize these or perform any actions?"
+
+        return ChatResponse(
+            message=response_msg,
+            data={
+                "path": str(target_dir),
+                "files": files,
+                "suggested_actions": ["compress", "search", "delete old files"]
+            }
+        )
+
+    def _handle_search(self, message: str, current_path: str) -> ChatResponse:
+        """Handle file search requests."""
+        # Extract search pattern
+        pattern = None
+        for ext in ['.pdf', '.jpg', '.png', '.doc', '.txt', '.mp3', '.mp4', '.zip']:
+            if ext in message.lower() or ext[1:] in message.lower():
+                pattern = f"*{ext}"
+                break
+
+        if not pattern:
+            # Try to extract a filename pattern
+            words = message.split()
+            for i, word in enumerate(words):
+                if word in ['for', 'named', 'called'] and i + 1 < len(words):
+                    pattern = f"*{words[i + 1]}*"
+                    break
+
+        if not pattern:
+            pattern = "*"
+
+        search_path = Path(current_path)
+        if not search_path.exists():
+            search_path = Path(DATA_ROOT)
+
+        found_files = []
+        for item in search_path.rglob(pattern):
+            if len(found_files) >= 50:
+                break
+            found_files.append(get_file_info(item).model_dump())
+
+        if not found_files:
+            return ChatResponse(
+                message=f"I couldn't find any files matching '{pattern}' in {search_path}. Would you like me to search elsewhere?",
+                data={"pattern": pattern, "path": str(search_path), "files": []}
+            )
+
+        file_list = []
+        for f in found_files[:15]:
+            icon = get_file_icon(Path(f['path']), f['is_directory'])
+            file_list.append(f"{icon} {f['path']}")
+
+        response_msg = f"Searching for {pattern}...\nFound {len(found_files)} file(s):\n" + "\n".join(file_list)
+        if len(found_files) > 15:
+            response_msg += f"\n\n...and {len(found_files) - 15} more files."
+
+        return ChatResponse(
+            message=response_msg,
+            data={
+                "pattern": pattern,
+                "path": str(search_path),
+                "files": found_files,
+                "suggested_actions": ["preview", "move", "compress"]
+            }
+        )
+
+    def _handle_compress(self, message: str, current_path: str) -> ChatResponse:
+        """Handle compression requests."""
+        # Determine what to compress
+        if 'download' in message:
+            target = safe_path(DATA_ROOT, "downloads")
+        elif 'document' in message:
+            target = safe_path(DATA_ROOT, "documents")
+        else:
+            target = Path(current_path)
+
+        if not target.exists():
+            return ChatResponse(
+                message=f"I couldn't find {target}. Please check the path and try again.",
+                data={"error": "Path not found"}
+            )
+
+        # Create archive
+        archive_name = f"{target.name}.zip"
+        archive_path = target.parent / archive_name
+
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            if target.is_dir():
+                for file in target.rglob('*'):
+                    if file.is_file():
+                        zipf.write(file, file.relative_to(target))
+            else:
+                zipf.write(target, target.name)
+
+        archive_size = human_readable_size(archive_path.stat().st_size)
+
+        return ChatResponse(
+            message=f"Creating archive of {target}...\n\n✅ Created {archive_name} ({archive_size})\n\nWould you like me to move it somewhere?",
+            data={
+                "archive": str(archive_path),
+                "size": archive_size,
+                "suggested_actions": ["move", "delete original"]
+            }
+        )
+
+    def _handle_decompress(self, message: str, current_path: str) -> ChatResponse:
+        """Handle decompression requests."""
+        # Find archive file in message or current directory
+        archive_path = None
+
+        for word in message.split():
+            if any(word.endswith(ext) for ext in ['.zip', '.tar', '.gz', '.tar.gz']):
+                archive_path = safe_path(DATA_ROOT, word)
+                break
+
+        if not archive_path:
+            # Look for archives in current directory
+            current = Path(current_path)
+            archives = list(current.glob('*.zip')) + list(current.glob('*.tar*'))
+            if archives:
+                archive_path = archives[0]
+            else:
+                return ChatResponse(
+                    message="I couldn't find an archive to extract. Please specify the archive file name.",
+                    data={"error": "No archive found"}
+                )
+
+        if not archive_path.exists():
+            return ChatResponse(
+                message=f"I couldn't find the archive {archive_path}. Please check the path.",
+                data={"error": "Archive not found"}
+            )
+
+        # Extract archive
+        extract_dir = archive_path.parent / archive_path.stem
+
+        if archive_path.suffix == '.zip':
+            with zipfile.ZipFile(archive_path, 'r') as zipf:
+                zipf.extractall(extract_dir)
+        elif archive_path.suffix in ['.tar', '.gz']:
+            with tarfile.open(archive_path, 'r:*') as tarf:
+                tarf.extractall(extract_dir)
+
+        return ChatResponse(
+            message=f"Extracting {archive_path.name}...\n\n✅ Extracted to {extract_dir}\n\nWould you like me to show you the contents?",
+            data={
+                "archive": str(archive_path),
+                "extracted_to": str(extract_dir),
+                "suggested_actions": ["list files", "delete archive"]
+            }
+        )
+
+    def _handle_move(self, message: str, current_path: str) -> ChatResponse:
+        """Handle move requests."""
+        return ChatResponse(
+            message="To move files, please specify the source and destination. For example: 'Move report.pdf to /data/documents'",
+            data={
+                "suggested_actions": ["list files first", "specify paths"]
+            }
+        )
+
+    def _handle_copy(self, message: str, current_path: str) -> ChatResponse:
+        """Handle copy requests."""
+        return ChatResponse(
+            message="To copy files, please specify the source and destination. For example: 'Copy backup.zip to /data/archives'",
+            data={
+                "suggested_actions": ["list files first", "specify paths"]
+            }
+        )
+
+    def _handle_delete(self, message: str, current_path: str) -> ChatResponse:
+        """Handle delete requests - requires confirmation."""
+        return ChatResponse(
+            message="⚠️ For safety, I need you to confirm the exact file or folder you want to delete. Please specify the full path, and I'll ask for confirmation before proceeding.",
+            data={
+                "warning": "Deletion requires confirmation",
+                "suggested_actions": ["list files first", "specify exact path"]
+            }
+        )
+
+    def _handle_preview(self, message: str, current_path: str) -> ChatResponse:
+        """Handle file preview requests."""
+        # Try to find a file to preview
+        words = message.split()
+        target_file = None
+
+        for word in words:
+            potential_path = safe_path(DATA_ROOT, word)
+            if potential_path.exists() and potential_path.is_file():
+                target_file = potential_path
+                break
+
+        if not target_file:
+            return ChatResponse(
+                message="Please specify which file you'd like me to preview. For example: 'Preview report.txt'",
+                data={"suggested_actions": ["list files", "search for file"]}
+            )
+
+        # Read file content (first 1000 chars for text files)
+        try:
+            mime_type = mimetypes.guess_type(str(target_file))[0]
+            if mime_type and mime_type.startswith('text'):
+                with open(target_file, 'r') as f:
+                    content = f.read(1000)
+                if len(content) == 1000:
+                    content += "\n\n... (truncated)"
+
+                return ChatResponse(
+                    message=f"Preview of {target_file.name}:\n\n```\n{content}\n```",
+                    data={
+                        "file": str(target_file),
+                        "content": content,
+                        "suggested_actions": ["open full file", "copy", "move"]
+                    }
+                )
+            else:
+                file_info = get_file_info(target_file)
+                return ChatResponse(
+                    message=f"This file ({file_info.mime_type or 'binary'}) cannot be previewed as text. Here's the file info:\n\n📄 {file_info.name}\nSize: {file_info.size_human}\nModified: {file_info.modified_ago}",
+                    data={"file": file_info.model_dump()}
+                )
+        except Exception as e:
+            return ChatResponse(
+                message=f"I couldn't preview that file: {str(e)}",
+                data={"error": str(e)}
+            )
+
+    def _handle_info(self, message: str, current_path: str) -> ChatResponse:
+        """Handle file info requests."""
+        # Try to find a file for info
+        words = message.split()
+        target = None
+
+        for word in words:
+            try:
+                potential_path = safe_path(DATA_ROOT, word)
+                if potential_path.exists():
+                    target = potential_path
+                    break
+            except:
+                continue
+
+        if not target:
+            target = Path(current_path)
+
+        if not target.exists():
+            return ChatResponse(
+                message="Please specify which file or folder you'd like info about.",
+                data={"suggested_actions": ["list files", "search"]}
+            )
+
+        file_info = get_file_info(target)
+        icon = get_file_icon(target, target.is_dir())
+
+        info_text = f"""
+{icon} **{file_info.name}**
+
+📍 Path: {file_info.path}
+📊 Size: {file_info.size_human}
+📅 Modified: {file_info.modified_ago}
+🏷️ Type: {file_info.mime_type or ('Directory' if file_info.is_directory else 'Unknown')}
+"""
+
+        return ChatResponse(
+            message=info_text.strip(),
+            data={
+                "file": file_info.model_dump(),
+                "suggested_actions": ["preview", "move", "copy", "compress"]
+            }
+        )
+
+    def _handle_help(self) -> ChatResponse:
+        """Show help information."""
+        help_text = """
+I'm Atlas, your file management assistant. Here's what I can do:
+
+📋 **List files** - "Show me recent downloads" or "List files in documents"
+🔍 **Search** - "Find all PDFs" or "Search for report"
+📦 **Compress** - "Compress the downloads folder" or "Zip documents"
+📂 **Extract** - "Unzip archive.zip" or "Extract the backup"
+📄 **Preview** - "Preview readme.txt" or "Show me the contents of config.json"
+ℹ️ **Info** - "Get info about report.pdf" or "How big is the downloads folder?"
+✂️ **Move/Copy** - "Move report.pdf to documents"
+🗑️ **Delete** - "Delete old-backup.zip" (with confirmation)
+
+Just tell me what you need, and I'll help you keep everything in its place!
+"""
+        return ChatResponse(
+            message=help_text.strip(),
+            data={
+                "suggested_actions": ["list files", "search", "compress"]
+            }
+        )
+
+
+# Create agent instance
+atlas = AtlasAgent()
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health():
+    """Health check endpoint."""
+    return HealthResponse(
+        status="healthy",
+        agent="atlas",
+        catchphrase=atlas.catchphrase
+    )
+
+
+@app.get("/capabilities", response_model=CapabilitiesResponse)
+async def capabilities():
+    """List Atlas capabilities."""
+    return CapabilitiesResponse(
+        personality={
+            "name": "Atlas",
+            "domain": "File system operations",
+            "traits": "Organized, methodical, knows where everything is",
+            "catchphrase": atlas.catchphrase
+        },
+        capabilities=[
+            Capability(
+                name="list",
+                description="List files in a directory",
+                examples=["Show me recent downloads", "List files in documents"]
+            ),
+            Capability(
+                name="search",
+                description="Search for files by name or type",
+                examples=["Find all PDFs", "Search for report"]
+            ),
+            Capability(
+                name="compress",
+                description="Create zip/tar archives",
+                examples=["Compress the downloads folder", "Zip the documents"]
+            ),
+            Capability(
+                name="decompress",
+                description="Extract archives",
+                examples=["Unzip archive.zip", "Extract backup.tar.gz"]
+            ),
+            Capability(
+                name="move",
+                description="Move files to a new location",
+                examples=["Move report.pdf to documents"]
+            ),
+            Capability(
+                name="copy",
+                description="Copy files",
+                examples=["Copy backup.zip to archives"]
+            ),
+            Capability(
+                name="delete",
+                description="Delete files (with confirmation)",
+                examples=["Delete old-backup.zip"]
+            ),
+            Capability(
+                name="preview",
+                description="Preview file contents",
+                examples=["Preview readme.txt", "Show contents of config.json"]
+            ),
+            Capability(
+                name="info",
+                description="Get file metadata",
+                examples=["Get info about report.pdf", "How big is downloads?"]
+            )
+        ]
+    )
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Chat with Atlas to manage files."""
+    context = request.context or ChatContext()
+    return atlas.process_message(request.message, context)
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

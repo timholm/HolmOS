@@ -313,11 +313,21 @@ def api_health():
 def api_kubeconfig():
     """Download kubeconfig file for cluster access"""
     try:
-        # Read kubeconfig from k3s
-        kubeconfig_path = "/etc/rancher/k3s/k3s.yaml"
-        if os.path.exists(kubeconfig_path):
-            with open(kubeconfig_path, 'r') as f:
-                kubeconfig = f.read()
+        # Try multiple locations for kubeconfig
+        kubeconfig_paths = [
+            "/etc/kubeconfig/kubeconfig.yaml",  # Mounted from ConfigMap
+            "/etc/rancher/k3s/k3s.yaml",        # Direct k3s path
+            os.path.expanduser("~/.kube/config") # Standard location
+        ]
+
+        kubeconfig = None
+        for path in kubeconfig_paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    kubeconfig = f.read()
+                break
+
+        if kubeconfig:
             # Replace localhost with the actual cluster IP
             kubeconfig = kubeconfig.replace("127.0.0.1", "192.168.8.197")
             kubeconfig = kubeconfig.replace("localhost", "192.168.8.197")
@@ -327,7 +337,7 @@ def api_kubeconfig():
                 headers={'Content-Disposition': 'attachment; filename=kubeconfig.yaml'}
             )
         else:
-            return jsonify({"error": "Kubeconfig not found"}), 404
+            return jsonify({"error": "Kubeconfig not found", "searched": kubeconfig_paths}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: cluster-manager
-        image: 192.168.8.197:30500/cluster-manager:latest
+        image: localhost:31500/cluster-manager:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -52,6 +52,14 @@ spec:
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
+        volumeMounts:
+        - name: kubeconfig
+          mountPath: /etc/kubeconfig
+          readOnly: true
+      volumes:
+      - name: kubeconfig
+        configMap:
+          name: kubeconfig
 ---
 apiVersion: v1
 kind: Service
@@ -65,7 +73,7 @@ spec:
   ports:
   - port: 80
     targetPort: 8080
-    nodePort: 30014
+    nodePort: 30502
     protocol: TCP
     name: http
   selector:

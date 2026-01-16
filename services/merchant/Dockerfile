@@ -1,7 +1,7 @@
 # Merchant - App Store AI Agent
 # Dockerfile for ARM64 (Raspberry Pi cluster)
 
-FROM docker.io/library/python:3.11-slim
+FROM --platform=linux/arm64 docker.io/library/python:3.11-slim
 
 # Set working directory
 WORKDIR /app

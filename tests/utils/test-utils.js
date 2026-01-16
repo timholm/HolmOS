@@ -17,12 +17,10 @@ class TestUtils {
     }
 
     /**
-     * Build URL for a service
+     * Build URL for a service (uses NodePort if available)
      */
     buildServiceUrl(serviceName, path = '/health') {
-        const service = config.getAllServices().find(s => s.name === serviceName);
-        const port = service ? service.port : 8080;
-        return `http://${serviceName}.${config.cluster.namespace}.svc.cluster.local:${port}${path}`;
+        return config.getServiceUrl(serviceName, 8080, path);
     }
 
     /**
@@ -33,10 +31,10 @@ class TestUtils {
     }
 
     /**
-     * Perform health check on a service
+     * Perform health check on a service (uses NodePort if available)
      */
     async healthCheck(serviceName, port = 8080, path = '/health') {
-        const url = `http://${serviceName}.${config.cluster.namespace}.svc.cluster.local:${port}${path}`;
+        const url = config.getServiceUrl(serviceName, port, path);
         const startTime = Date.now();
 
         try {
@@ -101,7 +99,7 @@ class TestUtils {
      * Login and get auth token
      */
     async login(username = config.auth.username, password = config.auth.password) {
-        const url = `http://auth-gateway.${config.cluster.namespace}.svc.cluster.local:8080/api/login`;
+        const url = config.getServiceUrl('auth-gateway', 8080, '/api/login');
 
         try {
             const response = await this.client.post(url, {
@@ -167,7 +165,7 @@ class TestUtils {
             return { valid: false, error: 'No token provided' };
         }
 
-        const url = `http://auth-gateway.${config.cluster.namespace}.svc.cluster.local:8080/api/validate`;
+        const url = config.getServiceUrl('auth-gateway', 8080, '/api/validate');
 
         try {
             const response = await this.client.get(url, {

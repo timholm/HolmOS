@@ -4,7 +4,7 @@ RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
 COPY main.go .
-RUN CGO_ENABLED=0 GOOS=linux go build -o deploy-controller .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o deploy-controller .
 
 FROM public.ecr.aws/docker/library/alpine:3.19
 RUN apk add --no-cache ca-certificates

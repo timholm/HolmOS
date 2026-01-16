@@ -1,7 +1,7 @@
 // HolmOS Performance Test Configuration
 // Optimized for Raspberry Pi cluster hardware constraints
 
-export const CONFIG = {
+const CONFIG = {
   // Cluster endpoint
   baseUrl: 'http://192.168.8.197',
 
@@ -123,7 +123,7 @@ export const CONFIG = {
 };
 
 // Helper to build service URL
-export function serviceUrl(serviceName, path = '') {
+function serviceUrl(serviceName, path = '') {
   const service = CONFIG.services[serviceName];
   if (!service) {
     throw new Error(`Unknown service: ${serviceName}`);
@@ -132,15 +132,20 @@ export function serviceUrl(serviceName, path = '') {
 }
 
 // Helper to get services by category
-export function getServicesByCategory(category) {
+function getServicesByCategory(category) {
   return Object.entries(CONFIG.services)
     .filter(([_, config]) => config.category === category)
     .map(([name, config]) => ({ name, ...config }));
 }
 
 // Helper to get all service names
-export function getAllServices() {
+function getAllServices() {
   return Object.keys(CONFIG.services);
 }
 
-export default CONFIG;
+module.exports = {
+  CONFIG,
+  serviceUrl,
+  getServicesByCategory,
+  getAllServices
+};

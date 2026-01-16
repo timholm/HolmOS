@@ -11,8 +11,8 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const NAMESPACE = config.cluster.namespace;
-const NOTIF_BASE = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080`;
+// Use NodePort URL for external access
+const NOTIF_BASE = config.getServiceUrl('notification-hub', 8080, '').replace(/\/$/, '');
 
 async function testHealthEndpoint(results) {
     console.log('\n  Testing health endpoint...');

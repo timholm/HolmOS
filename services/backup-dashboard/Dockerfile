@@ -5,7 +5,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 COPY *.go ./
 
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o backup-dashboard .
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -o backup-dashboard .
 
 FROM quay.io/prometheus/busybox:latest
 

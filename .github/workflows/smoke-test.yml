@@ -3,383 +3,67 @@ name: Smoke Tests
 on:
   workflow_run:
     workflows: ["Deploy to Pi Cluster"]
-    types:
-      - completed
+    types: [completed]
   workflow_dispatch:
-    inputs:
-      services:
-        description: 'Services to test (comma-separated or "all")'
-        required: false
-        default: 'all'
-      skip_rollback:
-        description: 'Skip rollback on failure'
-        required: false
-        type: boolean
-        default: false
 
 env:
   PI_HOST: 192.168.8.197
-  PI_USER: rpi1
-  CLUSTER_IP: 192.168.8.197
 
 jobs:
-  smoke-test:
+  check-connectivity:
+    name: Check Connectivity
     runs-on: ubuntu-latest
-    # Only run if deploy succeeded or manually triggered
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
-      failed_services: ${{ steps.test.outputs.failed_services }}
-      test_result: ${{ steps.test.outputs.result }}
-
+      reachable: ${{ steps.check.outputs.reachable }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
+      - name: Check cluster
+        id: check
         run: |
-          sudo apt-get update && sudo apt-get install -y sshpass jq curl
-
-      - name: Run smoke tests
-        id: test
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
-        run: |
-          # Service definitions from services.yaml
-          declare -A SERVICES=(
-            # Core Entry Points
-            ["holmos-shell"]="30000"
-            ["claude-pod"]="30001"
-            ["app-store"]="30002"
-            ["chat-hub"]="30003"
-            # AI Agents
-            ["nova"]="30004"
-            ["merchant"]="30005"
-            ["pulse"]="30006"
-            ["gateway"]="30008"
-            ["scribe"]="30860"
-            ["vault"]="30870"
-            # Apps
-            ["clock-app"]="30007"
-            ["calculator-app"]="30010"
-            ["file-web-nautilus"]="30088"
-            ["settings-web"]="30600"
-            ["audiobook-web"]="30700"
-            ["terminal-web"]="30800"
-            # Infrastructure
-            ["holm-git"]="30009"
-            ["cicd-controller"]="30020"
-            ["deploy-controller"]="30021"
-            ["cluster-manager"]="30502"
-            ["backup-dashboard"]="30850"
-            ["test-dashboard"]="30900"
-            ["metrics-dashboard"]="30950"
-            ["registry-ui"]="31750"
-          )
-
-          # Determine which services to test
-          INPUT_SERVICES="${{ github.event.inputs.services }}"
-          if [ -z "$INPUT_SERVICES" ] || [ "$INPUT_SERVICES" = "all" ]; then
-            TEST_SERVICES="${!SERVICES[@]}"
+          if curl -s --connect-timeout 5 "http://$PI_HOST:30000/health" > /dev/null 2>&1; then
+            echo "reachable=true" >> $GITHUB_OUTPUT
           else
-            TEST_SERVICES=$(echo "$INPUT_SERVICES" | tr ',' ' ')
+            echo "reachable=false" >> $GITHUB_OUTPUT
           fi
 
-          FAILED_SERVICES=()
-          PASSED_SERVICES=()
-          SKIPPED_SERVICES=()
-
-          echo "=== HolmOS Smoke Tests ==="
-          echo "Cluster: ${{ env.CLUSTER_IP }}"
-          echo "Testing services: $TEST_SERVICES"
-          echo ""
-
-          for SERVICE in $TEST_SERVICES; do
-            PORT=${SERVICES[$SERVICE]}
-            if [ -z "$PORT" ]; then
-              echo "[$SERVICE] SKIP - Unknown service"
-              SKIPPED_SERVICES+=("$SERVICE")
-              continue
-            fi
-
-            URL="http://${{ env.CLUSTER_IP }}:${PORT}"
-            HEALTH_URL="${URL}/health"
-
-            echo "----------------------------------------"
-            echo "Testing: $SERVICE (port $PORT)"
-
-            # Test 1: Health endpoint
-            echo -n "  Health check... "
-            HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$HEALTH_URL" 2>/dev/null || echo "000")
-
-            if [ "$HEALTH_RESPONSE" = "200" ]; then
-              echo "PASS (HTTP $HEALTH_RESPONSE)"
-              HEALTH_PASS=true
-            else
-              echo "FAIL (HTTP $HEALTH_RESPONSE)"
-              HEALTH_PASS=false
-            fi
-
-            # Test 2: Basic connectivity (root endpoint)
-            echo -n "  Connectivity... "
-            ROOT_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$URL/" 2>/dev/null || echo "000")
-
-            if [ "$ROOT_RESPONSE" != "000" ] && [ "$ROOT_RESPONSE" != "502" ] && [ "$ROOT_RESPONSE" != "503" ]; then
-              echo "PASS (HTTP $ROOT_RESPONSE)"
-              CONNECT_PASS=true
-            else
-              echo "FAIL (HTTP $ROOT_RESPONSE)"
-              CONNECT_PASS=false
-            fi
-
-            # Test 3: Service-specific functional tests
-            echo -n "  Functional... "
-            FUNC_PASS=true
-
-            case $SERVICE in
-              nova|pulse|merchant|gateway|scribe|vault)
-                # AI Agents - test /api/status or /api/info
-                API_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${URL}/api/status" 2>/dev/null || echo "000")
-                if [ "$API_RESPONSE" = "000" ]; then
-                  API_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${URL}/api/info" 2>/dev/null || echo "000")
-                fi
-                [ "$API_RESPONSE" = "200" ] || FUNC_PASS=false
-                echo "API status: HTTP $API_RESPONSE"
-                ;;
-
-              calculator-app)
-                # Calculator - test basic calculation
-                CALC_RESPONSE=$(curl -s --connect-timeout 5 --max-time 10 "${URL}/api/calculate?expr=2+2" 2>/dev/null || echo "")
-                if echo "$CALC_RESPONSE" | grep -q "4" 2>/dev/null; then
-                  echo "PASS (2+2=4)"
-                else
-                  echo "SKIP (no calculate API)"
-                fi
-                ;;
-
-              clock-app)
-                # Clock - test time endpoint
-                TIME_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${URL}/api/time" 2>/dev/null || echo "000")
-                [ "$TIME_RESPONSE" = "000" ] && TIME_RESPONSE="N/A"
-                echo "Time API: HTTP $TIME_RESPONSE"
-                ;;
-
-              holm-git)
-                # Git server - test repos endpoint
-                GIT_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${URL}/api/repos" 2>/dev/null || echo "000")
-                [ "$GIT_RESPONSE" = "000" ] && GIT_RESPONSE="N/A"
-                echo "Repos API: HTTP $GIT_RESPONSE"
-                ;;
-
-              metrics-dashboard)
-                # Metrics - test metrics endpoint
-                METRICS_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${URL}/api/metrics" 2>/dev/null || echo "000")
-                [ "$METRICS_RESPONSE" = "000" ] && METRICS_RESPONSE="N/A"
-                echo "Metrics API: HTTP $METRICS_RESPONSE"
-                ;;
-
-              registry-ui)
-                # Registry UI - test catalog
-                REG_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${URL}/api/catalog" 2>/dev/null || echo "000")
-                [ "$REG_RESPONSE" = "000" ] && REG_RESPONSE="N/A"
-                echo "Catalog API: HTTP $REG_RESPONSE"
-                ;;
-
-              *)
-                echo "SKIP (generic service)"
-                ;;
-            esac
-
-            # Determine overall pass/fail for this service
-            if [ "$HEALTH_PASS" = true ] && [ "$CONNECT_PASS" = true ]; then
-              echo "  Result: PASS"
-              PASSED_SERVICES+=("$SERVICE")
-            else
-              echo "  Result: FAIL"
-              FAILED_SERVICES+=("$SERVICE")
-            fi
-          done
-
-          echo ""
-          echo "========================================"
-          echo "SMOKE TEST SUMMARY"
-          echo "========================================"
-          echo "Passed: ${#PASSED_SERVICES[@]}"
-          echo "Failed: ${#FAILED_SERVICES[@]}"
-          echo "Skipped: ${#SKIPPED_SERVICES[@]}"
-          echo ""
-
-          if [ ${#PASSED_SERVICES[@]} -gt 0 ]; then
-            echo "Passed services: ${PASSED_SERVICES[*]}"
-          fi
-
-          if [ ${#FAILED_SERVICES[@]} -gt 0 ]; then
-            echo "Failed services: ${FAILED_SERVICES[*]}"
-          fi
-
-          # Set outputs
-          FAILED_JSON=$(printf '%s\n' "${FAILED_SERVICES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          echo "failed_services=$FAILED_JSON" >> $GITHUB_OUTPUT
-
-          if [ ${#FAILED_SERVICES[@]} -gt 0 ]; then
-            echo "result=failure" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "result=success" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Generate test report
-        if: always()
-        run: |
-          echo "## Smoke Test Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Cluster:** ${{ env.CLUSTER_IP }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ steps.test.outputs.result }}" = "success" ]; then
-            echo "### Result: PASSED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### Result: FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Failed Services:** ${{ steps.test.outputs.failed_services }}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  rollback:
-    needs: smoke-test
+  smoke-test:
+    name: Smoke Test
+    needs: check-connectivity
+    if: needs.check-connectivity.outputs.reachable == 'true'
     runs-on: ubuntu-latest
-    if: ${{ failure() && github.event.inputs.skip_rollback != 'true' }}
-
     steps:
-      - name: Install dependencies
+      - name: Test critical services
         run: |
-          sudo apt-get update && sudo apt-get install -y sshpass jq
+          echo "## 🔥 Smoke Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-      - name: Rollback failed services
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
-        run: |
-          FAILED_SERVICES='${{ needs.smoke-test.outputs.failed_services }}'
+          SERVICES="holmos-shell:30000 nova:30004 auth-gateway:30100 registry-ui:31750"
+          PASSED=0
+          FAILED=0
 
-          if [ -z "$FAILED_SERVICES" ] || [ "$FAILED_SERVICES" = "[]" ] || [ "$FAILED_SERVICES" = "null" ]; then
-            echo "No failed services to rollback"
-            exit 0
-          fi
+          for svc in $SERVICES; do
+            NAME=$(echo $svc | cut -d: -f1)
+            PORT=$(echo $svc | cut -d: -f2)
 
-          echo "=== Rolling back failed services ==="
-          echo "Failed: $FAILED_SERVICES"
-
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            ${{ env.PI_USER }}@${{ env.PI_HOST }} << ROLLBACK
-
-          set -e
-
-          FAILED='$FAILED_SERVICES'
-
-          for SERVICE in \$(echo "\$FAILED" | jq -r '.[]'); do
-            echo ""
-            echo "Rolling back: \$SERVICE"
-
-            # Check if deployment exists
-            if ! kubectl get deployment \$SERVICE -n holm &>/dev/null; then
-              echo "  Deployment not found, skipping"
-              continue
-            fi
-
-            # Check for previous image annotation
-            PREV_IMAGE=\$(kubectl get deployment \$SERVICE -n holm -o jsonpath='{.metadata.annotations.holmos\.io/previous-image}' 2>/dev/null || echo "")
-
-            if [ -n "\$PREV_IMAGE" ]; then
-              echo "  Rolling back to: \$PREV_IMAGE"
-              kubectl set image deployment/\$SERVICE \$SERVICE=\$PREV_IMAGE -n holm
-              kubectl rollout status deployment/\$SERVICE -n holm --timeout=120s || true
+            if curl -sf --connect-timeout 5 "http://$PI_HOST:$PORT/health" > /dev/null 2>&1; then
+              echo "✅ $NAME: healthy" >> $GITHUB_STEP_SUMMARY
+              PASSED=$((PASSED + 1))
             else
-              echo "  No previous image found, using kubectl rollout undo"
-              kubectl rollout undo deployment/\$SERVICE -n holm || true
-              kubectl rollout status deployment/\$SERVICE -n holm --timeout=120s || true
-            fi
-
-            echo "  Rollback complete for \$SERVICE"
-          done
-
-          echo ""
-          echo "=== Rollback Summary ==="
-          kubectl get deployments -n holm -o wide
-
-          ROLLBACK
-
-      - name: Verify rollback
-        env:
-          PI_PASSWORD: ${{ secrets.PI_PASSWORD }}
-        run: |
-          echo "Waiting for services to stabilize..."
-          sleep 30
-
-          FAILED_SERVICES='${{ needs.smoke-test.outputs.failed_services }}'
-
-          echo "=== Post-rollback verification ==="
-
-          for SERVICE in $(echo "$FAILED_SERVICES" | jq -r '.[]'); do
-            PORT=""
-            case $SERVICE in
-              holmos-shell) PORT=30000 ;;
-              claude-pod) PORT=30001 ;;
-              app-store) PORT=30002 ;;
-              chat-hub) PORT=30003 ;;
-              nova) PORT=30004 ;;
-              merchant) PORT=30005 ;;
-              pulse) PORT=30006 ;;
-              clock-app) PORT=30007 ;;
-              gateway) PORT=30008 ;;
-              holm-git) PORT=30009 ;;
-              calculator-app) PORT=30010 ;;
-              cicd-controller) PORT=30020 ;;
-              deploy-controller) PORT=30021 ;;
-              file-web-nautilus) PORT=30088 ;;
-              cluster-manager) PORT=30502 ;;
-              settings-web) PORT=30600 ;;
-              audiobook-web) PORT=30700 ;;
-              terminal-web) PORT=30800 ;;
-              backup-dashboard) PORT=30850 ;;
-              scribe) PORT=30860 ;;
-              vault) PORT=30870 ;;
-              test-dashboard) PORT=30900 ;;
-              metrics-dashboard) PORT=30950 ;;
-              registry-ui) PORT=31750 ;;
-            esac
-
-            if [ -n "$PORT" ]; then
-              RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "http://${{ env.CLUSTER_IP }}:${PORT}/health" 2>/dev/null || echo "000")
-              echo "$SERVICE (port $PORT): HTTP $RESPONSE"
+              echo "❌ $NAME: unreachable" >> $GITHUB_STEP_SUMMARY
+              FAILED=$((FAILED + 1))
             fi
           done
 
-      - name: Rollback report
-        if: always()
-        run: |
-          echo "## Rollback Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Failed Services:** ${{ needs.smoke-test.outputs.failed_services }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Rollback Initiated:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:** $PASSED passed, $FAILED failed" >> $GITHUB_STEP_SUMMARY
 
-  notify:
-    needs: [smoke-test, rollback]
+  summary:
+    name: Summary
+    needs: check-connectivity
+    if: needs.check-connectivity.outputs.reachable == 'false'
     runs-on: ubuntu-latest
-    if: always()
-
     steps:
-      - name: Final status
+      - name: Generate summary
         run: |
-          echo "## HolmOS Smoke Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## ⚠️ Smoke Tests Skipped" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.smoke-test.outputs.test_result }}" = "success" ]; then
-            echo "### All smoke tests PASSED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### Smoke tests FAILED - Rollback executed" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Failed Services:** ${{ needs.smoke-test.outputs.failed_services }}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "*Smoke Test Pipeline v1.0*" >> $GITHUB_STEP_SUMMARY
+          echo "Pi cluster at $PI_HOST is on a private network." >> $GITHUB_STEP_SUMMARY

@@ -5,7 +5,7 @@ COPY go.mod .
 COPY go.sum .
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o holm-git .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o holm-git .
 
 FROM alpine:3.19
 RUN apk add --no-cache git ca-certificates

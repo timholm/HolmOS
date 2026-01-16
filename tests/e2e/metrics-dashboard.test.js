@@ -11,8 +11,8 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const NAMESPACE = config.cluster.namespace;
-const METRICS_BASE = `http://metrics-dashboard.${NAMESPACE}.svc.cluster.local:8080`;
+// Use NodePort URL for external access
+const METRICS_BASE = config.getServiceUrl('metrics-dashboard', 8080, '').replace(/\/$/, '');
 
 async function testHealthEndpoint(results) {
     console.log('\n  Testing health endpoint...');

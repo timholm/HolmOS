@@ -11,14 +11,13 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const NAMESPACE = config.cluster.namespace;
 
 async function testMetricsAlertToNotification(results) {
     console.log('\n  Testing metrics alert to notification flow...');
 
     try {
         // Get current alerts from metrics
-        const alertsUrl = `http://metrics-dashboard.${NAMESPACE}.svc.cluster.local:8080/api/alerts/triggered`;
+        const alertsUrl = config.getServiceUrl('metrics-dashboard', 8080, '/api/alerts/triggered');
         const alertsResponse = await utils.client.get(alertsUrl);
 
         if (alertsResponse.status !== 200) {
@@ -31,7 +30,7 @@ async function testMetricsAlertToNotification(results) {
         }
 
         // Check if notification hub can receive alerts
-        const notifUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/notifications`;
+        const notifUrl = config.getServiceUrl('notification-hub', 8080, '/api/notifications');
         const notifResponse = await utils.client.get(notifUrl);
 
         if (notifResponse.status === 200) {
@@ -65,7 +64,7 @@ async function testClusterStatusNotification(results) {
 
     try {
         // Get cluster summary
-        const clusterUrl = `http://metrics-dashboard.${NAMESPACE}.svc.cluster.local:8080/api/cluster`;
+        const clusterUrl = config.getServiceUrl('metrics-dashboard', 8080, '/api/cluster');
         const startTime = Date.now();
         const clusterResponse = await utils.client.get(clusterUrl);
         const responseTime = Date.now() - startTime;
@@ -89,7 +88,7 @@ async function testClusterStatusNotification(results) {
             priority: cluster.cpu_pct > 80 || cluster.memory_pct > 80 ? 'high' : 'normal',
         };
 
-        const notifUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/notifications`;
+        const notifUrl = config.getServiceUrl('notification-hub', 8080, '/api/notifications');
         const notifResponse = await utils.client.post(notifUrl, notification, {
             headers: { 'Content-Type': 'application/json' },
         });
@@ -127,7 +126,7 @@ async function testHighResourceAlert(results) {
 
     try {
         // Get nodes metrics
-        const nodesUrl = `http://metrics-dashboard.${NAMESPACE}.svc.cluster.local:8080/api/nodes`;
+        const nodesUrl = config.getServiceUrl('metrics-dashboard', 8080, '/api/nodes');
         const nodesResponse = await utils.client.get(nodesUrl);
 
         if (nodesResponse.status !== 200 || !Array.isArray(nodesResponse.data)) {
@@ -150,7 +149,7 @@ async function testHighResourceAlert(results) {
                 priority: 'high',
             };
 
-            const notifUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/notifications`;
+            const notifUrl = config.getServiceUrl('notification-hub', 8080, '/api/notifications');
             const notifResponse = await utils.client.post(notifUrl, notification, {
                 headers: { 'Content-Type': 'application/json' },
             });
@@ -194,7 +193,7 @@ async function testWebhookDelivery(results) {
 
     try {
         // Get webhooks from notification hub
-        const webhooksUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/webhooks`;
+        const webhooksUrl = config.getServiceUrl('notification-hub', 8080, '/api/webhooks');
         const startTime = Date.now();
         const webhooksResponse = await utils.client.get(webhooksUrl);
         const responseTime = Date.now() - startTime;
@@ -230,7 +229,7 @@ async function testNotificationStats(results) {
     console.log('  Testing notification stats aggregation...');
 
     try {
-        const statsUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/stats`;
+        const statsUrl = config.getServiceUrl('notification-hub', 8080, '/api/stats');
         const startTime = Date.now();
         const statsResponse = await utils.client.get(statsUrl);
         const responseTime = Date.now() - startTime;

@@ -6,7 +6,7 @@ COPY main.go .
 RUN go mod init audiobook-web && \
     go get github.com/lib/pq && \
     go mod tidy && \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o audiobook-web .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o audiobook-web .
 
 FROM public.ecr.aws/docker/library/alpine:3.19
 

@@ -5,7 +5,7 @@ COPY go.mod ./
 COPY main.go .
 COPY index.html .
 RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -o terminal-web .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o terminal-web .
 
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates

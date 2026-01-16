@@ -11,7 +11,6 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const NAMESPACE = config.cluster.namespace;
 
 async function testUserJourney(results) {
     console.log('\n  Testing complete user journey...');
@@ -54,7 +53,7 @@ async function testUserJourney(results) {
     // Step 3: Access file browser
     console.log('    Step 3: Access file browser...');
     try {
-        const fileUrl = `http://file-list.${NAMESPACE}.svc.cluster.local:8080/list?path=/`;
+        const fileUrl = config.getServiceUrl('file-list', 8080, '/list?path=/');
         const fileResponse = await utils.authRequest('GET', fileUrl);
         if (fileResponse.status === 200) {
             results.pass('User journey - File access', {});
@@ -81,7 +80,7 @@ async function testUserJourney(results) {
     // Step 4: Check metrics dashboard
     console.log('    Step 4: Check metrics dashboard...');
     try {
-        const metricsUrl = `http://metrics-dashboard.${NAMESPACE}.svc.cluster.local:8080/api/cluster`;
+        const metricsUrl = config.getServiceUrl('metrics-dashboard', 8080, '/api/cluster');
         const metricsResponse = await utils.client.get(metricsUrl);
         if (metricsResponse.status === 200) {
             results.pass('User journey - Metrics access', {
@@ -110,7 +109,7 @@ async function testUserJourney(results) {
     // Step 5: Check notifications
     console.log('    Step 5: Check notifications...');
     try {
-        const notifUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/notifications`;
+        const notifUrl = config.getServiceUrl('notification-hub', 8080, '/api/notifications');
         const notifResponse = await utils.client.get(notifUrl);
         if (notifResponse.status === 200) {
             results.pass('User journey - Notifications access', {
@@ -185,7 +184,7 @@ async function testDataFlowAcrossServices(results) {
     try {
         // Step 1: Send notification
         console.log('    Sending notification...');
-        const notifUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/notifications`;
+        const notifUrl = config.getServiceUrl('notification-hub', 8080, '/api/notifications');
         const sendResponse = await utils.client.post(notifUrl, testData, {
             headers: { 'Content-Type': 'application/json' },
         });
@@ -208,7 +207,7 @@ async function testDataFlowAcrossServices(results) {
         // Step 2: Verify in stats
         console.log('    Verifying in stats...');
         await utils.sleep(500); // Wait for processing
-        const statsUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/stats`;
+        const statsUrl = config.getServiceUrl('notification-hub', 8080, '/api/stats');
         const statsResponse = await utils.client.get(statsUrl);
 
         if (statsResponse.status === 200 && statsResponse.data?.total > 0) {
@@ -227,7 +226,7 @@ async function testDataFlowAcrossServices(results) {
 
         // Step 3: Retrieve notification
         console.log('    Retrieving notifications...');
-        const listUrl = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/notifications`;
+        const listUrl = config.getServiceUrl('notification-hub', 8080, '/api/notifications');
         const listResponse = await utils.client.get(listUrl);
 
         if (listResponse.status === 200 && Array.isArray(listResponse.data)) {
@@ -267,16 +266,16 @@ async function testServiceDiscovery(results) {
 
     // Check if services can resolve each other via DNS
     const services = [
-        `auth-gateway.${NAMESPACE}.svc.cluster.local`,
-        `metrics-dashboard.${NAMESPACE}.svc.cluster.local`,
-        `notification-hub.${NAMESPACE}.svc.cluster.local`,
-        `file-list.${NAMESPACE}.svc.cluster.local`,
+        'auth-gateway',
+        'metrics-dashboard',
+        'notification-hub',
+        'file-list',
     ];
 
     let discoveredCount = 0;
-    for (const svc of services) {
+    for (const svcName of services) {
         try {
-            const url = `http://${svc}:8080/health`;
+            const url = config.getServiceUrl(svcName, 8080, '/health');
             const response = await utils.client.get(url, { timeout: 3000 });
             if (response.status >= 200 && response.status < 500) {
                 discoveredCount++;

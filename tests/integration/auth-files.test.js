@@ -11,7 +11,6 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const NAMESPACE = config.cluster.namespace;
 
 async function testAuthenticatedFileList(results) {
     console.log('\n  Testing authenticated file listing...');
@@ -30,7 +29,7 @@ async function testAuthenticatedFileList(results) {
         }
 
         // List files with auth token
-        const url = `http://file-list.${NAMESPACE}.svc.cluster.local:8080/list?path=/`;
+        const url = config.getServiceUrl('file-list', 8080, '/list?path=/');
         const startTime = Date.now();
         const response = await utils.authRequest('GET', url);
         const responseTime = Date.now() - startTime;
@@ -67,7 +66,7 @@ async function testUnauthenticatedFileList(results) {
     console.log('  Testing unauthenticated file listing (should fail or be restricted)...');
 
     try {
-        const url = `http://file-list.${NAMESPACE}.svc.cluster.local:8080/list?path=/`;
+        const url = config.getServiceUrl('file-list', 8080, '/list?path=/');
         const startTime = Date.now();
         const response = await utils.client.get(url);
         const responseTime = Date.now() - startTime;
@@ -129,7 +128,7 @@ async function testTokenValidationForFileOps(results) {
 
         if (validationResult.valid) {
             // Now use validated token for file operation
-            const url = `http://file-meta.${NAMESPACE}.svc.cluster.local:8080/meta?path=/`;
+            const url = config.getServiceUrl('file-meta', 8080, '/meta?path=/');
             const startTime = Date.now();
             const response = await utils.authRequest('GET', url);
             const responseTime = Date.now() - startTime;
@@ -230,7 +229,7 @@ async function testSessionPersistence(results) {
 
         let successCount = 0;
         for (const svc of services) {
-            const url = `http://${svc.name}.${NAMESPACE}.svc.cluster.local:8080${svc.path}`;
+            const url = config.getServiceUrl(svc.name, 8080, svc.path);
             const response = await utils.authRequest('GET', url);
             if (response.status === 200) {
                 successCount++;

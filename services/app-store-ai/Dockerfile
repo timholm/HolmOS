@@ -1,4 +1,4 @@
-FROM docker.io/library/python:3.11-slim
+FROM --platform=linux/arm64 docker.io/library/python:3.11-slim
 
 # Install kubectl first before WORKDIR
 RUN apt-get update && apt-get install -y curl && \

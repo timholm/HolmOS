@@ -11,8 +11,6 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const NAMESPACE = config.cluster.namespace;
-
 async function testFileListHealth(results) {
     console.log('\n  Testing file-list health...');
     const result = await utils.healthCheck('file-list', 8080, '/health');
@@ -98,7 +96,7 @@ async function testFileOperationsHealth(results) {
 async function testFileListDirectory(results) {
     console.log('  Testing directory listing...');
 
-    const url = `http://file-list.${NAMESPACE}.svc.cluster.local:8080/list`;
+    const url = config.getServiceUrl('file-list', 8080, '/list');
 
     try {
         // First login to get auth
@@ -139,7 +137,7 @@ async function testFileListDirectory(results) {
 async function testFileCreateDirectory(results) {
     console.log('  Testing directory creation...');
 
-    const url = `http://file-mkdir.${NAMESPACE}.svc.cluster.local:8080/mkdir`;
+    const url = config.getServiceUrl('file-mkdir', 8080, '/mkdir');
     const testDir = `/tmp/test_dir_${utils.randomString(8)}`;
 
     try {
@@ -177,7 +175,7 @@ async function testFileCreateDirectory(results) {
 async function testFileMetadata(results) {
     console.log('  Testing file metadata...');
 
-    const url = `http://file-meta.${NAMESPACE}.svc.cluster.local:8080/meta`;
+    const url = config.getServiceUrl('file-meta', 8080, '/meta');
 
     try {
         await utils.login();
@@ -214,7 +212,7 @@ async function testFileMetadata(results) {
 async function testFileSearch(results) {
     console.log('  Testing file search...');
 
-    const url = `http://file-search.${NAMESPACE}.svc.cluster.local:8080/search`;
+    const url = config.getServiceUrl('file-search', 8080, '/search');
 
     try {
         await utils.login();
@@ -314,7 +312,7 @@ async function runFileServicesTests() {
     const results = new TestResults('File Services');
 
     reporter.printHeader('File Services E2E Tests');
-    console.log(`  Namespace: ${NAMESPACE}`);
+    console.log(`  Namespace: ${config.cluster.namespace}`);
 
     // Run health checks
     await testFileListHealth(results);

@@ -11,7 +11,6 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const NAMESPACE = config.cluster.namespace;
 
 class LoadTestRunner {
     constructor(options = {}) {
@@ -185,7 +184,7 @@ async function runHealthEndpointLoad(options = {}) {
         rampUpTime: options.rampUp || 5000,
     });
 
-    const url = `http://auth-gateway.${NAMESPACE}.svc.cluster.local:8080/health`;
+    const url = config.getServiceUrl('auth-gateway', 8080, '/health');
     return await runner.run(url, 'Auth Gateway Health');
 }
 
@@ -196,7 +195,7 @@ async function runMetricsDashboardLoad(options = {}) {
         rampUpTime: options.rampUp || 5000,
     });
 
-    const url = `http://metrics-dashboard.${NAMESPACE}.svc.cluster.local:8080/api/cluster`;
+    const url = config.getServiceUrl('metrics-dashboard', 8080, '/api/cluster');
     return await runner.run(url, 'Metrics Dashboard Cluster API');
 }
 
@@ -207,7 +206,7 @@ async function runNotificationHubLoad(options = {}) {
         rampUpTime: options.rampUp || 5000,
     });
 
-    const url = `http://notification-hub.${NAMESPACE}.svc.cluster.local:8080/api/notifications`;
+    const url = config.getServiceUrl('notification-hub', 8080, '/api/notifications');
     return await runner.run(url, 'Notification Hub API');
 }
 
@@ -218,7 +217,7 @@ async function runFileServiceLoad(options = {}) {
         rampUpTime: options.rampUp || 5000,
     });
 
-    const url = `http://file-list.${NAMESPACE}.svc.cluster.local:8080/health`;
+    const url = config.getServiceUrl('file-list', 8080, '/health');
     return await runner.run(url, 'File List Service');
 }
 

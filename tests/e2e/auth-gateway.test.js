@@ -11,7 +11,8 @@ const { TestUtils, TestResults, ConsoleReporter } = require('../utils/test-utils
 const utils = new TestUtils();
 const reporter = new ConsoleReporter();
 
-const AUTH_BASE = `http://auth-gateway.${config.cluster.namespace}.svc.cluster.local:8080`;
+// Use NodePort URL for external access
+const AUTH_BASE = config.getServiceUrl('auth-gateway', 8080, '').replace(/\/$/, '');
 
 async function testHealthEndpoint(results) {
     console.log('\n  Testing health endpoint...');

@@ -155,7 +155,7 @@ async function deleteConversation(conversationId) {
 async function updateConversationTitle(conversationId, title) {
   try {
     await pool.query(
-      'UPDATE conversations SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      'UPDATE conversations SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [title, conversationId]
     );
     return true;

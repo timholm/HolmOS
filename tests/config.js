@@ -162,6 +162,7 @@ const config = {
         // Platform Services
         platform: [
             { name: 'chat-hub', port: 8080, path: '/health' },
+            { name: 'claude-pod', port: 80, path: '/health' },
             { name: 'echo', port: 80, path: '/health' },
             { name: 'holmos-shell', port: 80, path: '/health' },
             { name: 'nova', port: 80, path: '/health' },
@@ -245,6 +246,7 @@ const config = {
 // NodePort mappings for external access
 config.nodePorts = {
     'holmos-shell': 30000,
+    'claude-pod': 30001,
     'app-store': 30002,
     'chat-hub': 30003,
     'nova': 30004,

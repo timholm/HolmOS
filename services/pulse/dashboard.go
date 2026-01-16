@@ -820,7 +820,17 @@ func getDashboardHTML() string {
 
             ws = new WebSocket(wsUrl);
 
+            // Connection timeout - if not connected within 10 seconds, show error
+            const connectionTimeout = setTimeout(function() {
+                if (ws.readyState !== WebSocket.OPEN) {
+                    console.log('WebSocket connection timeout');
+                    ws.close();
+                    showErrorState(new Error('WebSocket connection timed out after 10 seconds'));
+                }
+            }, 10000);
+
             ws.onopen = function() {
+                clearTimeout(connectionTimeout);
                 console.log('WebSocket connected');
                 reconnectAttempts = 0;
                 updateConnectionStatus(true);
@@ -834,13 +844,16 @@ func getDashboardHTML() string {
             };
 
             ws.onclose = function() {
+                clearTimeout(connectionTimeout);
                 console.log('WebSocket disconnected');
                 updateConnectionStatus(false);
                 scheduleReconnect();
             };
 
             ws.onerror = function(error) {
+                clearTimeout(connectionTimeout);
                 console.error('WebSocket error:', error);
+                showErrorState(new Error('WebSocket connection failed'));
             };
         }
 
@@ -1044,18 +1057,76 @@ func getDashboardHTML() string {
             return 'cpu';
         }
 
+        // Initial loading timeout - show error if nothing loads within 10 seconds
+        const initialLoadTimeout = setTimeout(function() {
+            const nodeList = document.getElementById('nodeList');
+            if (nodeList.innerHTML.includes('Loading nodes')) {
+                showErrorState(new Error('Initial load timed out - Kubernetes API may be unavailable'));
+            }
+        }, 10000);
+
+        // Clear timeout when data loads
+        const originalUpdateDashboard = updateDashboard;
+        updateDashboard = function(health) {
+            clearTimeout(initialLoadTimeout);
+            originalUpdateDashboard(health);
+        };
+
         // Initial connection
         connectWebSocket();
 
         // Fallback to polling if WebSocket fails
         setInterval(function() {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
-                fetch('/api/status')
-                    .then(res => res.json())
-                    .then(data => updateDashboard(data))
-                    .catch(err => console.error('Polling error:', err));
+                fetchStatusWithTimeout();
             }
         }, 15000);
+
+        // Fetch status with timeout
+        async function fetchStatusWithTimeout() {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+            try {
+                const res = await fetch('/api/status', { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status + ': ' + res.statusText);
+                }
+
+                const data = await res.json();
+                updateDashboard(data);
+            } catch (err) {
+                clearTimeout(timeoutId);
+                console.error('Polling error:', err);
+                showErrorState(err);
+            }
+        }
+
+        // Show error state in the dashboard
+        function showErrorState(err) {
+            let errorMsg = err.message;
+            if (err.name === 'AbortError') {
+                errorMsg = 'Request timed out after 10 seconds';
+            }
+
+            const nodeList = document.getElementById('nodeList');
+            nodeList.innerHTML = '<div style="padding:24px;text-align:center;background:rgba(243,139,168,0.1);border-radius:10px;border:1px solid var(--ctp-red);">' +
+                '<div style="font-size:24px;margin-bottom:12px;">&#9888;</div>' +
+                '<div style="color:var(--ctp-red);font-weight:600;margin-bottom:8px;">Failed to Load Nodes</div>' +
+                '<div style="color:var(--ctp-subtext0);font-size:13px;margin-bottom:12px;">' + errorMsg + '</div>' +
+                '<div style="color:var(--ctp-overlay0);font-size:11px;">Endpoint: /api/status</div>' +
+            '</div>';
+
+            document.getElementById('statusDot').className = 'status-dot unknown';
+            document.getElementById('statusText').textContent = 'Error';
+            document.getElementById('healthMessage').textContent = errorMsg;
+            document.getElementById('healthMessage').className = 'message critical';
+        }
+
+        // Initial fetch with timeout
+        fetchStatusWithTimeout();
     </script>
 </body>
 </html>`

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -1356,4 +1359,595 @@ func ensureServiceExists(namespace, name string, port int) error {
 	}
 	log.Printf("Created service %s/%s on port %d", namespace, name, port)
 	return nil
+}
+
+// handlePodLogs returns logs from pods of a deployment
+func handlePodLogs(w http.ResponseWriter, r *http.Request) {
+	if clientset == nil {
+		http.Error(w, "Kubernetes client not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	deployment := r.URL.Query().Get("deployment")
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "holm"
+	}
+	tailLines := int64(100)
+
+	ctx := context.Background()
+
+	// Get pods for this deployment
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", deployment),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type PodLog struct {
+		PodName   string `json:"podName"`
+		Container string `json:"container"`
+		Logs      string `json:"logs"`
+		Phase     string `json:"phase"`
+		Ready     bool   `json:"ready"`
+	}
+
+	var podLogs []PodLog
+
+	for _, pod := range pods.Items {
+		ready := false
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				ready = true
+				break
+			}
+		}
+
+		for _, container := range pod.Spec.Containers {
+			opts := &corev1.PodLogOptions{
+				Container: container.Name,
+				TailLines: &tailLines,
+			}
+
+			req := clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, opts)
+			stream, err := req.Stream(ctx)
+			if err != nil {
+				podLogs = append(podLogs, PodLog{
+					PodName:   pod.Name,
+					Container: container.Name,
+					Logs:      fmt.Sprintf("Error getting logs: %v", err),
+					Phase:     string(pod.Status.Phase),
+					Ready:     ready,
+				})
+				continue
+			}
+
+			buf := new(bytes.Buffer)
+			_, err = io.Copy(buf, stream)
+			stream.Close()
+
+			logs := buf.String()
+			if err != nil {
+				logs = fmt.Sprintf("Error reading logs: %v", err)
+			}
+
+			podLogs = append(podLogs, PodLog{
+				PodName:   pod.Name,
+				Container: container.Name,
+				Logs:      logs,
+				Phase:     string(pod.Status.Phase),
+				Ready:     ready,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"deployment": deployment,
+		"namespace":  namespace,
+		"pods":       podLogs,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleEventStream provides Server-Sent Events for real-time updates
+func handleEventStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Send initial data
+	sendSSEEvent(w, flusher, "init", map[string]interface{}{
+		"message": "Connected to deploy controller",
+		"time":    time.Now().UTC().Format(time.RFC3339),
+	})
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	lastEventCount := 0
+	lastHealthCheckCount := 0
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			// Send deployment updates
+			deploymentsMu.RLock()
+			deps := make([]*DeploymentInfo, 0, len(deployments))
+			for _, d := range deployments {
+				deps = append(deps, d)
+			}
+			deploymentsMu.RUnlock()
+			sendSSEEvent(w, flusher, "deployments", deps)
+
+			// Send new events if any
+			recentDeploysMu.RLock()
+			currentEventCount := len(recentDeploys)
+			var newEvents []DeployEvent
+			if currentEventCount > lastEventCount {
+				newEvents = recentDeploys[:currentEventCount-lastEventCount]
+			}
+			recentDeploysMu.RUnlock()
+
+			if len(newEvents) > 0 {
+				sendSSEEvent(w, flusher, "events", newEvents)
+				lastEventCount = currentEventCount
+			}
+
+			// Send health check updates
+			healthCheckMu.RLock()
+			currentHealthCount := len(pendingHealthChecks)
+			healthCheckMu.RUnlock()
+
+			if currentHealthCount != lastHealthCheckCount {
+				healthCheckMu.RLock()
+				sendSSEEvent(w, flusher, "health-checks", pendingHealthChecks)
+				healthCheckMu.RUnlock()
+				lastHealthCheckCount = currentHealthCount
+			}
+
+			// Always send health checks during active checks
+			healthCheckMu.RLock()
+			for _, hc := range pendingHealthChecks {
+				if hc.Status == "checking" || hc.Status == "pending" {
+					sendSSEEvent(w, flusher, "health-checks", pendingHealthChecks)
+					break
+				}
+			}
+			healthCheckMu.RUnlock()
+		}
+	}
+}
+
+func sendSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string, data interface{}) {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: %s\n", eventType)
+	fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	flusher.Flush()
+}
+
+// handleApplyManifest applies a Kubernetes manifest (similar to kubectl apply -f)
+func handleApplyManifest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if clientset == nil {
+		http.Error(w, "Kubernetes client not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	var req struct {
+		Manifest  string `json:"manifest"`
+		Namespace string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Namespace == "" {
+		req.Namespace = "holm"
+	}
+
+	ctx := context.Background()
+	results := []map[string]interface{}{}
+
+	// Parse YAML documents
+	decoder := yaml.NewYAMLOrJSONDecoder(bufio.NewReader(strings.NewReader(req.Manifest)), 4096)
+
+	for {
+		var rawObj map[string]interface{}
+		if err := decoder.Decode(&rawObj); err != nil {
+			if err == io.EOF {
+				break
+			}
+			results = append(results, map[string]interface{}{
+				"status":  "error",
+				"message": fmt.Sprintf("Failed to parse manifest: %v", err),
+			})
+			break
+		}
+
+		if rawObj == nil {
+			continue
+		}
+
+		kind, _ := rawObj["kind"].(string)
+		metadata, _ := rawObj["metadata"].(map[string]interface{})
+		name, _ := metadata["name"].(string)
+		ns, _ := metadata["namespace"].(string)
+		if ns == "" {
+			ns = req.Namespace
+		}
+
+		switch kind {
+		case "Deployment":
+			var dep appsv1.Deployment
+			jsonBytes, _ := json.Marshal(rawObj)
+			if err := json.Unmarshal(jsonBytes, &dep); err != nil {
+				results = append(results, map[string]interface{}{
+					"kind":    kind,
+					"name":    name,
+					"status":  "error",
+					"message": err.Error(),
+				})
+				continue
+			}
+
+			if dep.Namespace == "" {
+				dep.Namespace = ns
+			}
+
+			// Try update first, then create
+			existing, err := clientset.AppsV1().Deployments(dep.Namespace).Get(ctx, dep.Name, metav1.GetOptions{})
+			if err == nil {
+				// Update existing
+				dep.ResourceVersion = existing.ResourceVersion
+				_, err = clientset.AppsV1().Deployments(dep.Namespace).Update(ctx, &dep, metav1.UpdateOptions{})
+				if err != nil {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "error",
+						"message": err.Error(),
+					})
+				} else {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "updated",
+						"message": fmt.Sprintf("deployment.apps/%s configured", name),
+					})
+					addDeployEvent(name, dep.Namespace, dep.Spec.Template.Spec.Containers[0].Image, "", "manifest-apply", "deploying", "Manifest applied", 0)
+					startHealthCheck(name, dep.Namespace, dep.Spec.Template.Spec.Containers[0].Image)
+				}
+			} else if errors.IsNotFound(err) {
+				// Create new
+				_, err = clientset.AppsV1().Deployments(dep.Namespace).Create(ctx, &dep, metav1.CreateOptions{})
+				if err != nil {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "error",
+						"message": err.Error(),
+					})
+				} else {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "created",
+						"message": fmt.Sprintf("deployment.apps/%s created", name),
+					})
+					addDeployEvent(name, dep.Namespace, dep.Spec.Template.Spec.Containers[0].Image, "", "manifest-apply", "deploying", "Deployment created", 0)
+					startHealthCheck(name, dep.Namespace, dep.Spec.Template.Spec.Containers[0].Image)
+				}
+			} else {
+				results = append(results, map[string]interface{}{
+					"kind":    kind,
+					"name":    name,
+					"status":  "error",
+					"message": err.Error(),
+				})
+			}
+
+		case "Service":
+			var svc corev1.Service
+			jsonBytes, _ := json.Marshal(rawObj)
+			if err := json.Unmarshal(jsonBytes, &svc); err != nil {
+				results = append(results, map[string]interface{}{
+					"kind":    kind,
+					"name":    name,
+					"status":  "error",
+					"message": err.Error(),
+				})
+				continue
+			}
+
+			if svc.Namespace == "" {
+				svc.Namespace = ns
+			}
+
+			existing, err := clientset.CoreV1().Services(svc.Namespace).Get(ctx, svc.Name, metav1.GetOptions{})
+			if err == nil {
+				svc.ResourceVersion = existing.ResourceVersion
+				svc.Spec.ClusterIP = existing.Spec.ClusterIP // Preserve ClusterIP
+				_, err = clientset.CoreV1().Services(svc.Namespace).Update(ctx, &svc, metav1.UpdateOptions{})
+				if err != nil {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "error",
+						"message": err.Error(),
+					})
+				} else {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "updated",
+						"message": fmt.Sprintf("service/%s configured", name),
+					})
+				}
+			} else if errors.IsNotFound(err) {
+				_, err = clientset.CoreV1().Services(svc.Namespace).Create(ctx, &svc, metav1.CreateOptions{})
+				if err != nil {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "error",
+						"message": err.Error(),
+					})
+				} else {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "created",
+						"message": fmt.Sprintf("service/%s created", name),
+					})
+				}
+			} else {
+				results = append(results, map[string]interface{}{
+					"kind":    kind,
+					"name":    name,
+					"status":  "error",
+					"message": err.Error(),
+				})
+			}
+
+		case "ConfigMap":
+			var cm corev1.ConfigMap
+			jsonBytes, _ := json.Marshal(rawObj)
+			if err := json.Unmarshal(jsonBytes, &cm); err != nil {
+				results = append(results, map[string]interface{}{
+					"kind":    kind,
+					"name":    name,
+					"status":  "error",
+					"message": err.Error(),
+				})
+				continue
+			}
+
+			if cm.Namespace == "" {
+				cm.Namespace = ns
+			}
+
+			existing, err := clientset.CoreV1().ConfigMaps(cm.Namespace).Get(ctx, cm.Name, metav1.GetOptions{})
+			if err == nil {
+				cm.ResourceVersion = existing.ResourceVersion
+				_, err = clientset.CoreV1().ConfigMaps(cm.Namespace).Update(ctx, &cm, metav1.UpdateOptions{})
+				if err != nil {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "error",
+						"message": err.Error(),
+					})
+				} else {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "updated",
+						"message": fmt.Sprintf("configmap/%s configured", name),
+					})
+				}
+			} else if errors.IsNotFound(err) {
+				_, err = clientset.CoreV1().ConfigMaps(cm.Namespace).Create(ctx, &cm, metav1.CreateOptions{})
+				if err != nil {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "error",
+						"message": err.Error(),
+					})
+				} else {
+					results = append(results, map[string]interface{}{
+						"kind":    kind,
+						"name":    name,
+						"status":  "created",
+						"message": fmt.Sprintf("configmap/%s created", name),
+					})
+				}
+			} else {
+				results = append(results, map[string]interface{}{
+					"kind":    kind,
+					"name":    name,
+					"status":  "error",
+					"message": err.Error(),
+				})
+			}
+
+		default:
+			results = append(results, map[string]interface{}{
+				"kind":    kind,
+				"name":    name,
+				"status":  "skipped",
+				"message": fmt.Sprintf("Unsupported kind: %s (only Deployment, Service, ConfigMap supported)", kind),
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "completed",
+		"results":   results,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleRestart restarts a deployment by patching the pod template annotation
+func handleRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if clientset == nil {
+		http.Error(w, "Kubernetes client not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	var req struct {
+		Deployment string `json:"deployment"`
+		Namespace  string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Namespace == "" {
+		req.Namespace = "holm"
+	}
+
+	ctx := context.Background()
+	dep, err := clientset.AppsV1().Deployments(req.Namespace).Get(ctx, req.Deployment, metav1.GetOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Add restart annotation to trigger rolling update
+	if dep.Spec.Template.Annotations == nil {
+		dep.Spec.Template.Annotations = make(map[string]string)
+	}
+	dep.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
+	dep.Spec.Template.Annotations["deploy-controller/trigger"] = "restart"
+
+	_, err = clientset.AppsV1().Deployments(req.Namespace).Update(ctx, dep, metav1.UpdateOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	image := ""
+	if len(dep.Spec.Template.Spec.Containers) > 0 {
+		image = dep.Spec.Template.Spec.Containers[0].Image
+	}
+
+	addDeployEvent(req.Deployment, req.Namespace, image, image, "restart", "deploying", "Deployment restarted", 0)
+	startHealthCheck(req.Deployment, req.Namespace, image)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "restarted",
+		"deployment": req.Deployment,
+		"namespace":  req.Namespace,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleK8sEvents returns Kubernetes events for a deployment
+func handleK8sEvents(w http.ResponseWriter, r *http.Request) {
+	if clientset == nil {
+		http.Error(w, "Kubernetes client not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	deployment := r.URL.Query().Get("deployment")
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "holm"
+	}
+
+	ctx := context.Background()
+
+	// Get events related to the deployment
+	eventList, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: fmt.Sprintf("involvedObject.name=%s", deployment),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type K8sEvent struct {
+		Type           string    `json:"type"`
+		Reason         string    `json:"reason"`
+		Message        string    `json:"message"`
+		Count          int32     `json:"count"`
+		FirstTimestamp time.Time `json:"firstTimestamp"`
+		LastTimestamp  time.Time `json:"lastTimestamp"`
+		Source         string    `json:"source"`
+	}
+
+	var events []K8sEvent
+	for _, e := range eventList.Items {
+		events = append(events, K8sEvent{
+			Type:           e.Type,
+			Reason:         e.Reason,
+			Message:        e.Message,
+			Count:          e.Count,
+			FirstTimestamp: e.FirstTimestamp.Time,
+			LastTimestamp:  e.LastTimestamp.Time,
+			Source:         e.Source.Component,
+		})
+	}
+
+	// Also get pod events
+	pods, _ := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", deployment),
+	})
+
+	for _, pod := range pods.Items {
+		podEvents, _ := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+			FieldSelector: fmt.Sprintf("involvedObject.name=%s", pod.Name),
+		})
+		for _, e := range podEvents.Items {
+			events = append(events, K8sEvent{
+				Type:           e.Type,
+				Reason:         e.Reason,
+				Message:        fmt.Sprintf("[Pod: %s] %s", pod.Name, e.Message),
+				Count:          e.Count,
+				FirstTimestamp: e.FirstTimestamp.Time,
+				LastTimestamp:  e.LastTimestamp.Time,
+				Source:         e.Source.Component,
+			})
+		}
+	}
+
+	// Sort by last timestamp
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].LastTimestamp.After(events[j].LastTimestamp)
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"deployment": deployment,
+		"namespace":  namespace,
+		"events":     events,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	})
 }

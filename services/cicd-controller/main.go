@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	batchv1 "k8s.io/api/batch/v1"
+batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -532,8 +532,8 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 							Image: "alpine/git:latest",
 							Command: []string{"sh", "-c"},
 							Args: []string{
-								fmt.Sprintf("git clone --depth 1 --branch %s %s/git/%s.git /workspace",
-									job.Branch, holmGitURL, job.Repo),
+								fmt.Sprintf("set -ex && echo 'Cloning repository %s branch %s...' && git clone --depth 1 --branch %s %s/git/%s.git /workspace && echo 'Clone successful' && ls -la /workspace",
+									job.Repo, job.Branch, job.Branch, holmGitURL, job.Repo),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "workspace", MountPath: "/workspace"},
@@ -550,6 +550,7 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 								fmt.Sprintf("--destination=%s", destination),
 								"--insecure",
 								"--skip-tls-verify",
+								"--verbosity=info",
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "workspace", MountPath: "/workspace"},
@@ -582,59 +583,238 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 	ctx := context.Background()
 
 	// Delete existing job if any
+	addLogLine(logID, "info", "Cleaning up any existing build job...")
 	_ = clientset.BatchV1().Jobs("holm").Delete(ctx, jobName, metav1.DeleteOptions{})
 	time.Sleep(2 * time.Second)
 
 	// Create the job
+	addLogLine(logID, "info", fmt.Sprintf("Creating Kaniko job: %s", jobName))
 	_, err := clientset.BatchV1().Jobs("holm").Create(ctx, kanikoJob, metav1.CreateOptions{})
 	if err != nil {
+		addLogLine(logID, "error", fmt.Sprintf("Failed to create job: %v", err))
 		return fmt.Errorf("failed to create Kaniko job: %v", err)
 	}
 
-	addLogLine(logID, "info", fmt.Sprintf("Kaniko job created: %s", jobName))
+	addLogLine(logID, "info", "Kaniko job created, waiting for pod to start...")
 
-	// Wait for job completion
+	// Wait for job completion with real-time log streaming
 	timeout := time.After(time.Duration(stage.Timeout) * time.Second)
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
+
+	var lastLogOffset int64 = 0
+	lastPhase := ""
+	podFound := false
 
 	for {
 		select {
 		case <-timeout:
+			addLogLine(logID, "error", fmt.Sprintf("Build timed out after %d seconds", stage.Timeout))
+			// Try to get final logs before returning
+			streamPodLogs(ctx, jobName, logID, &lastLogOffset, true)
 			return fmt.Errorf("build timed out after %d seconds", stage.Timeout)
+
 		case <-ticker.C:
-			job, err := clientset.BatchV1().Jobs("holm").Get(ctx, jobName, metav1.GetOptions{})
+			// Get job status
+			k8sJob, err := clientset.BatchV1().Jobs("holm").Get(ctx, jobName, metav1.GetOptions{})
 			if err != nil {
 				addLogLine(logID, "warn", fmt.Sprintf("Failed to get job status: %v", err))
 				continue
 			}
 
-			if job.Status.Succeeded > 0 {
-				addLogLine(logID, "info", "Kaniko build completed successfully")
+			// Get pod for this job
+			pods, err := clientset.CoreV1().Pods("holm").List(ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+			})
+			if err != nil {
+				addLogLine(logID, "warn", fmt.Sprintf("Failed to list pods: %v", err))
+				continue
+			}
+
+			if len(pods.Items) == 0 {
+				addLogLine(logID, "info", "Waiting for build pod to be created...")
+				continue
+			}
+
+			pod := &pods.Items[0]
+			if !podFound {
+				addLogLine(logID, "info", fmt.Sprintf("Build pod created: %s", pod.Name))
+				podFound = true
+			}
+
+			// Report phase changes
+			phase := string(pod.Status.Phase)
+			if phase != lastPhase {
+				addLogLine(logID, "info", fmt.Sprintf("Pod phase: %s", phase))
+				lastPhase = phase
+			}
+
+			// Check init container status
+			for _, initStatus := range pod.Status.InitContainerStatuses {
+				if initStatus.Name == "git-clone" {
+					if initStatus.State.Running != nil {
+						addLogLine(logID, "info", "Git clone in progress...")
+						// Stream init container logs
+						streamInitContainerLogs(ctx, pod.Name, "git-clone", logID)
+					} else if initStatus.State.Terminated != nil {
+						if initStatus.State.Terminated.ExitCode != 0 {
+							addLogLine(logID, "error", fmt.Sprintf("Git clone failed with exit code %d", initStatus.State.Terminated.ExitCode))
+							// Get the failure logs
+							logs := getContainerLogs(ctx, pod.Name, "git-clone")
+							if logs != "" {
+								for _, line := range strings.Split(logs, "\n") {
+									if line != "" {
+										addLogLine(logID, "error", fmt.Sprintf("[git-clone] %s", line))
+									}
+								}
+							}
+							return fmt.Errorf("git clone failed: exit code %d", initStatus.State.Terminated.ExitCode)
+						}
+					} else if initStatus.State.Waiting != nil {
+						reason := initStatus.State.Waiting.Reason
+						if reason != "" && reason != "PodInitializing" {
+							addLogLine(logID, "info", fmt.Sprintf("Init container waiting: %s", reason))
+							if initStatus.State.Waiting.Message != "" {
+								addLogLine(logID, "warn", initStatus.State.Waiting.Message)
+							}
+						}
+					}
+				}
+			}
+
+			// Check main container status and stream logs
+			for _, containerStatus := range pod.Status.ContainerStatuses {
+				if containerStatus.Name == "kaniko" {
+					if containerStatus.State.Running != nil {
+						// Stream logs in real-time
+						streamPodLogs(ctx, jobName, logID, &lastLogOffset, false)
+					} else if containerStatus.State.Waiting != nil {
+						reason := containerStatus.State.Waiting.Reason
+						if reason != "" && reason != "PodInitializing" {
+							addLogLine(logID, "info", fmt.Sprintf("Kaniko container waiting: %s", reason))
+							if containerStatus.State.Waiting.Message != "" {
+								addLogLine(logID, "warn", containerStatus.State.Waiting.Message)
+							}
+						}
+					} else if containerStatus.State.Terminated != nil {
+						// Get final logs
+						streamPodLogs(ctx, jobName, logID, &lastLogOffset, true)
+						if containerStatus.State.Terminated.ExitCode != 0 {
+							addLogLine(logID, "error", fmt.Sprintf("Kaniko exited with code %d: %s",
+								containerStatus.State.Terminated.ExitCode,
+								containerStatus.State.Terminated.Reason))
+						}
+					}
+				}
+			}
+
+			// Check job completion
+			if k8sJob.Status.Succeeded > 0 {
+				// Get final logs
+				streamPodLogs(ctx, jobName, logID, &lastLogOffset, true)
+				addLogLine(logID, "info", "=== BUILD SUCCESSFUL ===")
+				addLogLine(logID, "info", fmt.Sprintf("Image pushed to: %s", destination))
 				return nil
 			}
 
-			if job.Status.Failed > 0 {
-				// Get pod logs for error details
-				pods, _ := clientset.CoreV1().Pods("holm").List(ctx, metav1.ListOptions{
-					LabelSelector: fmt.Sprintf("job-name=%s", jobName),
-				})
+			if k8sJob.Status.Failed > 0 {
+				// Get all logs for debugging
+				addLogLine(logID, "error", "=== BUILD FAILED ===")
+				streamPodLogs(ctx, jobName, logID, &lastLogOffset, true)
+
+				// Get detailed failure info
 				if len(pods.Items) > 0 {
-					logs, _ := clientset.CoreV1().Pods("holm").GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).Do(ctx).Raw()
-					if len(logs) > 0 {
-						addLogLine(logID, "error", string(logs))
+					pod := &pods.Items[0]
+					for _, cs := range pod.Status.ContainerStatuses {
+						if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+							addLogLine(logID, "error", fmt.Sprintf("Container %s failed: %s (exit code %d)",
+								cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.ExitCode))
+						}
+					}
+					for _, cs := range pod.Status.InitContainerStatuses {
+						if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+							addLogLine(logID, "error", fmt.Sprintf("Init container %s failed: %s (exit code %d)",
+								cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.ExitCode))
+						}
 					}
 				}
-				return fmt.Errorf("Kaniko build failed")
+				return fmt.Errorf("Kaniko build failed - see logs above for details")
 			}
-
-			addLogLine(logID, "info", "Build in progress...")
 		}
 	}
 }
 
+// streamPodLogs streams logs from the kaniko container
+func streamPodLogs(ctx context.Context, jobName, logID string, offset *int64, final bool) {
+	pods, err := clientset.CoreV1().Pods("holm").List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return
+	}
+
+	pod := &pods.Items[0]
+	sinceSeconds := int64(30)
+	opts := &corev1.PodLogOptions{
+		Container:    "kaniko",
+		SinceSeconds: &sinceSeconds,
+	}
+
+	logs, err := clientset.CoreV1().Pods("holm").GetLogs(pod.Name, opts).Do(ctx).Raw()
+	if err != nil {
+		return
+	}
+
+	logStr := string(logs)
+	if int64(len(logStr)) > *offset {
+		newLogs := logStr[*offset:]
+		lines := strings.Split(newLogs, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				// Determine log level from content
+				level := "info"
+				if strings.Contains(strings.ToLower(line), "error") ||
+					strings.Contains(strings.ToLower(line), "failed") {
+					level = "error"
+				} else if strings.Contains(strings.ToLower(line), "warn") {
+					level = "warn"
+				}
+				addLogLine(logID, level, fmt.Sprintf("[kaniko] %s", line))
+			}
+		}
+		*offset = int64(len(logStr))
+	}
+}
+
+// streamInitContainerLogs gets logs from an init container
+func streamInitContainerLogs(ctx context.Context, podName, containerName, logID string) {
+	logs := getContainerLogs(ctx, podName, containerName)
+	if logs != "" {
+		lines := strings.Split(logs, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				addLogLine(logID, "info", fmt.Sprintf("[%s] %s", containerName, line))
+			}
+		}
+	}
+}
+
+// getContainerLogs retrieves logs from a specific container
+func getContainerLogs(ctx context.Context, podName, containerName string) string {
+	opts := &corev1.PodLogOptions{
+		Container: containerName,
+	}
+	logs, err := clientset.CoreV1().Pods("holm").GetLogs(podName, opts).Do(ctx).Raw()
+	if err != nil {
+		return ""
+	}
+	return string(logs)
+}
+
 func executeDeploy(execution *PipelineExecution, stage PipelineStage, job *BuildJob, logID string) error {
-	addLogLine(logID, "info", fmt.Sprintf("Deploying %s", job.Repo))
+	addLogLine(logID, "info", fmt.Sprintf("=== DEPLOY STAGE: %s ===", job.Repo))
 
 	// Determine deployment name and image
 	deploymentName := strings.ToLower(job.Repo)
@@ -645,8 +825,65 @@ func executeDeploy(execution *PipelineExecution, stage PipelineStage, job *Build
 	deploymentName = strings.ReplaceAll(deploymentName, " ", "-")
 
 	image := fmt.Sprintf("%s/%s:latest", registryURL, deploymentName)
+	addLogLine(logID, "info", fmt.Sprintf("Target deployment: %s", deploymentName))
+	addLogLine(logID, "info", fmt.Sprintf("Image: %s", image))
 
-	// Call deploy-controller to trigger deployment
+	// First, try to update deployment directly if we have k8s client
+	if clientset != nil {
+		addLogLine(logID, "info", "Attempting direct Kubernetes deployment update...")
+		ctx := context.Background()
+
+		// Check if deployment exists
+		deployment, err := clientset.AppsV1().Deployments("holm").Get(ctx, deploymentName, metav1.GetOptions{})
+		if err != nil {
+			addLogLine(logID, "warn", fmt.Sprintf("Deployment %s not found in cluster: %v", deploymentName, err))
+			addLogLine(logID, "info", "Will try deploy-controller instead...")
+		} else {
+			// Update the deployment image
+			addLogLine(logID, "info", fmt.Sprintf("Found deployment with %d replicas", *deployment.Spec.Replicas))
+
+			// Update container images
+			updated := false
+			for i := range deployment.Spec.Template.Spec.Containers {
+				container := &deployment.Spec.Template.Spec.Containers[i]
+				oldImage := container.Image
+				if strings.Contains(oldImage, deploymentName) || i == 0 {
+					container.Image = image
+					addLogLine(logID, "info", fmt.Sprintf("Updating container %s: %s -> %s", container.Name, oldImage, image))
+					updated = true
+				}
+			}
+
+			if updated {
+				// Add annotation to force rollout
+				if deployment.Spec.Template.Annotations == nil {
+					deployment.Spec.Template.Annotations = make(map[string]string)
+				}
+				deployment.Spec.Template.Annotations["cicd.holm/deployed-at"] = time.Now().Format(time.RFC3339)
+				deployment.Spec.Template.Annotations["cicd.holm/execution-id"] = execution.ID
+
+				_, err = clientset.AppsV1().Deployments("holm").Update(ctx, deployment, metav1.UpdateOptions{})
+				if err != nil {
+					addLogLine(logID, "error", fmt.Sprintf("Failed to update deployment: %v", err))
+					return fmt.Errorf("failed to update deployment: %v", err)
+				}
+				addLogLine(logID, "info", "Deployment updated successfully")
+
+				// Watch rollout status
+				addLogLine(logID, "info", "Monitoring rollout status...")
+				rolloutSuccess := watchRolloutStatus(ctx, deploymentName, logID)
+				if !rolloutSuccess {
+					return fmt.Errorf("deployment rollout failed")
+				}
+
+				addLogLine(logID, "info", "=== DEPLOYMENT SUCCESSFUL ===")
+				return nil
+			}
+		}
+	}
+
+	// Fallback: Call deploy-controller to trigger deployment
+	addLogLine(logID, "info", "Triggering deployment via deploy-controller...")
 	deployPayload := map[string]string{
 		"deployment": deploymentName,
 		"namespace":  "holm",
@@ -654,23 +891,79 @@ func executeDeploy(execution *PipelineExecution, stage PipelineStage, job *Build
 	}
 
 	data, _ := json.Marshal(deployPayload)
-	resp, err := http.Post("http://deploy-controller.holm.svc.cluster.local:8080/api/deploy",
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post("http://deploy-controller.holm.svc.cluster.local:8080/api/deploy",
 		"application/json", bytes.NewReader(data))
 
 	if err != nil {
-		addLogLine(logID, "warn", fmt.Sprintf("Failed to call deploy-controller: %v", err))
-		// Continue anyway - deployment might be handled by auto-deploy rules
-	} else {
-		defer resp.Body.Close()
-		if resp.StatusCode == 200 {
-			addLogLine(logID, "info", "Deployment triggered via deploy-controller")
-		} else {
-			body, _ := io.ReadAll(resp.Body)
-			addLogLine(logID, "warn", fmt.Sprintf("Deploy-controller response: %s", string(body)))
-		}
+		addLogLine(logID, "error", fmt.Sprintf("Failed to call deploy-controller: %v", err))
+		return fmt.Errorf("deployment failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	addLogLine(logID, "info", fmt.Sprintf("Deploy-controller response (HTTP %d): %s", resp.StatusCode, string(body)))
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("deploy-controller returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	addLogLine(logID, "info", "=== DEPLOYMENT TRIGGERED ===")
 	return nil
+}
+
+// watchRolloutStatus monitors a deployment rollout and reports progress
+func watchRolloutStatus(ctx context.Context, deploymentName, logID string) bool {
+	timeout := time.After(120 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			addLogLine(logID, "error", "Deployment rollout timed out after 120 seconds")
+			return false
+
+		case <-ticker.C:
+			deployment, err := clientset.AppsV1().Deployments("holm").Get(ctx, deploymentName, metav1.GetOptions{})
+			if err != nil {
+				addLogLine(logID, "warn", fmt.Sprintf("Failed to get deployment status: %v", err))
+				continue
+			}
+
+			// Check rollout status
+			desiredReplicas := int32(1)
+			if deployment.Spec.Replicas != nil {
+				desiredReplicas = *deployment.Spec.Replicas
+			}
+
+			updatedReplicas := deployment.Status.UpdatedReplicas
+			availableReplicas := deployment.Status.AvailableReplicas
+			readyReplicas := deployment.Status.ReadyReplicas
+
+			addLogLine(logID, "info", fmt.Sprintf("Rollout status: %d/%d updated, %d/%d ready, %d available",
+				updatedReplicas, desiredReplicas, readyReplicas, desiredReplicas, availableReplicas))
+
+			// Check for rollout completion
+			if updatedReplicas == desiredReplicas &&
+				readyReplicas == desiredReplicas &&
+				availableReplicas == desiredReplicas {
+				addLogLine(logID, "info", "Rollout completed successfully")
+				return true
+			}
+
+			// Check for rollout issues in conditions
+			for _, cond := range deployment.Status.Conditions {
+				if cond.Type == "Progressing" && cond.Status == "False" {
+					addLogLine(logID, "error", fmt.Sprintf("Rollout stalled: %s", cond.Message))
+					return false
+				}
+				if cond.Type == "Available" && cond.Status == "False" {
+					addLogLine(logID, "warn", fmt.Sprintf("Deployment not available: %s", cond.Message))
+				}
+			}
+		}
+	}
 }
 
 func addLogLine(logID, level, message string) {

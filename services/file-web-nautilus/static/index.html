@@ -870,6 +870,278 @@
 
         #file-input { display: none; }
 
+        /* Storage Settings Modal */
+        .settings-modal {
+            min-width: 500px;
+            max-width: 600px;
+        }
+
+        .settings-section {
+            margin-bottom: 20px;
+        }
+
+        .settings-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--overlay0);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
+        .storage-stats-card {
+            background: var(--surface0);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .storage-stats-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .storage-stats-title {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .storage-stats-path {
+            font-size: 11px;
+            color: var(--overlay0);
+            word-break: break-all;
+        }
+
+        .storage-progress {
+            height: 8px;
+            background: var(--surface1);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .storage-progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        .storage-progress-fill.low { background: var(--green); }
+        .storage-progress-fill.medium { background: var(--yellow); }
+        .storage-progress-fill.high { background: var(--peach); }
+        .storage-progress-fill.critical { background: var(--red); }
+
+        .storage-stats-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+
+        .storage-stats-used { color: var(--text); }
+        .storage-stats-free { color: var(--subtext0); }
+
+        .mount-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .mount-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--surface0);
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 2px solid transparent;
+        }
+
+        .mount-item:hover { background: var(--surface1); }
+        .mount-item.active { border-color: var(--blue); }
+        .mount-item.unavailable { opacity: 0.5; cursor: not-allowed; }
+
+        .mount-item-radio {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--surface2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .mount-item.active .mount-item-radio {
+            border-color: var(--blue);
+        }
+
+        .mount-item.active .mount-item-radio::after {
+            content: '';
+            width: 10px;
+            height: 10px;
+            background: var(--blue);
+            border-radius: 50%;
+        }
+
+        .mount-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .mount-item-name {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        .mount-item-path {
+            font-size: 11px;
+            color: var(--overlay0);
+            word-break: break-all;
+        }
+
+        .mount-item-node {
+            font-size: 10px;
+            color: var(--blue);
+            background: rgba(137, 180, 250, 0.15);
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-top: 4px;
+            display: inline-block;
+        }
+
+        .mount-item-stats {
+            text-align: right;
+            font-size: 11px;
+            flex-shrink: 0;
+        }
+
+        .mount-item-capacity {
+            color: var(--text);
+        }
+
+        .mount-item-free {
+            color: var(--subtext0);
+        }
+
+        .mount-item-status {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .status-dot.online { background: var(--green); }
+        .status-dot.offline { background: var(--red); }
+
+        .mount-item-actions {
+            display: flex;
+            gap: 4px;
+        }
+
+        .mount-action-btn {
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--surface1);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            color: var(--text);
+            transition: background 0.15s;
+        }
+
+        .mount-action-btn:hover { background: var(--surface2); }
+        .mount-action-btn.danger:hover { background: var(--red); color: var(--crust); }
+        .mount-action-btn .icon { width: 14px; height: 14px; }
+
+        .add-mount-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px;
+            background: transparent;
+            border: 2px dashed var(--surface1);
+            border-radius: 8px;
+            color: var(--subtext0);
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.15s;
+        }
+
+        .add-mount-btn:hover {
+            border-color: var(--blue);
+            color: var(--blue);
+        }
+
+        .settings-form-group {
+            margin-bottom: 12px;
+        }
+
+        .settings-form-label {
+            font-size: 12px;
+            color: var(--subtext0);
+            margin-bottom: 4px;
+            display: block;
+        }
+
+        .settings-form-select {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--surface0);
+            border: 1px solid var(--surface1);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 13px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .settings-form-select:focus { border-color: var(--blue); }
+
+        .settings-info {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 12px;
+            background: rgba(137, 180, 250, 0.1);
+            border-radius: 6px;
+            font-size: 12px;
+            color: var(--subtext0);
+        }
+
+        .settings-info .icon {
+            width: 16px;
+            height: 16px;
+            color: var(--blue);
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .sidebar-storage {
+            cursor: pointer;
+            transition: background 0.15s;
+            border-radius: 6px;
+            margin: 8px;
+        }
+
+        .sidebar-storage:hover {
+            background: var(--surface0);
+        }
+
         /* Selection box */
         .selection-box {
             position: fixed;
@@ -965,8 +1237,11 @@
                     Trash
                 </div>
             </div>
-            <div class="sidebar-storage" id="storage-info">
-                <div class="storage-label">Storage</div>
+            <div class="sidebar-storage" id="storage-info" title="Click to configure storage">
+                <div class="storage-label" style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>Storage</span>
+                    <i data-feather="settings" style="width: 12px; height: 12px; opacity: 0.5;"></i>
+                </div>
                 <div class="storage-bar"><div class="storage-fill" style="width: 0%"></div></div>
                 <div class="storage-text">Loading...</div>
             </div>
@@ -1195,10 +1470,21 @@
             try {
                 const data = await api('/stats');
                 const storageInfo = document.getElementById('storage-info');
-                storageInfo.innerHTML = '<div class="storage-label">Storage</div><div class="storage-bar"><div class="storage-fill" style="width: ' + data.percentUsed + '%"></div></div><div class="storage-text">' + data.usedFormatted + ' of ' + data.totalFormatted + ' used</div>';
+                const progressClass = getProgressClass(data.percentUsed);
+                const progressColor = progressClass === 'low' ? 'var(--green)' : progressClass === 'medium' ? 'var(--yellow)' : progressClass === 'high' ? 'var(--peach)' : 'var(--red)';
+
+                storageInfo.innerHTML = '<div class="storage-label" style="display: flex; justify-content: space-between; align-items: center;"><span>Storage</span><i data-feather="settings" style="width: 12px; height: 12px; opacity: 0.5;"></i></div><div class="storage-bar"><div class="storage-fill" style="width: ' + data.percentUsed + '%; background: ' + progressColor + ';"></div></div><div class="storage-text">' + data.usedFormatted + ' of ' + data.totalFormatted + '</div>';
+                feather.replace();
             } catch (error) {
                 console.error('Failed to load storage info:', error);
             }
+        }
+
+        function getProgressClass(percent) {
+            if (percent < 50) return 'low';
+            if (percent < 75) return 'medium';
+            if (percent < 90) return 'high';
+            return 'critical';
         }
 
         // Render Functions
@@ -2044,6 +2330,159 @@
             statusRight.textContent = formatSize(totalSize);
         }
 
+        // Storage Settings
+        async function showStorageSettings() {
+            try {
+                const [configData, mountsData] = await Promise.all([
+                    api('/storage/config'),
+                    api('/storage/mounts')
+                ]);
+
+                renderStorageSettingsModal(configData, mountsData);
+            } catch (error) {
+                showToast('Failed to load storage settings', 'error');
+            }
+        }
+
+        function renderStorageSettingsModal(configData, mountsData) {
+            const config = configData.config;
+            const stats = configData.stats;
+            const mounts = mountsData.mounts || [];
+            const currentPath = mountsData.currentPath;
+
+            const progressClass = stats ? getProgressClass(stats.percentUsed) : 'low';
+
+            const statsSection = stats ? '<div class="storage-stats-card"><div class="storage-stats-header"><div><div class="storage-stats-title">Current Storage</div><div class="storage-stats-path">' + currentPath + '</div></div></div><div class="storage-progress"><div class="storage-progress-fill ' + progressClass + '" style="width: ' + stats.percentUsed + '%"></div></div><div class="storage-stats-details"><span class="storage-stats-used">' + stats.usedFormatted + ' used of ' + stats.totalFormatted + '</span><span class="storage-stats-free">' + stats.freeFormatted + ' free</span></div></div>' : '';
+
+            const mountItems = mounts.map(mount => {
+                const isActive = mount.path === currentPath;
+                const isAccessible = mount.accessible;
+                const mountStats = mount.stats;
+                const activeClass = isActive ? ' active' : '';
+                const unavailableClass = !isAccessible ? ' unavailable' : '';
+
+                let statsHtml = '';
+                if (mountStats) {
+                    statsHtml = '<div class="mount-item-stats"><div class="mount-item-capacity">' + mountStats.totalFormatted + '</div><div class="mount-item-free">' + mountStats.freeFormatted + ' free</div><div class="mount-item-status"><span class="status-dot online"></span><span style="font-size: 10px; color: var(--green);">Online</span></div></div>';
+                } else {
+                    statsHtml = '<div class="mount-item-stats"><div class="mount-item-status"><span class="status-dot offline"></span><span style="font-size: 10px; color: var(--red);">Offline</span></div></div>';
+                }
+
+                const nodeHtml = mount.node ? '<span class="mount-item-node">' + mount.node + '</span>' : '';
+                const deleteBtn = !mount.default ? '<button class="mount-action-btn danger" onclick="event.stopPropagation(); removeMountPath(\'' + mount.path + '\')"><i data-feather="trash-2" class="icon"></i></button>' : '';
+
+                return '<div class="mount-item' + activeClass + unavailableClass + '" data-path="' + mount.path + '" onclick="' + (isAccessible ? 'switchToMount(\'' + mount.path + '\')' : '') + '"><div class="mount-item-radio"></div><div class="mount-item-info"><div class="mount-item-name">' + mount.name + '</div><div class="mount-item-path">' + mount.path + '</div>' + nodeHtml + '</div>' + statsHtml + '<div class="mount-item-actions">' + deleteBtn + '</div></div>';
+            }).join('');
+
+            const content = '<div class="settings-modal">' + statsSection + '<div class="settings-section"><div class="settings-section-title">Storage Target Configuration</div><div class="settings-form-group"><label class="settings-form-label">Storage Type</label><select class="settings-form-select" id="storage-type-select"><option value="pvc"' + (config.storageTarget.type === 'pvc' ? ' selected' : '') + '>Persistent Volume Claim (PVC)</option><option value="storageclass"' + (config.storageTarget.type === 'storageclass' ? ' selected' : '') + '>StorageClass</option><option value="hostpath"' + (config.storageTarget.type === 'hostpath' ? ' selected' : '') + '>Host Path</option></select></div><div class="settings-form-group"><label class="settings-form-label">PVC / StorageClass Name</label><input type="text" class="modal-input" id="storage-name-input" value="' + (config.storageTarget.name || '') + '" placeholder="e.g., files-pvc"></div></div><div class="settings-section"><div class="settings-section-title">Available Mount Paths</div><div class="mount-list" id="mount-list">' + mountItems + '</div><button class="add-mount-btn" onclick="showAddMountModal()"><i data-feather="plus" class="icon"></i>Add Mount Path</button></div><div class="settings-info"><i data-feather="info" class="icon"></i><span>Default storage is configured to use node13\'s 16TB SSDs. Select a mount path above to switch storage locations.</span></div></div>';
+
+            modal.innerHTML = '<div class="modal-header"><span class="modal-title">Storage Settings</span><button class="modal-close"><i data-feather="x"></i></button></div><div class="modal-content">' + content + '</div><div class="modal-actions"><button class="modal-btn secondary" data-action="Cancel">Cancel</button><button class="modal-btn primary" data-action="Save">Save Configuration</button></div>';
+
+            modalOverlay.classList.add('visible');
+            feather.replace();
+
+            modal.querySelector('.modal-close').addEventListener('click', hideModal);
+            modal.querySelector('[data-action="Cancel"]').addEventListener('click', hideModal);
+            modal.querySelector('[data-action="Save"]').addEventListener('click', saveStorageConfig);
+        }
+
+        async function saveStorageConfig() {
+            const storageType = document.getElementById('storage-type-select').value;
+            const storageName = document.getElementById('storage-name-input').value;
+
+            try {
+                await api('/storage/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        storageTarget: {
+                            type: storageType,
+                            name: storageName
+                        }
+                    })
+                });
+
+                hideModal();
+                showToast('Storage configuration saved', 'success');
+                loadStorageInfo();
+            } catch (error) {
+                // Error already shown by api()
+            }
+        }
+
+        async function switchToMount(path) {
+            try {
+                await api('/storage/switch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path })
+                });
+
+                hideModal();
+                showToast('Switched to ' + path, 'success');
+                loadStorageInfo();
+                loadDirectory('/');
+            } catch (error) {
+                // Error already shown by api()
+            }
+        }
+
+        async function showAddMountModal() {
+            hideModal();
+
+            const content = '<div class="settings-form-group"><label class="settings-form-label">Mount Name</label><input type="text" class="modal-input" id="add-mount-name" placeholder="e.g., Backup Storage"></div><div class="settings-form-group"><label class="settings-form-label">Path</label><input type="text" class="modal-input" id="add-mount-path" placeholder="e.g., /mnt/backup/files"></div><div class="settings-form-group"><label class="settings-form-label">Node (optional)</label><input type="text" class="modal-input" id="add-mount-node" placeholder="e.g., node01"></div>';
+
+            modal.innerHTML = '<div class="modal-header"><span class="modal-title">Add Mount Path</span><button class="modal-close"><i data-feather="x"></i></button></div><div class="modal-content">' + content + '</div><div class="modal-actions"><button class="modal-btn secondary" data-action="Cancel">Cancel</button><button class="modal-btn primary" data-action="Add">Add Mount</button></div>';
+
+            modalOverlay.classList.add('visible');
+            feather.replace();
+
+            modal.querySelector('.modal-close').addEventListener('click', () => { hideModal(); showStorageSettings(); });
+            modal.querySelector('[data-action="Cancel"]').addEventListener('click', () => { hideModal(); showStorageSettings(); });
+            modal.querySelector('[data-action="Add"]').addEventListener('click', addMountPath);
+
+            document.getElementById('add-mount-name').focus();
+        }
+
+        async function addMountPath() {
+            const name = document.getElementById('add-mount-name').value.trim();
+            const path = document.getElementById('add-mount-path').value.trim();
+            const node = document.getElementById('add-mount-node').value.trim();
+
+            if (!name || !path) {
+                showToast('Name and path are required', 'error');
+                return;
+            }
+
+            try {
+                await api('/storage/mounts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, path, node })
+                });
+
+                showToast('Mount path added', 'success');
+                hideModal();
+                showStorageSettings();
+            } catch (error) {
+                // Error already shown by api()
+            }
+        }
+
+        async function removeMountPath(path) {
+            const confirmed = await showConfirmModal('Remove Mount Path?', 'Are you sure you want to remove this mount path from the list?', true);
+
+            if (confirmed) {
+                try {
+                    await api('/storage/mounts?path=' + encodeURIComponent(path), { method: 'DELETE' });
+                    showToast('Mount path removed', 'success');
+                    showStorageSettings();
+                } catch (error) {
+                    // Error already shown by api()
+                }
+            }
+        }
+
         // Event Listeners
         document.addEventListener('DOMContentLoaded', () => {
             loadLocations();
@@ -2117,6 +2556,9 @@
             // Sidebar actions
             document.querySelector('[data-action="recent"]').addEventListener('click', loadRecent);
             document.querySelector('[data-action="trash"]').addEventListener('click', loadTrash);
+
+            // Storage settings
+            document.getElementById('storage-info').addEventListener('click', showStorageSettings);
             
             // File input
             fileInput.addEventListener('change', (e) => {

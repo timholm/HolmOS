@@ -1,634 +1,137 @@
 """
-Merchant - The App Store AI Agent for HolmOS
+Claude Terminal - SSH Terminal with Claude Code-style UI for HolmOS
 
-A savvy trader with an eye for quality apps, Merchant knows the marketplace inside and out.
-Handles natural language service requests and interfaces with other services to fulfill them.
+A terminal-style interface that connects via SSH to cluster nodes,
+with built-in context about HolmOS development workflow.
 """
 
 import os
-import re
 import json
 import uuid
-import requests
 import threading
+import time
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
+import paramiko
+import select
 
 app = Flask(__name__)
 CORS(app)
 
-# Merchant's personality
-MERCHANT_NAME = "Merchant"
-MERCHANT_AVATAR = "M"
-MERCHANT_COLOR = "#f39c12"
-MERCHANT_CATCHPHRASE = "Welcome to the marketplace! What application treasures seek you today?"
-MERCHANT_PERSONALITY = "A savvy trader with an eye for quality apps, Merchant knows the marketplace inside and out."
+# Configuration
+SSH_HOST = os.environ.get("SSH_HOST", "192.168.8.197")
+SSH_PORT = int(os.environ.get("SSH_PORT", "22"))
+SSH_USER = os.environ.get("SSH_USER", "rpi1")
+SSH_PASSWORD = os.environ.get("SSH_PASSWORD", "19209746")
 
-# Service endpoints
-FORGE_URL = os.environ.get("FORGE_URL", "http://forge.holm.svc.cluster.local")
-REGISTRY_URL = os.environ.get("REGISTRY_URL", "http://10.110.67.87:5000")
-NOVA_URL = os.environ.get("NOVA_URL", "http://nova.holm.svc.cluster.local")
-SCRIBE_URL = os.environ.get("SCRIBE_URL", "http://scribe.holm.svc.cluster.local")
+# Session storage for SSH connections
+ssh_sessions = {}
+session_lock = threading.Lock()
 
-# App templates that Merchant can help build
-APP_TEMPLATES = {
-    "todo-list": {
-        "name": "Todo List",
-        "description": "A simple task management app with add, complete, and delete functionality",
-        "keywords": ["todo", "task", "list", "tasks", "checklist", "reminders"],
-        "icon": "check_circle",
-        "category": "productivity"
-    },
-    "timer-app": {
-        "name": "Timer App",
-        "description": "Countdown timer and stopwatch with notifications",
-        "keywords": ["timer", "countdown", "stopwatch", "clock", "alarm"],
-        "icon": "timer",
-        "category": "utility"
-    },
-    "notes-app": {
-        "name": "Notes App",
-        "description": "Simple note-taking app with markdown support",
-        "keywords": ["notes", "note", "memo", "write", "writing", "text"],
-        "icon": "note",
-        "category": "productivity"
-    },
-    "calculator": {
-        "name": "Calculator",
-        "description": "Basic and scientific calculator",
-        "keywords": ["calculator", "calc", "math", "compute", "numbers"],
-        "icon": "calculate",
-        "category": "utility"
-    },
-    "weather-app": {
-        "name": "Weather App",
-        "description": "Weather dashboard with forecasts",
-        "keywords": ["weather", "forecast", "temperature", "climate"],
-        "icon": "cloud",
-        "category": "info"
-    },
-    "pomodoro": {
-        "name": "Pomodoro Timer",
-        "description": "Productivity timer with work/break cycles",
-        "keywords": ["pomodoro", "focus", "productivity", "work", "break"],
-        "icon": "schedule",
-        "category": "productivity"
-    },
-    "json-viewer": {
-        "name": "JSON Viewer",
-        "description": "Pretty-print and explore JSON data",
-        "keywords": ["json", "viewer", "formatter", "data", "api"],
-        "icon": "code",
-        "category": "developer"
-    },
-    "markdown-editor": {
-        "name": "Markdown Editor",
-        "description": "Live markdown editor with preview",
-        "keywords": ["markdown", "editor", "md", "document", "write"],
-        "icon": "edit_note",
-        "category": "productivity"
-    },
-    "dashboard": {
-        "name": "Dashboard",
-        "description": "Customizable dashboard with widgets",
-        "keywords": ["dashboard", "widgets", "overview", "monitor"],
-        "icon": "dashboard",
-        "category": "utility"
-    },
-    "chat-app": {
-        "name": "Chat App",
-        "description": "Real-time chat interface",
-        "keywords": ["chat", "message", "messaging", "communication"],
-        "icon": "chat",
-        "category": "communication"
-    }
-}
+# HolmOS Development Context Preset
+HOLMOS_CONTEXT = """
+# HolmOS Development Workflow
 
-# Merchant's witty responses
-MERCHANT_QUOTES = {
-    "greeting": [
-        "Ah, a customer! Welcome to Merchant's Emporium of Digital Delights!",
-        "Welcome, traveler! I have just the app for you...",
-        "Greetings! My shelves are stocked with the finest applications!",
-        "A discerning eye I see! Let me show you my wares."
-    ],
-    "building": [
-        "Excellent choice! I'll have Forge craft this masterpiece for you.",
-        "Consider it done! The finest craftsmen are now at work.",
-        "A wise selection! Let me summon the builders.",
-        "Your order has been placed with our master smiths!"
-    ],
-    "searching": [
-        "Let me check my inventory...",
-        "Hmm, let me consult my catalogs...",
-        "One moment while I search the archives...",
-        "Scanning the marketplace for treasures..."
-    ],
-    "success": [
-        "Voila! Your application is ready!",
-        "The deed is done! Another satisfied customer!",
-        "Excellent! The goods have been delivered!",
-        "Success! May this serve you well!"
-    ],
-    "error": [
-        "Alas! Something went awry in the workshop...",
-        "My apologies, a hiccup in the supply chain!",
-        "The stars were not aligned... let's try again.",
-        "A minor setback! Let me investigate..."
-    ],
-    "unknown": [
-        "I'm not quite sure what you seek. Could you elaborate?",
-        "Hmm, that's not in my catalog. Perhaps you mean something else?",
-        "My expertise has limits! Could you describe it differently?",
-        "That's a rare request indeed. Tell me more?"
-    ]
-}
+## Building Apps
 
-# Session storage
-chat_sessions = {}
+HolmOS apps are typically Flask (Python) or Go services:
 
-def get_random_quote(category):
-    """Get a random quote from a category."""
-    import random
-    quotes = MERCHANT_QUOTES.get(category, MERCHANT_QUOTES["unknown"])
-    return random.choice(quotes)
+### Flask App Structure:
+```
+my-app/
+  app.py          # Main Flask application
+  requirements.txt # Python dependencies (flask, flask-cors, etc.)
+  Dockerfile       # Container build instructions
+  deployment.yaml  # Kubernetes deployment + service
+```
 
-def find_matching_template(message):
-    """Find the best matching template for a user message."""
-    message_lower = message.lower()
-    best_match = None
-    best_score = 0
+### Go App Structure:
+```
+my-app/
+  main.go          # Main Go application
+  go.mod           # Go module file
+  Dockerfile       # Multi-stage build
+  deployment.yaml  # Kubernetes deployment + service
+```
 
-    for template_id, template in APP_TEMPLATES.items():
-        score = 0
-        for keyword in template["keywords"]:
-            if keyword in message_lower:
-                score += len(keyword)
+## Building with Buildah
 
-        if template["name"].lower() in message_lower:
-            score += 20
+```bash
+# Navigate to service directory
+cd /path/to/service
 
-        if score > best_score:
-            best_score = score
-            best_match = template_id
+# Build for ARM64 (Raspberry Pi cluster)
+buildah build --platform linux/arm64 -t localhost:31500/my-app:latest .
 
-    return best_match if best_score > 0 else None
+# Push to cluster registry
+buildah push localhost:31500/my-app:latest
+```
 
-def parse_user_intent(message):
-    """Parse user message to determine intent."""
-    message_lower = message.lower()
+## Registry
 
-    # Check for build/create intent
-    build_keywords = ["build", "create", "make", "need", "want", "give me", "i'd like", "can you make"]
-    has_build_intent = any(kw in message_lower for kw in build_keywords)
+- Local registry: localhost:31500 (or 192.168.8.197:31500)
+- Images are stored in the cluster's internal registry
+- Use `buildah push` to publish images
 
-    # Check for search/list intent
-    search_keywords = ["list", "show", "what", "available", "have", "browse", "find", "search"]
-    has_search_intent = any(kw in message_lower for kw in search_keywords)
+## Deploying to Cluster
 
-    # Check for help intent
-    help_keywords = ["help", "how", "what can", "capabilities", "features"]
-    has_help_intent = any(kw in message_lower for kw in help_keywords)
+```bash
+# Apply deployment
+kubectl apply -f deployment.yaml
 
-    # Check for status intent
-    status_keywords = ["status", "progress", "building", "done", "ready", "finished"]
-    has_status_intent = any(kw in message_lower for kw in status_keywords)
+# Check deployment status
+kubectl get pods -n holm
+kubectl logs -n holm deployment/my-app
 
-    # Find template match
-    template_match = find_matching_template(message)
+# Restart deployment
+kubectl rollout restart deployment/my-app -n holm
+```
 
-    return {
-        "build": has_build_intent,
-        "search": has_search_intent,
-        "help": has_help_intent,
-        "status": has_status_intent,
-        "template": template_match
-    }
+## Common Kubernetes Commands
 
-def generate_app_code(template_id, app_name):
-    """Generate code for a specific app template."""
-    sanitized_name = re.sub(r'[^a-z0-9-]', '-', app_name.lower())
+```bash
+# Get all pods in holm namespace
+kubectl get pods -n holm
 
-    # Return template-specific Flask app code
-    base_code = f'''"""
-{app_name} - Generated by Merchant
-HolmOS Application
-"""
-from flask import Flask, jsonify, render_template_string
-from flask_cors import CORS
-import os
+# Get all deployments
+kubectl get deployments -n holm
 
-app = Flask(__name__)
-CORS(app)
+# Get all services
+kubectl get svc -n holm
 
-'''
+# Describe a pod
+kubectl describe pod <pod-name> -n holm
 
-    if template_id == "todo-list":
-        base_code += '''
-todos = []
+# View logs
+kubectl logs -f deployment/<name> -n holm
 
-HTML = \'\'\'<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Todo List</title>
-<style>
-:root{--base:#1e1e2e;--surface0:#313244;--text:#cdd6f4;--green:#a6e3a1;--red:#f38ba8;--blue:#89b4fa}
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--base);color:var(--text);font-family:system-ui;min-height:100vh;padding:20px}
-.container{max-width:600px;margin:0 auto}
-h1{text-align:center;color:var(--blue);margin-bottom:30px}
-.input-area{display:flex;gap:10px;margin-bottom:20px}
-input{flex:1;padding:12px;background:var(--surface0);border:none;border-radius:8px;color:var(--text);font-size:16px}
-button{padding:12px 24px;background:var(--green);color:var(--base);border:none;border-radius:8px;cursor:pointer;font-weight:600}
-button:hover{opacity:0.9}
-.todo-item{display:flex;align-items:center;gap:10px;padding:15px;background:var(--surface0);border-radius:8px;margin-bottom:10px}
-.todo-item.completed span{text-decoration:line-through;opacity:0.6}
-.todo-item span{flex:1}
-.delete{background:var(--red);padding:8px 16px}
-</style></head><body>
-<div class="container">
-<h1>Todo List</h1>
-<div class="input-area">
-<input type="text" id="todoInput" placeholder="What needs to be done?">
-<button onclick="addTodo()">Add</button>
-</div>
-<div id="todoList"></div>
-</div>
-<script>
-async function loadTodos(){const r=await fetch("/api/todos");const d=await r.json();renderTodos(d)}
-function renderTodos(todos){const l=document.getElementById("todoList");l.innerHTML=todos.map((t,i)=>`<div class="todo-item ${t.completed?"completed":""}"><input type="checkbox" ${t.completed?"checked":""} onchange="toggleTodo(${i})"><span>${t.text}</span><button class="delete" onclick="deleteTodo(${i})">Delete</button></div>`).join("")}
-async function addTodo(){const i=document.getElementById("todoInput");if(!i.value.trim())return;await fetch("/api/todos",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:i.value})});i.value="";loadTodos()}
-async function toggleTodo(idx){await fetch(`/api/todos/${idx}/toggle`,{method:"PUT"});loadTodos()}
-async function deleteTodo(idx){await fetch(`/api/todos/${idx}`,{method:"DELETE"});loadTodos()}
-document.getElementById("todoInput").addEventListener("keypress",e=>{if(e.key==="Enter")addTodo()});
-loadTodos()
-</script></body></html>\'\'\'
+# Delete and recreate
+kubectl delete -f deployment.yaml && kubectl apply -f deployment.yaml
+```
 
-@app.route("/")
-def index():
-    return render_template_string(HTML)
+## NodePort Ranges
 
-@app.route("/api/todos", methods=["GET"])
-def get_todos():
-    return jsonify(todos)
+- 30000-30100: Core services (auth, etc.)
+- 30100-30500: Applications
+- 30500-30700: Developer tools
+- 30700-30900: Utilities
+- 31500: Container registry
 
-@app.route("/api/todos", methods=["POST"])
-def add_todo():
-    from flask import request
-    data = request.json
-    todos.append({"text": data["text"], "completed": False})
-    return jsonify({"success": True})
+## Cluster Nodes
 
-@app.route("/api/todos/<int:idx>/toggle", methods=["PUT"])
-def toggle_todo(idx):
-    if 0 <= idx < len(todos):
-        todos[idx]["completed"] = not todos[idx]["completed"]
-    return jsonify({"success": True})
-
-@app.route("/api/todos/<int:idx>", methods=["DELETE"])
-def delete_todo(idx):
-    if 0 <= idx < len(todos):
-        todos.pop(idx)
-    return jsonify({"success": True})
-'''
-
-    elif template_id == "timer-app":
-        base_code += '''
-HTML = \'\'\'<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Timer App</title>
-<style>
-:root{--base:#1e1e2e;--surface0:#313244;--text:#cdd6f4;--green:#a6e3a1;--red:#f38ba8;--blue:#89b4fa;--yellow:#f9e2af}
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--base);color:var(--text);font-family:system-ui;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.timer-display{font-size:5rem;font-weight:700;font-family:monospace;margin-bottom:30px;color:var(--blue)}
-.buttons{display:flex;gap:15px}
-button{padding:15px 30px;border:none;border-radius:10px;font-size:1.1rem;cursor:pointer;font-weight:600}
-.start{background:var(--green);color:var(--base)}
-.stop{background:var(--red);color:var(--base)}
-.reset{background:var(--yellow);color:var(--base)}
-.modes{display:flex;gap:10px;margin-bottom:30px}
-.mode{padding:10px 20px;background:var(--surface0);border:2px solid transparent;border-radius:8px;cursor:pointer}
-.mode.active{border-color:var(--blue)}
-</style></head><body>
-<div class="modes">
-<button class="mode active" onclick="setMode(\'stopwatch\')">Stopwatch</button>
-<button class="mode" onclick="setMode(\'timer\')">Timer</button>
-</div>
-<div class="timer-display" id="display">00:00:00</div>
-<div class="buttons">
-<button class="start" onclick="startTimer()">Start</button>
-<button class="stop" onclick="stopTimer()">Stop</button>
-<button class="reset" onclick="resetTimer()">Reset</button>
-</div>
-<script>
-let seconds=0,interval=null,mode="stopwatch",timerSeconds=300;
-function formatTime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return[h,m,sec].map(v=>String(v).padStart(2,"0")).join(":")}
-function updateDisplay(){document.getElementById("display").textContent=formatTime(mode==="stopwatch"?seconds:timerSeconds-seconds)}
-function startTimer(){if(interval)return;interval=setInterval(()=>{seconds++;if(mode==="timer"&&seconds>=timerSeconds){stopTimer();alert("Time is up!")}updateDisplay()},1000)}
-function stopTimer(){clearInterval(interval);interval=null}
-function resetTimer(){stopTimer();seconds=0;updateDisplay()}
-function setMode(m){mode=m;resetTimer();document.querySelectorAll(".mode").forEach((b,i)=>b.classList.toggle("active",i===(m==="stopwatch"?0:1)))}
-</script></body></html>\'\'\'
-
-@app.route("/")
-def index():
-    return render_template_string(HTML)
-'''
-
-    elif template_id == "notes-app":
-        base_code += '''
-notes = []
-
-HTML = \'\'\'<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Notes</title>
-<style>
-:root{--base:#1e1e2e;--surface0:#313244;--surface1:#45475a;--text:#cdd6f4;--green:#a6e3a1;--red:#f38ba8;--blue:#89b4fa;--yellow:#f9e2af}
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--base);color:var(--text);font-family:system-ui;min-height:100vh}
-.container{max-width:900px;margin:0 auto;padding:20px;display:grid;grid-template-columns:250px 1fr;gap:20px;height:100vh}
-.sidebar{background:var(--surface0);border-radius:12px;padding:15px;overflow-y:auto}
-h1{color:var(--blue);margin-bottom:20px;font-size:1.3rem}
-.note-item{padding:12px;background:var(--surface1);border-radius:8px;margin-bottom:8px;cursor:pointer;border-left:3px solid transparent}
-.note-item:hover,.note-item.active{border-left-color:var(--blue)}
-.note-title{font-weight:600;margin-bottom:4px}
-.note-preview{font-size:0.8rem;color:var(--text);opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.editor{display:flex;flex-direction:column}
-textarea{flex:1;background:var(--surface0);border:none;border-radius:12px;padding:20px;color:var(--text);font-size:1rem;resize:none;font-family:inherit}
-textarea:focus{outline:2px solid var(--blue)}
-.toolbar{display:flex;gap:10px;margin-bottom:10px}
-button{padding:10px 20px;background:var(--green);color:var(--base);border:none;border-radius:8px;cursor:pointer;font-weight:600}
-.delete-btn{background:var(--red)}
-</style></head><body>
-<div class="container">
-<div class="sidebar">
-<h1>Notes</h1>
-<button onclick="newNote()" style="width:100%;margin-bottom:15px">+ New Note</button>
-<div id="noteList"></div>
-</div>
-<div class="editor">
-<div class="toolbar">
-<input type="text" id="noteTitle" placeholder="Note title" style="flex:1;padding:10px;background:var(--surface0);border:none;border-radius:8px;color:var(--text)">
-<button onclick="saveNote()">Save</button>
-<button class="delete-btn" onclick="deleteNote()">Delete</button>
-</div>
-<textarea id="noteContent" placeholder="Start writing..."></textarea>
-</div>
-</div>
-<script>
-let currentNote=null;
-async function loadNotes(){const r=await fetch("/api/notes");const notes=await r.json();renderNotes(notes)}
-function renderNotes(notes){const list=document.getElementById("noteList");list.innerHTML=notes.map((n,i)=>`<div class="note-item ${currentNote===i?"active":""}" onclick="selectNote(${i})"><div class="note-title">${n.title||"Untitled"}</div><div class="note-preview">${n.content.substring(0,50)}</div></div>`).join("")}
-async function selectNote(idx){currentNote=idx;const r=await fetch("/api/notes");const notes=await r.json();if(notes[idx]){document.getElementById("noteTitle").value=notes[idx].title;document.getElementById("noteContent").value=notes[idx].content}loadNotes()}
-async function newNote(){await fetch("/api/notes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:"",content:""})});const r=await fetch("/api/notes");const notes=await r.json();currentNote=notes.length-1;document.getElementById("noteTitle").value="";document.getElementById("noteContent").value="";loadNotes()}
-async function saveNote(){if(currentNote===null)return;await fetch(`/api/notes/${currentNote}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:document.getElementById("noteTitle").value,content:document.getElementById("noteContent").value})});loadNotes()}
-async function deleteNote(){if(currentNote===null)return;await fetch(`/api/notes/${currentNote}`,{method:"DELETE"});currentNote=null;document.getElementById("noteTitle").value="";document.getElementById("noteContent").value="";loadNotes()}
-loadNotes()
-</script></body></html>\'\'\'
-
-@app.route("/")
-def index():
-    return render_template_string(HTML)
-
-@app.route("/api/notes", methods=["GET"])
-def get_notes():
-    return jsonify(notes)
-
-@app.route("/api/notes", methods=["POST"])
-def add_note():
-    from flask import request
-    data = request.json
-    notes.append({"title": data.get("title", ""), "content": data.get("content", "")})
-    return jsonify({"success": True})
-
-@app.route("/api/notes/<int:idx>", methods=["PUT"])
-def update_note(idx):
-    from flask import request
-    if 0 <= idx < len(notes):
-        data = request.json
-        notes[idx] = {"title": data.get("title", ""), "content": data.get("content", "")}
-    return jsonify({"success": True})
-
-@app.route("/api/notes/<int:idx>", methods=["DELETE"])
-def delete_note(idx):
-    if 0 <= idx < len(notes):
-        notes.pop(idx)
-    return jsonify({"success": True})
-'''
-
-    else:
-        # Generic app template
-        base_code += f'''
-HTML = \'\'\'<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{app_name}</title>
-<style>
-:root{{--base:#1e1e2e;--surface0:#313244;--text:#cdd6f4;--blue:#89b4fa}}
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:var(--base);color:var(--text);font-family:system-ui;min-height:100vh;display:flex;align-items:center;justify-content:center}}
-.container{{text-align:center}}
-h1{{color:var(--blue);margin-bottom:20px}}
-</style></head><body>
-<div class="container">
-<h1>{app_name}</h1>
-<p>Your app is running!</p>
-</div>
-</body></html>\'\'\'
-
-@app.route("/")
-def index():
-    return render_template_string(HTML)
-'''
-
-    # Add common endpoints
-    base_code += '''
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "healthy", "service": "''' + sanitized_name + '''"})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-'''
-
-    return base_code
-
-def generate_dockerfile():
-    """Generate a Dockerfile for the app."""
-    return '''FROM docker.io/library/python:3.11-slim
-
-WORKDIR /app
-
-RUN pip install --no-cache-dir flask flask-cors
-
-COPY app.py .
-
-EXPOSE 8080
-
-CMD ["python", "app.py"]
-'''
-
-def trigger_forge_build(app_name, app_code, dockerfile):
-    """Trigger a build with Forge."""
-    try:
-        response = requests.post(
-            f"{FORGE_URL}/api/trigger",
-            json={
-                "name": app_name,
-                "app_code": app_code,
-                "dockerfile": dockerfile,
-                "requirements": "flask>=2.0.0\nflask-cors>=3.0.0"
-            },
-            timeout=30
-        )
-        return response.json()
-    except Exception as e:
-        return {"error": str(e)}
-
-def process_chat_message(message, session_id):
-    """Process a chat message and return appropriate response."""
-    intent = parse_user_intent(message)
-
-    response_data = {
-        "agent": MERCHANT_NAME,
-        "personality": MERCHANT_PERSONALITY,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-    # Help intent
-    if intent["help"]:
-        response_data["response"] = f"""{get_random_quote('greeting')}
-
-I am {MERCHANT_NAME}, {MERCHANT_PERSONALITY}
-
-My capabilities include:
-- App discovery - Browse available applications
-- Installation management - Deploy apps to your cluster
-- Building custom apps - Create apps from templates
-- Version control - Manage app versions and tags
-
-Try saying:
-- "Build me a todo list app"
-- "What apps are available?"
-- "I need a timer application"
-- "Show me the catalog"
-"""
-        return response_data
-
-    # Search/list intent
-    if intent["search"] and not intent["build"]:
-        response_data["response"] = f"""{get_random_quote('searching')}
-
-Here are my finest wares:
-
-"""
-        for tid, template in APP_TEMPLATES.items():
-            response_data["response"] += f"- **{template['name']}**: {template['description']}\n"
-
-        response_data["response"] += "\nTell me what catches your eye, and I'll have it built for you!"
-        response_data["templates"] = list(APP_TEMPLATES.keys())
-        return response_data
-
-    # Build intent with template match
-    if intent["build"] and intent["template"]:
-        template = APP_TEMPLATES[intent["template"]]
-        app_name = template["name"].lower().replace(" ", "-")
-
-        # Generate app code
-        app_code = generate_app_code(intent["template"], template["name"])
-        dockerfile = generate_dockerfile()
-
-        # Try to trigger build
-        build_result = trigger_forge_build(app_name, app_code, dockerfile)
-
-        if "error" not in build_result:
-            response_data["response"] = f"""{get_random_quote('building')}
-
-I'm creating a **{template['name']}** for you!
-{template['description']}
-
-Build ID: {build_result.get('build_id', 'pending')}
-Status: Building...
-
-The finest smiths at Forge are now crafting your application.
-Check the Builds tab in the App Store to monitor progress!
-"""
-            response_data["build_id"] = build_result.get("build_id")
-            response_data["template"] = intent["template"]
-            response_data["app_name"] = app_name
-        else:
-            response_data["response"] = f"""{get_random_quote('error')}
-
-I wanted to build a **{template['name']}** for you, but encountered an issue:
-{build_result.get('error', 'Unknown error')}
-
-Would you like me to try again?
+- rpi1 (192.168.8.197): Control plane
+- rpi2-rpi12: Worker nodes
+- All running ARM64 architecture
 """
 
-        return response_data
-
-    # Build intent without clear template
-    if intent["build"]:
-        response_data["response"] = f"""{get_random_quote('searching')}
-
-I sense you want me to build something! Let me show you what's in my catalog:
-
-"""
-        for tid, template in list(APP_TEMPLATES.items())[:5]:
-            response_data["response"] += f"- **{template['name']}**: {template['description']}\n"
-
-        response_data["response"] += "\nWhich of these treasures would you like me to craft?"
-        return response_data
-
-    # Status intent
-    if intent["status"]:
-        try:
-            forge_resp = requests.get(f"{FORGE_URL}/api/builds", timeout=5)
-            builds = forge_resp.json()
-
-            if builds:
-                response_data["response"] = f"""Let me check on the workshops...
-
-Recent builds:
-"""
-                for build in builds[:5]:
-                    status_emoji = {"running": "gear", "succeeded": "star", "failed": "x"}.get(build.get("status"), "hourglass")
-                    response_data["response"] += f"- {build.get('name')}: {build.get('status')}\n"
-            else:
-                response_data["response"] = "No builds in progress. Would you like me to create something?"
-
-        except:
-            response_data["response"] = "The workshop is quiet... No builds to report. Shall I start one?"
-
-        return response_data
-
-    # Default response
-    response_data["response"] = f"""{get_random_quote('unknown')}
-
-I didn't quite catch that. As {MERCHANT_NAME}, I can help you with:
-
-- **Build apps**: "Build me a todo list" or "Create a timer app"
-- **Browse catalog**: "Show me available apps" or "What can you build?"
-- **Check status**: "What's building?" or "Build status"
-
-What would you like to explore?
-"""
-
-    return response_data
-
-# Catppuccin Mocha UI
-MERCHANT_UI = '''<!DOCTYPE html>
+# Terminal UI with Claude Code styling
+TERMINAL_UI = '''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Merchant - App Store AI</title>
+    <title>Claude Terminal - HolmOS</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -657,7 +160,7 @@ MERCHANT_UI = '''<!DOCTYPE html>
             --pink: #f5c2e7;
             --flamingo: #f2cdcd;
             --rosewater: #f5e0dc;
-            --merchant: #f39c12;
+            --claude-orange: #da7756;
         }
 
         * {
@@ -667,100 +170,85 @@ MERCHANT_UI = '''<!DOCTYPE html>
         }
 
         body {
-            background: var(--base);
+            background: var(--crust);
             color: var(--text);
-            font-family: 'Inter', system-ui, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             min-height: 100vh;
-            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
         /* Header */
         .header {
-            background: linear-gradient(135deg, var(--surface0) 0%, var(--mantle) 100%);
-            padding: 20px 30px;
-            border-bottom: 3px solid var(--merchant);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: radial-gradient(ellipse at 30% 50%, rgba(243, 156, 18, 0.1) 0%, transparent 50%);
-            pointer-events: none;
-        }
-
-        .header-content {
-            max-width: 1400px;
-            margin: 0 auto;
+            background: var(--mantle);
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--surface0);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            position: relative;
-            z-index: 1;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
 
         .logo {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 10px;
         }
 
         .logo-icon {
-            width: 60px;
-            height: 60px;
-            background: linear-gradient(135deg, var(--merchant), var(--yellow));
-            border-radius: 16px;
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--claude-orange), var(--peach));
+            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 2rem;
             font-weight: 700;
+            font-size: 14px;
             color: var(--crust);
-            box-shadow: 0 4px 20px rgba(243, 156, 18, 0.3);
         }
 
-        .logo h1 {
-            font-size: 2rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, var(--merchant), var(--yellow));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+        .logo-text {
+            font-weight: 600;
+            font-size: 16px;
+            color: var(--text);
         }
 
-        .logo p {
+        .logo-subtitle {
+            font-size: 11px;
             color: var(--subtext0);
-            font-size: 0.9rem;
-            font-style: italic;
         }
 
-        .status-badges {
-            display: flex;
-            gap: 12px;
-        }
-
-        .badge {
+        .connection-status {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 16px;
+            padding: 6px 12px;
             background: var(--surface0);
             border-radius: 20px;
-            font-size: 0.85rem;
-            border: 1px solid var(--surface1);
+            font-size: 12px;
         }
 
-        .badge-dot {
+        .status-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
+            background: var(--overlay0);
+        }
+
+        .status-dot.connected {
             background: var(--green);
-            animation: pulse 2s infinite;
+            box-shadow: 0 0 8px var(--green);
+        }
+
+        .status-dot.connecting {
+            background: var(--yellow);
+            animation: pulse 1s infinite;
         }
 
         @keyframes pulse {
@@ -768,691 +256,1014 @@ MERCHANT_UI = '''<!DOCTYPE html>
             50% { opacity: 0.5; }
         }
 
-        /* Main Layout */
-        .main {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 30px;
-            display: grid;
-            grid-template-columns: 350px 1fr;
-            gap: 30px;
-            min-height: calc(100vh - 120px);
-        }
-
-        @media (max-width: 1000px) {
-            .main { grid-template-columns: 1fr; }
-        }
-
-        /* Catalog Section */
-        .catalog {
-            background: linear-gradient(145deg, var(--surface0), var(--mantle));
-            border-radius: 20px;
-            padding: 25px;
-            border: 1px solid var(--surface1);
-            height: fit-content;
-        }
-
-        .section-title {
-            font-size: 1.3rem;
-            font-weight: 600;
-            color: var(--merchant);
-            margin-bottom: 20px;
+        .header-right {
             display: flex;
             align-items: center;
-            gap: 10px;
-        }
-
-        .template-grid {
-            display: flex;
-            flex-direction: column;
             gap: 12px;
-            max-height: 500px;
-            overflow-y: auto;
         }
 
-        .template-card {
-            background: var(--mantle);
-            border-radius: 12px;
-            padding: 15px;
-            border: 2px solid transparent;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .template-card:hover {
-            border-color: var(--merchant);
-            transform: translateX(5px);
-        }
-
-        .template-card.selected {
-            border-color: var(--green);
-            background: rgba(166, 227, 161, 0.1);
-        }
-
-        .template-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 8px;
-        }
-
-        .template-icon {
-            width: 35px;
-            height: 35px;
-            background: var(--surface1);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.1rem;
-        }
-
-        .template-name {
-            font-weight: 600;
-            color: var(--text);
-        }
-
-        .template-desc {
-            font-size: 0.8rem;
-            color: var(--subtext0);
-            line-height: 1.4;
-        }
-
-        .template-category {
-            display: inline-block;
-            margin-top: 8px;
-            padding: 3px 10px;
-            background: var(--surface1);
-            border-radius: 10px;
-            font-size: 0.7rem;
-            color: var(--blue);
-            text-transform: uppercase;
-        }
-
-        /* Chat Section */
-        .chat-section {
-            display: flex;
-            flex-direction: column;
-            background: linear-gradient(145deg, var(--surface0), var(--mantle));
-            border-radius: 20px;
+        .header-btn {
+            padding: 8px 14px;
+            background: var(--surface0);
             border: 1px solid var(--surface1);
-            overflow: hidden;
-        }
-
-        .chat-header {
-            padding: 20px 25px;
-            background: var(--mantle);
-            border-bottom: 1px solid var(--surface1);
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .chat-avatar {
-            width: 50px;
-            height: 50px;
-            background: linear-gradient(135deg, var(--merchant), var(--yellow));
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--crust);
-        }
-
-        .chat-info h2 {
-            font-size: 1.2rem;
+            border-radius: 8px;
             color: var(--text);
-        }
-
-        .chat-info p {
-            font-size: 0.85rem;
-            color: var(--subtext0);
-            font-style: italic;
-        }
-
-        .chat-messages {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            min-height: 400px;
-            max-height: 500px;
-        }
-
-        .message {
-            max-width: 85%;
-            padding: 15px 18px;
-            border-radius: 16px;
-            animation: messageIn 0.3s ease;
-        }
-
-        @keyframes messageIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .message.user {
-            align-self: flex-end;
-            background: var(--blue);
-            color: var(--crust);
-            border-bottom-right-radius: 4px;
-        }
-
-        .message.merchant {
-            align-self: flex-start;
-            background: var(--surface1);
-            color: var(--text);
-            border-bottom-left-radius: 4px;
-            border-left: 3px solid var(--merchant);
-        }
-
-        .message-header {
-            font-size: 0.75rem;
-            opacity: 0.8;
-            margin-bottom: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
             display: flex;
             align-items: center;
             gap: 6px;
         }
 
-        .message-content {
+        .header-btn:hover {
+            background: var(--surface1);
+            border-color: var(--surface2);
+        }
+
+        .header-btn.primary {
+            background: var(--claude-orange);
+            border-color: var(--claude-orange);
+            color: var(--crust);
+        }
+
+        .header-btn.primary:hover {
+            opacity: 0.9;
+        }
+
+        /* Main Layout */
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: var(--mantle);
+            border-right: 1px solid var(--surface0);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-section {
+            padding: 16px;
+            border-bottom: 1px solid var(--surface0);
+        }
+
+        .sidebar-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--subtext0);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .host-selector {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--surface0);
+            border: 1px solid var(--surface1);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 13px;
+            font-family: 'JetBrains Mono', monospace;
+            cursor: pointer;
+        }
+
+        .host-selector:focus {
+            outline: none;
+            border-color: var(--claude-orange);
+        }
+
+        .quick-commands {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .quick-cmd {
+            padding: 10px 12px;
+            background: var(--surface0);
+            border: 1px solid transparent;
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .quick-cmd:hover {
+            background: var(--surface1);
+            border-color: var(--surface2);
+        }
+
+        .quick-cmd .icon {
+            font-size: 14px;
+        }
+
+        .quick-cmd .label {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Context Panel */
+        .context-panel {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        .context-content {
+            font-size: 12px;
             line-height: 1.6;
+            color: var(--subtext1);
+            font-family: 'JetBrains Mono', monospace;
             white-space: pre-wrap;
         }
 
-        .message-content strong {
-            color: var(--merchant);
+        .context-content h1 {
+            font-size: 14px;
+            color: var(--claude-orange);
+            margin-bottom: 12px;
         }
 
-        .typing-indicator {
+        .context-content h2 {
+            font-size: 13px;
+            color: var(--blue);
+            margin-top: 16px;
+            margin-bottom: 8px;
+        }
+
+        .context-content h3 {
+            font-size: 12px;
+            color: var(--lavender);
+            margin-top: 12px;
+            margin-bottom: 6px;
+        }
+
+        .context-content code {
+            background: var(--surface0);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .context-content pre {
+            background: var(--surface0);
+            padding: 12px;
+            border-radius: 8px;
+            margin: 8px 0;
+            overflow-x: auto;
+        }
+
+        .context-content pre code {
+            background: none;
+            padding: 0;
+        }
+
+        /* Terminal Area */
+        .terminal-area {
+            flex: 1;
             display: flex;
-            gap: 5px;
-            padding: 15px 18px;
-            background: var(--surface1);
-            border-radius: 16px;
-            width: fit-content;
-            border-left: 3px solid var(--merchant);
+            flex-direction: column;
+            background: var(--base);
         }
 
-        .typing-dot {
-            width: 8px;
-            height: 8px;
-            background: var(--merchant);
-            border-radius: 50%;
-            animation: typing 1.4s infinite ease-in-out both;
-        }
-
-        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
-        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
-
-        @keyframes typing {
-            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
-            40% { transform: scale(1); opacity: 1; }
-        }
-
-        .chat-input-area {
-            padding: 20px;
+        .terminal-header {
+            padding: 8px 16px;
             background: var(--mantle);
-            border-top: 1px solid var(--surface1);
+            border-bottom: 1px solid var(--surface0);
             display: flex;
+            align-items: center;
             gap: 12px;
         }
 
-        .chat-input {
+        .terminal-tabs {
+            display: flex;
+            gap: 4px;
+        }
+
+        .terminal-tab {
+            padding: 6px 14px;
+            background: var(--surface0);
+            border: 1px solid transparent;
+            border-radius: 6px;
+            color: var(--subtext1);
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+
+        .terminal-tab:hover {
+            background: var(--surface1);
+        }
+
+        .terminal-tab.active {
+            background: var(--claude-orange);
+            color: var(--crust);
+        }
+
+        .terminal-tab .close {
+            font-size: 14px;
+            opacity: 0.7;
+        }
+
+        .terminal-tab .close:hover {
+            opacity: 1;
+        }
+
+        .terminal-output {
             flex: 1;
-            padding: 15px 20px;
+            padding: 16px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            background: var(--base);
+        }
+
+        .output-line {
+            margin-bottom: 2px;
+            word-wrap: break-word;
+        }
+
+        .output-line.command {
+            color: var(--green);
+        }
+
+        .output-line.command::before {
+            content: "$ ";
+            color: var(--claude-orange);
+        }
+
+        .output-line.output {
+            color: var(--text);
+        }
+
+        .output-line.error {
+            color: var(--red);
+        }
+
+        .output-line.system {
+            color: var(--blue);
+            font-style: italic;
+        }
+
+        .output-line.prompt {
+            color: var(--claude-orange);
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 16px;
+            background: var(--mantle);
+            border-top: 1px solid var(--surface0);
+        }
+
+        .input-container {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+        }
+
+        .input-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
             background: var(--surface0);
             border: 2px solid var(--surface1);
-            border-radius: 25px;
+            border-radius: 12px;
+            padding: 0 16px;
+            transition: all 0.2s;
+        }
+
+        .input-wrapper:focus-within {
+            border-color: var(--claude-orange);
+        }
+
+        .input-prompt {
+            color: var(--claude-orange);
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+
+        .command-input {
+            flex: 1;
+            padding: 14px 0;
+            background: transparent;
+            border: none;
             color: var(--text);
-            font-size: 1rem;
-            font-family: inherit;
-            resize: none;
-            min-height: 50px;
-            max-height: 120px;
-        }
-
-        .chat-input:focus {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
             outline: none;
-            border-color: var(--merchant);
         }
 
-        .chat-input::placeholder {
+        .command-input::placeholder {
             color: var(--overlay0);
         }
 
         .send-btn {
-            width: 50px;
-            height: 50px;
-            background: linear-gradient(135deg, var(--merchant), var(--yellow));
+            padding: 14px 20px;
+            background: var(--claude-orange);
             border: none;
-            border-radius: 50%;
+            border-radius: 12px;
+            color: var(--crust);
+            font-weight: 600;
+            font-size: 14px;
             cursor: pointer;
+            transition: all 0.2s;
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-size: 1.3rem;
-            transition: all 0.2s ease;
-            color: var(--crust);
+            gap: 8px;
         }
 
         .send-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 4px 20px rgba(243, 156, 18, 0.4);
+            opacity: 0.9;
         }
 
         .send-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
-            transform: none;
-        }
-
-        /* Quick Actions */
-        .quick-actions {
-            display: flex;
-            gap: 10px;
-            padding: 15px 20px;
-            background: var(--crust);
-            border-top: 1px solid var(--surface0);
-            flex-wrap: wrap;
-        }
-
-        .quick-btn {
-            padding: 8px 16px;
-            background: var(--surface0);
-            border: 1px solid var(--surface1);
-            border-radius: 20px;
-            color: var(--subtext1);
-            font-size: 0.85rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .quick-btn:hover {
-            background: var(--surface1);
-            border-color: var(--merchant);
-            color: var(--text);
-        }
-
-        /* Build Status */
-        .build-toast {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: var(--surface0);
-            border: 1px solid var(--green);
-            border-radius: 12px;
-            padding: 15px 20px;
-            display: none;
-            animation: slideIn 0.3s ease;
-            z-index: 1000;
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
-        }
-
-        .build-toast.show { display: block; }
-
-        @keyframes slideIn {
-            from { transform: translateX(100px); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
         }
 
         /* Scrollbar */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: var(--mantle); }
-        ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--overlay0); }
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--mantle);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--surface2);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--overlay0);
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .toast {
+            padding: 12px 20px;
+            background: var(--surface0);
+            border: 1px solid var(--surface1);
+            border-radius: 10px;
+            font-size: 13px;
+            animation: slideIn 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toast.success { border-left: 3px solid var(--green); }
+        .toast.error { border-left: 3px solid var(--red); }
+        .toast.info { border-left: 3px solid var(--blue); }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .sidebar {
+                display: none;
+            }
+        }
+
+        /* Welcome screen */
+        .welcome-screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .welcome-logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--claude-orange), var(--peach));
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--crust);
+            margin-bottom: 24px;
+        }
+
+        .welcome-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .welcome-subtitle {
+            color: var(--subtext0);
+            margin-bottom: 32px;
+            max-width: 400px;
+            line-height: 1.6;
+        }
+
+        .welcome-actions {
+            display: flex;
+            gap: 12px;
+        }
     </style>
 </head>
 <body>
-    <header class="header">
-        <div class="header-content">
+    <div class="header">
+        <div class="header-left">
             <div class="logo">
-                <div class="logo-icon">M</div>
+                <div class="logo-icon">CT</div>
                 <div>
-                    <h1>Merchant</h1>
-                    <p>App Store AI - Your savvy marketplace guide</p>
-                </div>
-            </div>
-            <div class="status-badges">
-                <div class="badge">
-                    <span class="badge-dot"></span>
-                    <span>Online</span>
-                </div>
-                <div class="badge">
-                    <span id="templateCount">10</span> Templates
+                    <div class="logo-text">Claude Terminal</div>
+                    <div class="logo-subtitle">HolmOS Development Shell</div>
                 </div>
             </div>
         </div>
-    </header>
-
-    <main class="main">
-        <aside class="catalog">
-            <h2 class="section-title">App Catalog</h2>
-            <div class="template-grid" id="templateGrid"></div>
-        </aside>
-
-        <section class="chat-section">
-            <div class="chat-header">
-                <div class="chat-avatar">M</div>
-                <div class="chat-info">
-                    <h2>Merchant</h2>
-                    <p>Describe what you need, I'll make it happen</p>
-                </div>
-            </div>
-
-            <div class="chat-messages" id="chatMessages">
-                <div class="message merchant">
-                    <div class="message-header">Merchant</div>
-                    <div class="message-content">Welcome to the marketplace! What application treasures seek you today?
-
-I can help you:
-- **Build apps** from templates
-- **Browse** my catalog of wares
-- **Deploy** applications to your cluster
-
-Try saying "Build me a todo list" or "What apps can you make?"</div>
-                </div>
-            </div>
-
-            <div class="quick-actions">
-                <button class="quick-btn" onclick="quickMessage('Show me available apps')">Browse Catalog</button>
-                <button class="quick-btn" onclick="quickMessage('Build me a todo list app')">Todo App</button>
-                <button class="quick-btn" onclick="quickMessage('I need a timer application')">Timer App</button>
-                <button class="quick-btn" onclick="quickMessage('Create a notes app')">Notes App</button>
-                <button class="quick-btn" onclick="quickMessage('What can you build?')">Help</button>
-            </div>
-
-            <div class="chat-input-area">
-                <textarea
-                    class="chat-input"
-                    id="chatInput"
-                    placeholder="Describe what you need..."
-                    rows="1"
-                    onkeydown="handleKeydown(event)"
-                ></textarea>
-                <button class="send-btn" id="sendBtn" onclick="sendMessage()">&#10148;</button>
-            </div>
-        </section>
-    </main>
-
-    <div class="build-toast" id="buildToast">
-        <strong>Build Started!</strong>
-        <p id="buildInfo"></p>
+        <div class="connection-status" id="connectionStatus">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Disconnected</span>
+        </div>
+        <div class="header-right">
+            <button class="header-btn" onclick="toggleContext()">
+                <span>Context</span>
+            </button>
+            <button class="header-btn primary" id="connectBtn" onclick="connect()">
+                <span>Connect</span>
+            </button>
+        </div>
     </div>
 
-    <script>
-        const templates = ''' + json.dumps(APP_TEMPLATES) + ''';
-        let isTyping = false;
+    <div class="main-container">
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-title">Connection</div>
+                <select class="host-selector" id="hostSelect">
+                    <option value="192.168.8.197">rpi1 - Control Plane (192.168.8.197)</option>
+                    <option value="192.168.8.198">rpi2 (192.168.8.198)</option>
+                    <option value="192.168.8.199">rpi3 (192.168.8.199)</option>
+                    <option value="192.168.8.200">rpi4 (192.168.8.200)</option>
+                    <option value="192.168.8.201">rpi5 (192.168.8.201)</option>
+                    <option value="192.168.8.202">rpi6 (192.168.8.202)</option>
+                    <option value="192.168.8.203">rpi7 (192.168.8.203)</option>
+                    <option value="192.168.8.204">rpi8 (192.168.8.204)</option>
+                    <option value="192.168.8.205">rpi9 (192.168.8.205)</option>
+                    <option value="192.168.8.206">rpi10 (192.168.8.206)</option>
+                    <option value="192.168.8.207">rpi11 (192.168.8.207)</option>
+                    <option value="192.168.8.208">rpi12 (192.168.8.208)</option>
+                </select>
+            </div>
 
-        function renderTemplates() {
-            const grid = document.getElementById('templateGrid');
-            const icons = {
-                'todo-list': '&#9989;',
-                'timer-app': '&#9201;',
-                'notes-app': '&#128221;',
-                'calculator': '&#128290;',
-                'weather-app': '&#127780;',
-                'pomodoro': '&#127813;',
-                'json-viewer': '&#128196;',
-                'markdown-editor': '&#9998;',
-                'dashboard': '&#128202;',
-                'chat-app': '&#128172;'
-            };
-
-            grid.innerHTML = Object.entries(templates).map(([id, t]) => `
-                <div class="template-card" onclick="selectTemplate('${id}')">
-                    <div class="template-header">
-                        <div class="template-icon">${icons[id] || '&#128230;'}</div>
-                        <span class="template-name">${t.name}</span>
-                    </div>
-                    <div class="template-desc">${t.description}</div>
-                    <span class="template-category">${t.category}</span>
+            <div class="sidebar-section">
+                <div class="sidebar-title">Quick Commands</div>
+                <div class="quick-commands">
+                    <button class="quick-cmd" onclick="runQuickCmd('kubectl get pods -n holm')">
+                        <span class="icon">K</span>
+                        <span class="label">Get Pods</span>
+                    </button>
+                    <button class="quick-cmd" onclick="runQuickCmd('kubectl get deployments -n holm')">
+                        <span class="icon">D</span>
+                        <span class="label">Get Deployments</span>
+                    </button>
+                    <button class="quick-cmd" onclick="runQuickCmd('kubectl get svc -n holm')">
+                        <span class="icon">S</span>
+                        <span class="label">Get Services</span>
+                    </button>
+                    <button class="quick-cmd" onclick="runQuickCmd('kubectl get nodes -o wide')">
+                        <span class="icon">N</span>
+                        <span class="label">Get Nodes</span>
+                    </button>
+                    <button class="quick-cmd" onclick="runQuickCmd('buildah images')">
+                        <span class="icon">I</span>
+                        <span class="label">List Images</span>
+                    </button>
+                    <button class="quick-cmd" onclick="runQuickCmd('df -h')">
+                        <span class="icon">F</span>
+                        <span class="label">Disk Usage</span>
+                    </button>
+                    <button class="quick-cmd" onclick="runQuickCmd('free -h')">
+                        <span class="icon">M</span>
+                        <span class="label">Memory Usage</span>
+                    </button>
+                    <button class="quick-cmd" onclick="runQuickCmd('top -bn1 | head -20')">
+                        <span class="icon">T</span>
+                        <span class="label">Top Processes</span>
+                    </button>
                 </div>
-            `).join('');
+            </div>
 
-            document.getElementById('templateCount').textContent = Object.keys(templates).length;
+            <div class="context-panel" id="contextPanel">
+                <div class="sidebar-title">HolmOS Context</div>
+                <div class="context-content" id="contextContent"></div>
+            </div>
+        </div>
+
+        <div class="terminal-area">
+            <div class="terminal-header">
+                <div class="terminal-tabs">
+                    <div class="terminal-tab active" id="terminalTab">
+                        <span>Terminal</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="terminal-output" id="terminalOutput">
+                <div class="welcome-screen" id="welcomeScreen">
+                    <div class="welcome-logo">CT</div>
+                    <div class="welcome-title">Claude Terminal</div>
+                    <div class="welcome-subtitle">
+                        SSH terminal for HolmOS cluster development.
+                        Connect to any node and execute commands with
+                        built-in context about the development workflow.
+                    </div>
+                    <div class="welcome-actions">
+                        <button class="header-btn primary" onclick="connect()">Connect to Cluster</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <span class="input-prompt">$</span>
+                        <input type="text" class="command-input" id="commandInput"
+                            placeholder="Enter command..." autocomplete="off"
+                            onkeydown="handleKeydown(event)" disabled>
+                    </div>
+                    <button class="send-btn" id="sendBtn" onclick="sendCommand()" disabled>
+                        Run
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        let sessionId = null;
+        let isConnected = false;
+        let commandHistory = [];
+        let historyIndex = -1;
+
+        // HolmOS Context (loaded from server)
+        const holmosContext = `''' + HOLMOS_CONTEXT.replace('`', '\\`').replace("'", "\\'") + '''`;
+
+        // Initialize context panel
+        document.getElementById('contextContent').innerHTML = formatMarkdown(holmosContext);
+
+        function formatMarkdown(text) {
+            return text
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                .replace(/```([\\s\\S]*?)```/g, '<pre><code>$1</code></pre>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')
+                .replace(/\\n/g, '<br>');
         }
 
-        function selectTemplate(id) {
-            document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
-            event.target.closest('.template-card').classList.add('selected');
-
-            const template = templates[id];
-            document.getElementById('chatInput').value = `Build me a ${template.name.toLowerCase()}`;
-            document.getElementById('chatInput').focus();
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
         }
 
-        function quickMessage(text) {
-            document.getElementById('chatInput').value = text;
-            sendMessage();
+        function updateConnectionStatus(status, text) {
+            const dot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const connectBtn = document.getElementById('connectBtn');
+
+            dot.className = 'status-dot ' + status;
+            statusText.textContent = text;
+
+            if (status === 'connected') {
+                connectBtn.textContent = 'Disconnect';
+                connectBtn.classList.remove('primary');
+            } else {
+                connectBtn.textContent = 'Connect';
+                connectBtn.classList.add('primary');
+            }
         }
 
-        function addMessage(content, isUser = false) {
-            const messages = document.getElementById('chatMessages');
-            const div = document.createElement('div');
-            div.className = `message ${isUser ? 'user' : 'merchant'}`;
+        async function connect() {
+            if (isConnected) {
+                disconnect();
+                return;
+            }
 
-            const header = isUser ? 'You' : 'Merchant';
-            div.innerHTML = `
-                <div class="message-header">${header}</div>
-                <div class="message-content">${escapeHtml(content).replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>').replace(/\\n/g, '<br>')}</div>
-            `;
-
-            messages.appendChild(div);
-            messages.scrollTop = messages.scrollHeight;
-        }
-
-        function showTyping() {
-            if (isTyping) return;
-            isTyping = true;
-
-            const messages = document.getElementById('chatMessages');
-            const div = document.createElement('div');
-            div.id = 'typingIndicator';
-            div.className = 'typing-indicator';
-            div.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
-            messages.appendChild(div);
-            messages.scrollTop = messages.scrollHeight;
-        }
-
-        function hideTyping() {
-            isTyping = false;
-            const indicator = document.getElementById('typingIndicator');
-            if (indicator) indicator.remove();
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function showBuildToast(buildId, appName) {
-            const toast = document.getElementById('buildToast');
-            document.getElementById('buildInfo').textContent = `${appName} - ${buildId}`;
-            toast.classList.add('show');
-            setTimeout(() => toast.classList.remove('show'), 5000);
-        }
-
-        async function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            if (!message) return;
-
-            addMessage(message, true);
-            input.value = '';
-
-            const sendBtn = document.getElementById('sendBtn');
-            sendBtn.disabled = true;
-            showTyping();
+            const host = document.getElementById('hostSelect').value;
+            updateConnectionStatus('connecting', 'Connecting...');
 
             try {
-                const response = await fetch('/chat', {
+                const response = await fetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message })
+                    body: JSON.stringify({ host })
                 });
 
                 const data = await response.json();
-                hideTyping();
 
-                addMessage(data.response || 'No response');
+                if (data.success) {
+                    sessionId = data.session_id;
+                    isConnected = true;
+                    updateConnectionStatus('connected', 'Connected to ' + host);
 
-                if (data.build_id) {
-                    showBuildToast(data.build_id, data.app_name || 'App');
+                    // Hide welcome, show terminal
+                    document.getElementById('welcomeScreen').style.display = 'none';
+                    document.getElementById('commandInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    document.getElementById('commandInput').focus();
+
+                    addOutput('Connected to ' + host, 'system');
+                    addOutput('Type commands below. Use quick commands in sidebar for common operations.', 'system');
+
+                    showToast('Connected to ' + host, 'success');
+                } else {
+                    updateConnectionStatus('', 'Connection failed');
+                    showToast(data.error || 'Connection failed', 'error');
                 }
             } catch (error) {
-                hideTyping();
-                addMessage('Apologies, something went wrong! Please try again.');
+                updateConnectionStatus('', 'Connection error');
+                showToast('Connection error: ' + error.message, 'error');
+            }
+        }
+
+        function disconnect() {
+            if (sessionId) {
+                fetch('/api/disconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId })
+                });
             }
 
-            sendBtn.disabled = false;
-            input.focus();
+            sessionId = null;
+            isConnected = false;
+            updateConnectionStatus('', 'Disconnected');
+            document.getElementById('commandInput').disabled = true;
+            document.getElementById('sendBtn').disabled = true;
+            addOutput('Disconnected', 'system');
+            showToast('Disconnected', 'info');
+        }
+
+        async function sendCommand() {
+            const input = document.getElementById('commandInput');
+            const command = input.value.trim();
+
+            if (!command || !isConnected) return;
+
+            // Add to history
+            commandHistory.push(command);
+            historyIndex = commandHistory.length;
+
+            addOutput(command, 'command');
+            input.value = '';
+
+            try {
+                const response = await fetch('/api/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        command: command
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    if (data.output) {
+                        addOutput(data.output, 'output');
+                    }
+                    if (data.error_output) {
+                        addOutput(data.error_output, 'error');
+                    }
+                } else {
+                    addOutput('Error: ' + (data.error || 'Command execution failed'), 'error');
+                }
+            } catch (error) {
+                addOutput('Error: ' + error.message, 'error');
+            }
+        }
+
+        function runQuickCmd(cmd) {
+            if (!isConnected) {
+                showToast('Connect to a host first', 'error');
+                return;
+            }
+
+            document.getElementById('commandInput').value = cmd;
+            sendCommand();
+        }
+
+        function addOutput(text, type) {
+            const output = document.getElementById('terminalOutput');
+            const line = document.createElement('div');
+            line.className = 'output-line ' + type;
+            line.textContent = text;
+            output.appendChild(line);
+            output.scrollTop = output.scrollHeight;
         }
 
         function handleKeydown(event) {
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (event.key === 'Enter') {
+                sendCommand();
+            } else if (event.key === 'ArrowUp') {
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    document.getElementById('commandInput').value = commandHistory[historyIndex] || '';
+                }
                 event.preventDefault();
-                sendMessage();
+            } else if (event.key === 'ArrowDown') {
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    document.getElementById('commandInput').value = commandHistory[historyIndex] || '';
+                } else {
+                    historyIndex = commandHistory.length;
+                    document.getElementById('commandInput').value = '';
+                }
+                event.preventDefault();
             }
         }
 
-        // Auto-resize textarea
-        document.getElementById('chatInput').addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-        });
+        function toggleContext() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.style.display = sidebar.style.display === 'none' ? 'flex' : 'none';
+        }
 
-        // Initialize
-        renderTemplates();
+        // Auto-reconnect on page load if session exists
+        window.addEventListener('beforeunload', () => {
+            if (sessionId) {
+                navigator.sendBeacon('/api/disconnect', JSON.stringify({ session_id: sessionId }));
+            }
+        });
     </script>
 </body>
 </html>
 '''
 
-# Routes
+
+class SSHSession:
+    """Manages an SSH session with command execution."""
+
+    def __init__(self, host, port=22, username="rpi1", password=None):
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.client = None
+        self.connected = False
+        self.last_activity = time.time()
+
+    def connect(self):
+        """Establish SSH connection."""
+        try:
+            self.client = paramiko.SSHClient()
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self.client.connect(
+                hostname=self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                timeout=10,
+                allow_agent=False,
+                look_for_keys=False
+            )
+            self.connected = True
+            return True
+        except Exception as e:
+            self.connected = False
+            raise e
+
+    def execute(self, command, timeout=30):
+        """Execute a command and return output."""
+        if not self.connected or not self.client:
+            raise Exception("Not connected")
+
+        self.last_activity = time.time()
+
+        try:
+            stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+
+            # Wait for command to complete
+            exit_status = stdout.channel.recv_exit_status()
+
+            output = stdout.read().decode('utf-8', errors='replace')
+            error_output = stderr.read().decode('utf-8', errors='replace')
+
+            return {
+                "output": output.rstrip(),
+                "error_output": error_output.rstrip(),
+                "exit_status": exit_status
+            }
+        except Exception as e:
+            raise e
+
+    def close(self):
+        """Close the SSH connection."""
+        if self.client:
+            try:
+                self.client.close()
+            except:
+                pass
+        self.connected = False
+
+
+def cleanup_sessions():
+    """Clean up inactive sessions."""
+    while True:
+        time.sleep(60)
+        with session_lock:
+            to_remove = []
+            for sid, session in ssh_sessions.items():
+                if time.time() - session.last_activity > 300:  # 5 min timeout
+                    session.close()
+                    to_remove.append(sid)
+            for sid in to_remove:
+                del ssh_sessions[sid]
+
+
+# Start cleanup thread
+cleanup_thread = threading.Thread(target=cleanup_sessions, daemon=True)
+cleanup_thread.start()
+
+
 @app.route('/')
 def index():
-    """Serve the main UI."""
-    return render_template_string(MERCHANT_UI)
+    """Serve the terminal UI."""
+    return render_template_string(TERMINAL_UI)
+
 
 @app.route('/health')
 def health():
     """Health check endpoint."""
     return jsonify({
         "status": "healthy",
-        "service": "merchant",
-        "agent": MERCHANT_NAME,
+        "service": "claude-terminal",
         "timestamp": datetime.utcnow().isoformat()
     })
 
-@app.route('/capabilities')
-def capabilities():
-    """List Merchant's capabilities."""
-    return jsonify({
-        "agent": MERCHANT_NAME,
-        "avatar": MERCHANT_AVATAR,
-        "color": MERCHANT_COLOR,
-        "catchphrase": MERCHANT_CATCHPHRASE,
-        "personality": MERCHANT_PERSONALITY,
-        "capabilities": [
-            "App discovery",
-            "Installation management",
-            "Version control",
-            "Dependency resolution",
-            "Natural language processing",
-            "Build orchestration"
-        ],
-        "templates": list(APP_TEMPLATES.keys())
-    })
 
-@app.route('/catalog')
-def catalog():
-    """Get available app templates."""
-    templates_list = []
-    for tid, template in APP_TEMPLATES.items():
-        templates_list.append({
-            "id": tid,
-            "name": template["name"],
-            "description": template["description"],
-            "category": template["category"],
-            "keywords": template["keywords"]
+@app.route('/api/connect', methods=['POST'])
+def api_connect():
+    """Create a new SSH session."""
+    data = request.get_json() or {}
+    host = data.get('host', SSH_HOST)
+
+    try:
+        session = SSHSession(
+            host=host,
+            port=SSH_PORT,
+            username=SSH_USER,
+            password=SSH_PASSWORD
+        )
+        session.connect()
+
+        session_id = str(uuid.uuid4())
+
+        with session_lock:
+            ssh_sessions[session_id] = session
+
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "host": host,
+            "message": f"Connected to {host}"
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
         })
 
-    return jsonify({
-        "templates": templates_list,
-        "count": len(templates_list),
-        "merchant_message": get_random_quote("greeting")
-    })
 
-@app.route('/chat', methods=['POST'])
-def chat():
-    """Chat endpoint for interacting with Merchant."""
-    data = request.get_json()
+@app.route('/api/disconnect', methods=['POST'])
+def api_disconnect():
+    """Close an SSH session."""
+    data = request.get_json() or {}
+    session_id = data.get('session_id')
 
-    if not data or "message" not in data:
+    if not session_id:
+        return jsonify({"success": False, "error": "No session ID"})
+
+    with session_lock:
+        session = ssh_sessions.pop(session_id, None)
+        if session:
+            session.close()
+
+    return jsonify({"success": True, "message": "Disconnected"})
+
+
+@app.route('/api/execute', methods=['POST'])
+def api_execute():
+    """Execute a command on the SSH session."""
+    data = request.get_json() or {}
+    session_id = data.get('session_id')
+    command = data.get('command', '').strip()
+
+    if not session_id:
+        return jsonify({"success": False, "error": "No session ID"})
+
+    if not command:
+        return jsonify({"success": False, "error": "No command provided"})
+
+    with session_lock:
+        session = ssh_sessions.get(session_id)
+
+    if not session or not session.connected:
+        return jsonify({"success": False, "error": "Session not found or disconnected"})
+
+    try:
+        result = session.execute(command)
         return jsonify({
-            "error": "Missing 'message' in request body",
-            "response": get_random_quote("error")
-        }), 400
-
-    message = data["message"]
-    session_id = data.get("session_id", str(uuid.uuid4()))
-
-    # Process the message
-    response = process_chat_message(message, session_id)
-
-    return jsonify(response)
-
-@app.route('/build', methods=['POST'])
-def build():
-    """Build an app from a template."""
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "Missing request body"}), 400
-
-    template_id = data.get("template")
-    app_name = data.get("name", template_id)
-
-    if template_id not in APP_TEMPLATES:
+            "success": True,
+            "output": result["output"],
+            "error_output": result["error_output"],
+            "exit_status": result["exit_status"]
+        })
+    except Exception as e:
         return jsonify({
-            "error": f"Unknown template: {template_id}",
-            "available": list(APP_TEMPLATES.keys())
-        }), 400
+            "success": False,
+            "error": str(e)
+        })
 
-    template = APP_TEMPLATES[template_id]
-    sanitized_name = re.sub(r'[^a-z0-9-]', '-', app_name.lower())
 
-    # Generate app code
-    app_code = generate_app_code(template_id, template["name"])
-    dockerfile = generate_dockerfile()
-
-    # Try to trigger build
-    build_result = trigger_forge_build(sanitized_name, app_code, dockerfile)
-
+@app.route('/api/context')
+def api_context():
+    """Get the HolmOS development context."""
     return jsonify({
-        "status": "building" if "error" not in build_result else "error",
-        "app_name": sanitized_name,
-        "template": template_id,
-        "build_result": build_result,
-        "merchant_quote": get_random_quote("building" if "error" not in build_result else "error")
+        "context": HOLMOS_CONTEXT,
+        "sections": [
+            "Building Apps",
+            "Building with Buildah",
+            "Registry",
+            "Deploying to Cluster",
+            "Common Kubernetes Commands",
+            "NodePort Ranges",
+            "Cluster Nodes"
+        ]
     })
 
-@app.route('/ws')
-def websocket_info():
-    """WebSocket endpoint info (for compatibility with chat-hub)."""
+
+@app.route('/api/sessions')
+def api_sessions():
+    """Get active sessions (for debugging)."""
+    with session_lock:
+        sessions_info = []
+        for sid, session in ssh_sessions.items():
+            sessions_info.append({
+                "session_id": sid,
+                "host": session.host,
+                "connected": session.connected,
+                "last_activity": session.last_activity
+            })
+
     return jsonify({
-        "message": "WebSocket connections should use /chat endpoint for HTTP polling",
-        "agent": MERCHANT_NAME
+        "sessions": sessions_info,
+        "count": len(sessions_info)
     })
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 30005))
-    print(f"{MERCHANT_NAME} starting on port {port}")
-    print(f"{MERCHANT_CATCHPHRASE}")
+    port = int(os.environ.get("PORT", 8080))
+    print(f"Claude Terminal starting on port {port}")
+    print(f"Default SSH host: {SSH_HOST}")
     app.run(host="0.0.0.0", port=port)

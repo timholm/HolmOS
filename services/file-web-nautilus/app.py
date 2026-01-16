@@ -207,20 +207,22 @@ def get_icon_for_type(mime_type, name, is_dir):
     return 'file'
 
 def add_to_recent(filepath):
+    base = get_base_path()
+    recent_file = os.path.join(base, '.recent.json')
     try:
         recent = []
-        if os.path.exists(RECENT_FILE):
-            with open(RECENT_FILE, 'r') as f:
+        if os.path.exists(recent_file):
+            with open(recent_file, 'r') as f:
                 recent = json.load(f)
 
         recent = [r for r in recent if r['path'] != filepath]
         recent.insert(0, {
-            'path': filepath.replace(BASE_PATH, ''),
+            'path': filepath.replace(base, ''),
             'timestamp': datetime.now().isoformat()
         })
         recent = recent[:100]
 
-        with open(RECENT_FILE, 'w') as f:
+        with open(recent_file, 'w') as f:
             json.dump(recent, f)
     except:
         pass
@@ -899,11 +901,14 @@ def get_services():
 def get_stats():
     """Get storage statistics"""
     try:
-        stat = os.statvfs(BASE_PATH)
+        base = get_base_path()
+        stat = os.statvfs(base)
         total = stat.f_blocks * stat.f_frsize
         free = stat.f_bfree * stat.f_frsize
         used = total - free
-        
+
+        config = load_storage_config()
+
         return jsonify({
             'total': total,
             'used': used,
@@ -911,8 +916,232 @@ def get_stats():
             'totalFormatted': format_size(total),
             'usedFormatted': format_size(used),
             'freeFormatted': format_size(free),
-            'percentUsed': round((used / total) * 100, 1) if total > 0 else 0
+            'percentUsed': round((used / total) * 100, 1) if total > 0 else 0,
+            'basePath': base,
+            'storageTarget': config.get('storageTarget', {}),
+            'currentMount': config.get('storageTarget', {}).get('hostPath', base)
         })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/storage/config', methods=['GET'])
+def get_storage_config():
+    """Get storage configuration"""
+    try:
+        config = load_storage_config()
+        base = get_base_path()
+
+        # Get storage stats for current path
+        try:
+            stat = os.statvfs(base)
+            total = stat.f_blocks * stat.f_frsize
+            free = stat.f_bfree * stat.f_frsize
+            used = total - free
+            stats = {
+                'total': total,
+                'used': used,
+                'free': free,
+                'totalFormatted': format_size(total),
+                'usedFormatted': format_size(used),
+                'freeFormatted': format_size(free),
+                'percentUsed': round((used / total) * 100, 1) if total > 0 else 0
+            }
+        except:
+            stats = None
+
+        return jsonify({
+            'config': config,
+            'stats': stats,
+            'basePath': base
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/storage/config', methods=['POST'])
+def update_storage_config():
+    """Update storage configuration"""
+    try:
+        data = request.get_json()
+        config = load_storage_config()
+
+        # Update storage target
+        if 'storageTarget' in data:
+            config['storageTarget'] = data['storageTarget']
+
+        # Update base path
+        if 'basePath' in data:
+            new_path = data['basePath']
+            # Validate path exists or can be created
+            if not os.path.exists(new_path):
+                try:
+                    os.makedirs(new_path, exist_ok=True)
+                except Exception as e:
+                    return jsonify({'error': f'Cannot create path: {e}'}), 400
+            config['basePath'] = new_path
+
+        # Update mount paths
+        if 'mountPaths' in data:
+            config['mountPaths'] = data['mountPaths']
+
+        if save_storage_config(config):
+            # Reinitialize paths
+            global PATHS, TRASH_PATH, RECENT_FILE, FAVORITES_FILE, THUMBNAIL_CACHE, BOOKMARKS_FILE
+            PATHS = init_paths()
+            TRASH_PATH = PATHS['trash']
+            RECENT_FILE = PATHS['recent']
+            FAVORITES_FILE = PATHS['favorites']
+            THUMBNAIL_CACHE = PATHS['thumbnails']
+            BOOKMARKS_FILE = PATHS['bookmarks']
+
+            # Ensure directories exist
+            os.makedirs(TRASH_PATH, exist_ok=True)
+            os.makedirs(THUMBNAIL_CACHE, exist_ok=True)
+
+            return jsonify({'success': True, 'config': config})
+        else:
+            return jsonify({'error': 'Failed to save configuration'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/storage/mounts', methods=['GET'])
+def get_available_mounts():
+    """Get available mount points"""
+    try:
+        config = load_storage_config()
+        mounts = config.get('mountPaths', [])
+
+        # Check which mounts are accessible
+        for mount in mounts:
+            path = mount.get('path', '')
+            mount['accessible'] = os.path.exists(path) and os.access(path, os.R_OK)
+            if mount['accessible']:
+                try:
+                    stat = os.statvfs(path)
+                    total = stat.f_blocks * stat.f_frsize
+                    free = stat.f_bfree * stat.f_frsize
+                    used = total - free
+                    mount['stats'] = {
+                        'total': total,
+                        'used': used,
+                        'free': free,
+                        'totalFormatted': format_size(total),
+                        'usedFormatted': format_size(used),
+                        'freeFormatted': format_size(free),
+                        'percentUsed': round((used / total) * 100, 1) if total > 0 else 0
+                    }
+                except:
+                    mount['stats'] = None
+            else:
+                mount['stats'] = None
+
+        return jsonify({
+            'mounts': mounts,
+            'currentPath': get_base_path()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/storage/mounts', methods=['POST'])
+def add_mount_path():
+    """Add a new mount path"""
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        path = data.get('path')
+        node = data.get('node', '')
+
+        if not name or not path:
+            return jsonify({'error': 'Name and path are required'}), 400
+
+        config = load_storage_config()
+        mounts = config.get('mountPaths', [])
+
+        # Check if path already exists
+        if any(m['path'] == path for m in mounts):
+            return jsonify({'error': 'Mount path already exists'}), 400
+
+        mounts.append({
+            'name': name,
+            'path': path,
+            'node': node,
+            'default': False
+        })
+
+        config['mountPaths'] = mounts
+
+        if save_storage_config(config):
+            return jsonify({'success': True, 'mounts': mounts})
+        else:
+            return jsonify({'error': 'Failed to save configuration'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/storage/mounts', methods=['DELETE'])
+def remove_mount_path():
+    """Remove a mount path"""
+    try:
+        path = request.args.get('path')
+        if not path:
+            return jsonify({'error': 'Path is required'}), 400
+
+        config = load_storage_config()
+        mounts = config.get('mountPaths', [])
+
+        # Don't allow removing the default mount
+        mount = next((m for m in mounts if m['path'] == path), None)
+        if mount and mount.get('default'):
+            return jsonify({'error': 'Cannot remove default mount path'}), 400
+
+        config['mountPaths'] = [m for m in mounts if m['path'] != path]
+
+        if save_storage_config(config):
+            return jsonify({'success': True, 'mounts': config['mountPaths']})
+        else:
+            return jsonify({'error': 'Failed to save configuration'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/storage/switch', methods=['POST'])
+def switch_mount():
+    """Switch to a different mount path"""
+    try:
+        data = request.get_json()
+        path = data.get('path')
+
+        if not path:
+            return jsonify({'error': 'Path is required'}), 400
+
+        # Verify path exists
+        if not os.path.exists(path):
+            return jsonify({'error': 'Path does not exist'}), 400
+
+        config = load_storage_config()
+        config['basePath'] = path
+
+        # Update storage target
+        config['storageTarget']['hostPath'] = path
+
+        # Update default in mount paths
+        for mount in config.get('mountPaths', []):
+            mount['default'] = mount['path'] == path
+
+        if save_storage_config(config):
+            # Reinitialize paths
+            global PATHS, TRASH_PATH, RECENT_FILE, FAVORITES_FILE, THUMBNAIL_CACHE, BOOKMARKS_FILE
+            PATHS = init_paths()
+            TRASH_PATH = PATHS['trash']
+            RECENT_FILE = PATHS['recent']
+            FAVORITES_FILE = PATHS['favorites']
+            THUMBNAIL_CACHE = PATHS['thumbnails']
+            BOOKMARKS_FILE = PATHS['bookmarks']
+
+            # Ensure directories exist
+            os.makedirs(TRASH_PATH, exist_ok=True)
+            os.makedirs(THUMBNAIL_CACHE, exist_ok=True)
+
+            return jsonify({'success': True, 'basePath': path})
+        else:
+            return jsonify({'error': 'Failed to save configuration'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

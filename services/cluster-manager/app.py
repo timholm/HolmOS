@@ -1033,31 +1033,71 @@ def get_dashboard_html():
         }
 
         async function fetchNodes() {
+            const endpoint = '/api/v1/nodes';
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
             try {
-                const res = await fetch('/api/v1/nodes');
+                const res = await fetch(endpoint, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status + ': ' + res.statusText);
+                }
+
                 const data = await res.json();
                 if (data.success) {
                     nodes = data.data;
                     renderNodes();
                     updateHeaderStats();
                     updateTerminalSelect();
+                } else {
+                    throw new Error(data.error || 'API returned success=false');
                 }
             } catch (err) {
+                clearTimeout(timeoutId);
                 console.error('Failed to fetch nodes:', err);
-                showToast('Failed to fetch nodes', 'error');
+
+                let errorMsg = err.message;
+                if (err.name === 'AbortError') {
+                    errorMsg = 'Request timed out after 10 seconds';
+                }
+
+                // Show error in the grid with diagnostics
+                const grid = document.getElementById('nodesGrid');
+                grid.innerHTML = '<div class="error-state" style="padding:40px;text-align:center;background:#2d1f1f;border-radius:12px;border:1px solid #fc8181;">' +
+                    '<div style="font-size:40px;margin-bottom:16px;">&#9888;</div>' +
+                    '<div style="font-size:18px;font-weight:600;color:#fc8181;margin-bottom:12px;">Failed to Load Nodes</div>' +
+                    '<div style="color:#e2e8f0;margin-bottom:16px;">' + errorMsg + '</div>' +
+                    '<div style="font-size:12px;color:#718096;margin-bottom:20px;">Endpoint: ' + endpoint + '<br>Time: ' + new Date().toLocaleTimeString() + '</div>' +
+                    '<button onclick="fetchNodes()" class="action-btn primary" style="margin:0 auto;">&#8635; Retry</button>' +
+                '</div>';
+
+                showToast('Failed to fetch nodes: ' + errorMsg, 'error');
             }
         }
 
         async function fetchHealth() {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
             try {
-                const res = await fetch('/api/v1/health');
+                const res = await fetch('/api/v1/health', { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status);
+                }
+
                 const data = await res.json();
                 if (data.success) {
                     healthData = data.data;
                     updateHeaderStats();
                 }
             } catch (err) {
+                clearTimeout(timeoutId);
                 console.error('Failed to fetch health:', err);
+                // Don't show toast for health - it's a background operation
             }
         }
 
@@ -1085,7 +1125,11 @@ def get_dashboard_html():
         function renderNodes() {
             const grid = document.getElementById('nodesGrid');
             if (nodes.length === 0) {
-                grid.innerHTML = '<div class="loading">No nodes found</div>';
+                grid.innerHTML = '<div class="error-state" style="padding:40px;text-align:center;background:#2d3748;border-radius:12px;">' +
+                    '<div style="font-size:40px;margin-bottom:16px;">&#128421;</div>' +
+                    '<div style="font-size:16px;color:#a0aec0;margin-bottom:16px;">No nodes found in cluster</div>' +
+                    '<div style="font-size:12px;color:#718096;">Expected 13 nodes (rpi-1 through rpi-12 + openmediavault)</div>' +
+                '</div>';
                 return;
             }
 
@@ -1468,12 +1512,26 @@ def get_dashboard_html():
             document.getElementById('confirmModal').classList.remove('open');
         }
 
-        function refreshNodes() {
-            document.getElementById('nodesGrid').innerHTML = '<div class="loading"><div class="loading-spinner"></div>Loading nodes...</div>';
-            fetch('/api/v1/nodes/refresh', { method: 'POST' })
-                .then(() => fetchNodes())
-                .catch(() => fetchNodes());
+        async function refreshNodes() {
+            document.getElementById('nodesGrid').innerHTML = '<div class="loading"><div class="loading-spinner"></div>Refreshing nodes...</div>';
             showToast('Refreshing node status...', 'info');
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+            try {
+                const res = await fetch('/api/v1/nodes/refresh', {
+                    method: 'POST',
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                await fetchNodes();
+            } catch (err) {
+                clearTimeout(timeoutId);
+                const errorMsg = err.name === 'AbortError' ? 'Refresh timed out after 10 seconds' : err.message;
+                showToast('Refresh failed: ' + errorMsg, 'error');
+                await fetchNodes(); // Try to show cached data
+            }
         }
 
         // Close modal on overlay click

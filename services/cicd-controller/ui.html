@@ -332,7 +332,10 @@
             <div class="card">
                 <div class="card-header">
                     <span class="card-title">Pipelines</span>
-                    <button class="btn btn-primary" onclick="showCreatePipeline()">+ New Pipeline</button>
+                    <div class="actions">
+                        <button class="btn btn-secondary" onclick="showQuickBuild()">Quick Build</button>
+                        <button class="btn btn-primary" onclick="showCreatePipeline()">+ New Pipeline</button>
+                    </div>
                 </div>
                 <table>
                     <thead>
@@ -462,11 +465,35 @@
         </div>
     </div>
 
+    <!-- Quick Build Modal -->
+    <div class="modal-backdrop" id="quick-build-modal">
+        <div class="modal">
+            <h2>Quick Build</h2>
+            <form id="quick-build-form">
+                <div class="form-group">
+                    <label>Repository Name</label>
+                    <input type="text" name="repo" required placeholder="my-app (name in holm-git)">
+                </div>
+                <div class="form-group">
+                    <label>Branch</label>
+                    <input type="text" name="branch" value="main" placeholder="main">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeQuickBuildModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Start Build</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Logs Modal -->
     <div class="modal-backdrop" id="logs-modal">
-        <div class="modal" style="width: 800px;">
-            <h2>Build Logs</h2>
-            <div class="log-viewer" id="log-content">
+        <div class="modal" style="width: 900px; max-width: 95vw;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2>Build Logs</h2>
+                <button class="btn btn-secondary" onclick="if(currentExecId) refreshLogs(currentExecId)">Refresh</button>
+            </div>
+            <div class="log-viewer" id="log-content" style="max-height: 60vh; min-height: 300px;">
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="closeLogsModal()">Close</button>
@@ -686,6 +713,57 @@
             }
         });
 
+        function showQuickBuild() {
+            document.getElementById('quick-build-modal').classList.add('active');
+        }
+
+        function closeQuickBuildModal() {
+            document.getElementById('quick-build-modal').classList.remove('active');
+        }
+
+        document.getElementById('quick-build-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const repo = form.repo.value;
+            const branch = form.branch.value || 'main';
+
+            try {
+                // Queue a build directly
+                const resp = await fetch(API_BASE + '/api/queue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        repo: repo,
+                        branch: branch,
+                        pipeline: 'quick-build'
+                    })
+                });
+
+                const result = await resp.json();
+                closeQuickBuildModal();
+                form.reset();
+
+                // Switch to executions tab and auto-refresh
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                document.querySelector('[data-tab="executions"]').classList.add('active');
+                document.getElementById('executions').classList.add('active');
+
+                // Wait a moment and then show logs for the new execution
+                setTimeout(async () => {
+                    await loadExecutions();
+                    // Find the latest execution and open its logs
+                    if (executions && executions.length > 0) {
+                        viewLogs(executions[0].id);
+                    }
+                }, 2000);
+
+                alert('Build queued! Opening logs...');
+            } catch (e) {
+                alert('Failed to queue build: ' + e.message);
+            }
+        });
+
         async function triggerPipeline(id) {
             try {
                 await fetch(API_BASE + `/api/pipelines/${id}/trigger`, {
@@ -729,39 +807,117 @@
             }
         }
 
+        let logRefreshInterval = null;
+        let currentExecId = null;
+
         async function viewLogs(execId) {
+            currentExecId = execId;
+            document.getElementById('logs-modal').classList.add('active');
+            await refreshLogs(execId);
+
+            // Auto-refresh logs every 2 seconds for running builds
+            if (logRefreshInterval) {
+                clearInterval(logRefreshInterval);
+            }
+            logRefreshInterval = setInterval(() => {
+                refreshLogs(execId);
+            }, 2000);
+        }
+
+        async function refreshLogs(execId) {
             try {
                 const resp = await fetch(API_BASE + `/api/executions/${execId}/logs`);
                 const logs = await resp.json();
 
+                // Also get execution status
+                const execResp = await fetch(API_BASE + `/api/executions/${execId}`);
+                const execution = await execResp.json();
+
                 const content = document.getElementById('log-content');
                 let html = '';
 
-                for (const [id, log] of Object.entries(logs)) {
-                    html += `<div style="margin-bottom: 15px;"><strong>Stage: ${log.stage}</strong></div>`;
-                    log.lines.forEach(line => {
-                        const time = new Date(line.timestamp).toLocaleTimeString();
-                        html += `<div class="log-line">
-                            <span class="log-time">${time}</span>
-                            <span class="log-level ${line.level}">[${line.level.toUpperCase()}]</span>
-                            <span class="log-message">${line.message}</span>
-                        </div>`;
+                // Show execution header
+                html += `<div style="margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px;">`;
+                html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
+                html += `<strong>${execution.pipelineName || 'Build'} #${execution.buildNumber || '?'}</strong>`;
+                html += `<span class="status-pill status-${execution.status} ${execution.status === 'running' ? 'running-indicator' : ''}">${execution.status}</span>`;
+                html += `</div>`;
+                html += `<div style="font-size: 12px; color: #71717a; margin-top: 5px;">`;
+                html += `${execution.repo || '-'} / ${execution.branch || '-'} @ ${(execution.commit || '-').substring(0, 7)}`;
+                html += `</div>`;
+                html += `</div>`;
+
+                // Show stages
+                if (execution.stages && execution.stages.length > 0) {
+                    html += `<div style="margin-bottom: 15px;">`;
+                    execution.stages.forEach(stage => {
+                        const statusIcon = stage.status === 'success' ? '&#10003;' :
+                                          stage.status === 'failed' ? '&#10007;' :
+                                          stage.status === 'running' ? '&#9679;' : '&#9675;';
+                        const statusColor = stage.status === 'success' ? '#22c55e' :
+                                           stage.status === 'failed' ? '#ef4444' :
+                                           stage.status === 'running' ? '#60a5fa' : '#71717a';
+                        html += `<span style="display: inline-block; margin-right: 15px; color: ${statusColor};">`;
+                        html += `<span style="margin-right: 5px;">${statusIcon}</span>${stage.name}`;
+                        if (stage.duration) html += ` (${stage.duration.toFixed(1)}s)`;
+                        html += `</span>`;
                     });
+                    html += `</div>`;
                 }
 
-                if (!html) {
-                    html = '<div style="color: #71717a;">No logs available</div>';
+                // Show logs
+                const logEntries = Object.entries(logs);
+                if (logEntries.length === 0) {
+                    html += '<div style="color: #71717a; padding: 20px; text-align: center;">Waiting for logs...</div>';
+                } else {
+                    for (const [id, log] of logEntries) {
+                        html += `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1);">`;
+                        html += `<div style="color: #a1a1aa; font-size: 12px; margin-bottom: 8px; text-transform: uppercase;">${log.stage}</div>`;
+                        log.lines.forEach(line => {
+                            const time = new Date(line.timestamp).toLocaleTimeString();
+                            const levelClass = line.level === 'error' ? 'error' : line.level === 'warn' ? 'warn' : 'info';
+                            html += `<div class="log-line">
+                                <span class="log-time">${time}</span>
+                                <span class="log-level ${levelClass}">[${line.level.toUpperCase().padEnd(5)}]</span>
+                                <span class="log-message">${escapeHtml(line.message)}</span>
+                            </div>`;
+                        });
+                        html += `</div>`;
+                    }
                 }
 
                 content.innerHTML = html;
-                document.getElementById('logs-modal').classList.add('active');
+
+                // Auto-scroll to bottom if near bottom
+                if (content.scrollHeight - content.scrollTop < content.clientHeight + 100) {
+                    content.scrollTop = content.scrollHeight;
+                }
+
+                // Stop auto-refresh if build is done
+                if (execution.status !== 'running') {
+                    if (logRefreshInterval) {
+                        clearInterval(logRefreshInterval);
+                        logRefreshInterval = null;
+                    }
+                }
             } catch (e) {
-                alert('Failed to load logs');
+                console.error('Failed to load logs:', e);
             }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         function closeLogsModal() {
             document.getElementById('logs-modal').classList.remove('active');
+            if (logRefreshInterval) {
+                clearInterval(logRefreshInterval);
+                logRefreshInterval = null;
+            }
+            currentExecId = null;
         }
 
         // Initial load

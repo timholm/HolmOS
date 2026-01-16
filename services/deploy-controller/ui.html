@@ -131,12 +131,22 @@
         .scale-controls { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
         .scale-btn { width: 24px; height: 24px; border-radius: 4px; border: none; cursor: pointer; font-weight: bold; }
         .scale-btn:hover { filter: brightness(1.2); }
+
+        /* Notification animation */
+        @keyframes fadeIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+
+        /* Live indicator */
+        .live-indicator { display: inline-flex; align-items: center; gap: 0.5rem; }
+        .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ctp-green); animation: pulse 1.5s infinite; }
+
+        /* Apply manifest textarea */
+        #apply-manifest { font-size: 0.85rem; line-height: 1.4; tab-size: 2; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Deploy Controller v4</h1>
+            <h1>Deploy Controller v4 <span class="live-indicator" id="live-indicator" style="font-size:0.75rem;color:var(--ctp-subtext0)"><span class="live-dot"></span>Live</span></h1>
             <span class="status-badge status-Running" id="health-badge">Healthy</span>
         </header>
         <div class="stats" id="stats">
@@ -149,8 +159,10 @@
         <div class="tabs">
             <button class="tab active" data-tab="deployments">Deployments</button>
             <button class="tab" data-tab="health-checks">Health Checks</button>
+            <button class="tab" data-tab="logs">Logs</button>
             <button class="tab" data-tab="history">History</button>
             <button class="tab" data-tab="events">Events</button>
+            <button class="tab" data-tab="apply">Apply Manifest</button>
             <button class="tab" data-tab="registry">Registry</button>
             <button class="tab" data-tab="webhooks">Webhooks</button>
             <button class="tab" data-tab="images">Images</button>
@@ -163,6 +175,25 @@
             <div class="events-list" id="health-list"></div>
         </div>
 
+        <div id="logs" class="panel">
+            <div class="form-group" style="margin-bottom:1rem;display:flex;gap:1rem;align-items:flex-end">
+                <div>
+                    <label class="form-label">Deployment</label>
+                    <select id="logs-select" class="form-input" style="width:300px">
+                        <option value="">Select deployment...</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" onclick="loadLogs()">Refresh Logs</button>
+                <label class="form-checkbox">
+                    <input type="checkbox" id="logs-auto-refresh">
+                    <span>Auto-refresh</span>
+                </label>
+            </div>
+            <div id="logs-content" style="background:var(--ctp-crust);border-radius:8px;padding:1rem;font-family:monospace;font-size:0.8rem;max-height:600px;overflow-y:auto;">
+                <p style="color:var(--ctp-subtext0)">Select a deployment to view logs</p>
+            </div>
+        </div>
+
         <div id="history" class="panel">
             <div class="form-group" style="margin-bottom:1rem">
                 <select id="history-select" class="form-input" style="max-width:300px">
@@ -173,6 +204,32 @@
         </div>
 
         <div id="events" class="panel"><div class="events-list" id="events-list"></div></div>
+
+        <div id="apply" class="panel">
+            <div class="card">
+                <h2 class="modal-title">Apply Kubernetes Manifest</h2>
+                <p style="color:var(--ctp-subtext0);margin-bottom:1rem">Paste your YAML manifest below. Supports Deployment, Service, and ConfigMap resources.</p>
+                <div class="form-group">
+                    <label class="form-label">Namespace (default for resources without namespace)</label>
+                    <input type="text" id="apply-namespace" class="form-input" value="holm" style="max-width:200px">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">YAML Manifest</label>
+                    <textarea id="apply-manifest" class="form-input" style="font-family:monospace;min-height:300px;resize:vertical" placeholder="apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 1
+  ..."></textarea>
+                </div>
+                <div style="display:flex;gap:1rem;align-items:center">
+                    <button class="btn btn-primary" onclick="applyManifest()">Apply</button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('apply-manifest').value=''">Clear</button>
+                </div>
+                <div id="apply-results" style="margin-top:1rem"></div>
+            </div>
+        </div>
 
         <div id="registry" class="panel">
             <div class="webhook-info">
@@ -305,6 +362,8 @@
 
     <script>
         let deps=[], evts=[], hooks=[], imgs=[], rules={}, regEvts=[], history={}, healthChecks={};
+        let eventSource = null;
+        let logsAutoRefreshInterval = null;
 
         document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
             document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
@@ -312,6 +371,59 @@
             t.classList.add('active');
             document.getElementById(t.dataset.tab).classList.add('active');
         });
+
+        // Setup Server-Sent Events for real-time updates
+        function setupSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            eventSource = new EventSource('/api/events/stream');
+
+            eventSource.addEventListener('deployments', (e) => {
+                try {
+                    const newDeps = JSON.parse(e.data);
+                    if (JSON.stringify(newDeps) !== JSON.stringify(deps)) {
+                        deps = newDeps;
+                        renderDeployments();
+                    }
+                } catch(err) { console.error('SSE deployments error:', err); }
+            });
+
+            eventSource.addEventListener('events', (e) => {
+                try {
+                    const newEvents = JSON.parse(e.data);
+                    if (newEvents.length > 0) {
+                        evts = [...newEvents, ...evts.slice(0, 100 - newEvents.length)];
+                        renderEvents();
+                        showNotification(newEvents[0]);
+                    }
+                } catch(err) { console.error('SSE events error:', err); }
+            });
+
+            eventSource.addEventListener('health-checks', (e) => {
+                try {
+                    healthChecks = JSON.parse(e.data);
+                    renderHealthChecks();
+                    document.getElementById('health-count').textContent = Object.keys(healthChecks).length;
+                } catch(err) { console.error('SSE health-checks error:', err); }
+            });
+
+            eventSource.onerror = () => {
+                console.log('SSE connection lost, reconnecting...');
+                setTimeout(setupSSE, 3000);
+            };
+        }
+
+        function showNotification(event) {
+            if (event.status === 'success' || event.status === 'failed') {
+                const color = event.status === 'success' ? 'var(--ctp-green)' : 'var(--ctp-red)';
+                const notif = document.createElement('div');
+                notif.style.cssText = `position:fixed;top:20px;right:20px;background:${color};color:var(--ctp-crust);padding:1rem;border-radius:8px;z-index:9999;animation:fadeIn 0.3s`;
+                notif.innerHTML = `<strong>${event.deployment}</strong>: ${event.status}<br><small>${event.message}</small>`;
+                document.body.appendChild(notif);
+                setTimeout(() => notif.remove(), 5000);
+            }
+        }
 
         async function load(){
             try{
@@ -588,8 +700,245 @@
             }
         }
 
+        // Logs functionality
+        async function loadLogs() {
+            const deployment = document.getElementById('logs-select').value;
+            if (!deployment) {
+                document.getElementById('logs-content').innerHTML = '<p style="color:var(--ctp-subtext0)">Select a deployment to view logs</p>';
+                return;
+            }
+
+            document.getElementById('logs-content').innerHTML = '<p style="color:var(--ctp-yellow)">Loading logs...</p>';
+
+            try {
+                const [logsRes, eventsRes] = await Promise.all([
+                    fetch(`/api/logs?deployment=${deployment}&namespace=holm`).then(r => r.json()),
+                    fetch(`/api/k8s-events?deployment=${deployment}&namespace=holm`).then(r => r.json())
+                ]);
+
+                let html = '';
+
+                // Show k8s events first
+                if (eventsRes.events && eventsRes.events.length > 0) {
+                    html += '<div style="margin-bottom:1rem;padding:0.75rem;background:var(--ctp-surface0);border-radius:8px">';
+                    html += '<strong style="color:var(--ctp-mauve)">Kubernetes Events</strong><br>';
+                    for (const e of eventsRes.events.slice(0, 10)) {
+                        const color = e.type === 'Warning' ? 'var(--ctp-red)' : e.type === 'Normal' ? 'var(--ctp-green)' : 'var(--ctp-text)';
+                        html += `<div style="margin-top:0.5rem;padding:0.25rem;border-left:2px solid ${color};padding-left:0.5rem">`;
+                        html += `<span style="color:${color}">${e.type}</span> <span style="color:var(--ctp-yellow)">${e.reason}</span>`;
+                        html += `<br><span style="color:var(--ctp-subtext0)">${e.message}</span>`;
+                        html += `<br><span style="font-size:0.7rem;color:var(--ctp-subtext0)">${new Date(e.lastTimestamp).toLocaleString()} (${e.count}x)</span>`;
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                }
+
+                // Show pod logs
+                if (logsRes.pods && logsRes.pods.length > 0) {
+                    for (const pod of logsRes.pods) {
+                        const readyColor = pod.ready ? 'var(--ctp-green)' : 'var(--ctp-red)';
+                        html += `<div style="margin-bottom:1rem">`;
+                        html += `<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem">`;
+                        html += `<span style="width:10px;height:10px;border-radius:50%;background:${readyColor}"></span>`;
+                        html += `<strong style="color:var(--ctp-mauve)">${pod.podName}</strong>`;
+                        html += `<span style="color:var(--ctp-subtext0)">(${pod.container})</span>`;
+                        html += `<span class="status-badge status-${pod.ready ? 'Running' : 'NotReady'}">${pod.phase}</span>`;
+                        html += `</div>`;
+                        html += `<pre style="background:var(--ctp-mantle);padding:0.75rem;border-radius:4px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto">${escapeHtml(pod.logs || 'No logs available')}</pre>`;
+                        html += `</div>`;
+                    }
+                } else {
+                    html += '<p style="color:var(--ctp-subtext0)">No pods found for this deployment</p>';
+                }
+
+                document.getElementById('logs-content').innerHTML = html;
+            } catch (err) {
+                document.getElementById('logs-content').innerHTML = `<p style="color:var(--ctp-red)">Error loading logs: ${err.message}</p>`;
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        document.getElementById('logs-auto-refresh').onchange = (e) => {
+            if (e.target.checked) {
+                logsAutoRefreshInterval = setInterval(loadLogs, 5000);
+            } else {
+                clearInterval(logsAutoRefreshInterval);
+            }
+        };
+
+        // Apply manifest functionality
+        async function applyManifest() {
+            const manifest = document.getElementById('apply-manifest').value.trim();
+            const namespace = document.getElementById('apply-namespace').value.trim() || 'holm';
+
+            if (!manifest) {
+                document.getElementById('apply-results').innerHTML = '<p style="color:var(--ctp-red)">Please enter a manifest</p>';
+                return;
+            }
+
+            document.getElementById('apply-results').innerHTML = '<p style="color:var(--ctp-yellow)">Applying manifest...</p>';
+
+            try {
+                const res = await fetch('/api/apply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({manifest, namespace})
+                });
+                const data = await res.json();
+
+                let html = '<div style="margin-top:1rem">';
+                for (const result of data.results || []) {
+                    const color = result.status === 'error' ? 'var(--ctp-red)' :
+                                  result.status === 'created' ? 'var(--ctp-green)' :
+                                  result.status === 'updated' ? 'var(--ctp-blue)' : 'var(--ctp-yellow)';
+                    html += `<div style="padding:0.5rem;margin-bottom:0.5rem;background:var(--ctp-surface0);border-radius:4px;border-left:3px solid ${color}">`;
+                    html += `<strong style="color:${color}">${result.status.toUpperCase()}</strong> `;
+                    html += `<span style="color:var(--ctp-mauve)">${result.kind}/${result.name}</span>`;
+                    html += `<br><span style="color:var(--ctp-subtext0)">${result.message}</span>`;
+                    html += '</div>';
+                }
+                html += '</div>';
+                document.getElementById('apply-results').innerHTML = html;
+
+                // Refresh deployments
+                load();
+            } catch (err) {
+                document.getElementById('apply-results').innerHTML = `<p style="color:var(--ctp-red)">Error: ${err.message}</p>`;
+            }
+        }
+
+        // Restart deployment
+        async function restartDeployment(name) {
+            if (!confirm(`Restart deployment ${name}? This will trigger a rolling update.`)) return;
+
+            try {
+                const res = await fetch('/api/restart', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({deployment: name, namespace: 'holm'})
+                });
+                const data = await res.json();
+                if (data.status === 'restarted') {
+                    showNotification({deployment: name, status: 'deploying', message: 'Restart initiated'});
+                }
+                load();
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
+
+        // Separate render functions for SSE updates
+        function renderDeployments() {
+            document.getElementById('total-deps').textContent = deps.length;
+            document.getElementById('running-count').textContent = deps.filter(d => d.status === 'Running').length;
+
+            document.getElementById('deps-grid').innerHTML = deps.map(d => {
+                const hc = healthChecks[`${d.namespace}/${d.name}`];
+                const healthStatus = hc ? hc.status : 'none';
+                return `
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">${d.name}${d.autoDeploy ? '<span class="auto-badge">AUTO</span>' : ''}</span>
+                        <span class="status-badge status-${d.status}">${d.status}</span>
+                    </div>
+                    <div class="card-body">
+                        <p>${d.ready}/${d.replicas} ready
+                            ${hc ? `<span class="health-indicator"><span class="health-dot ${healthStatus}"></span>${healthStatus}</span>` : ''}
+                        </p>
+                        <div class="image-tag">${d.image || 'No image'}</div>
+                        ${hc && hc.status === 'checking' ? `
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                            </div>
+                        ` : ''}
+                        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+                            <button class="btn btn-primary btn-sm" onclick="showDeployModal('${d.name}','${d.image || ''}')">Deploy</button>
+                            <button class="btn btn-success btn-sm" onclick="restartDeployment('${d.name}')">Restart</button>
+                            <button class="btn btn-danger btn-sm" onclick="showRollbackModal('${d.name}')">Rollback</button>
+                            <button class="btn btn-secondary btn-sm" onclick="showScaleModal('${d.name}',${d.replicas})">Scale</button>
+                            <button class="btn btn-secondary btn-sm" onclick="viewLogs('${d.name}')">Logs</button>
+                            <button class="btn btn-secondary btn-sm" onclick="showHistory('${d.name}')">History</button>
+                        </div>
+                    </div>
+                </div>
+            `}).join('');
+
+            // Update logs select
+            const logsSelect = document.getElementById('logs-select');
+            const currentLogsVal = logsSelect.value;
+            logsSelect.innerHTML = '<option value="">Select deployment...</option>' + deps.map(d => `<option value="${d.name}">${d.name}</option>`).join('');
+            logsSelect.value = currentLogsVal;
+        }
+
+        function renderEvents() {
+            document.getElementById('events-count').textContent = evts.length;
+            document.getElementById('events-list').innerHTML = evts.map(e => `
+                <div class="event-item ${e.status}">
+                    <div class="event-header">
+                        <span class="event-title">${e.deployment}</span>
+                        <span class="event-time">${new Date(e.timestamp).toLocaleString()}</span>
+                    </div>
+                    <div>
+                        <span class="status-badge status-${e.status}">${e.status}</span>
+                        <span class="trigger-badge ${e.trigger}">${e.trigger}</span>
+                        ${e.duration ? `<span style="font-size:0.75rem;color:var(--ctp-subtext0);margin-left:0.5rem">${e.duration.toFixed(2)}s</span>` : ''}
+                    </div>
+                    <p style="margin-top:0.5rem">${e.message}</p>
+                    <div class="image-tag">${e.image}</div>
+                    ${e.oldImage ? `<div class="image-tag" style="opacity:0.6">Previous: ${e.oldImage}</div>` : ''}
+                </div>
+            `).join('') || '<p style="color:var(--ctp-subtext0)">No events yet</p>';
+        }
+
+        function renderHealthChecks() {
+            const hcList = Object.entries(healthChecks);
+            document.getElementById('health-list').innerHTML = hcList.length ? hcList.map(([key, hc]) => `
+                <div class="health-check-card ${hc.status}">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <div>
+                            <strong>${hc.deployment}</strong>
+                            <span class="status-badge status-${hc.status}" style="margin-left:0.5rem">${hc.status}</span>
+                        </div>
+                        <span style="font-size:0.75rem;color:var(--ctp-subtext0)">${hc.attempts}/${hc.maxAttempts} checks</span>
+                    </div>
+                    <p style="margin-top:0.5rem;font-size:0.85rem">${hc.message}</p>
+                    <div class="image-tag">${hc.image}</div>
+                    ${hc.podStatuses && hc.podStatuses.length ? `
+                        <div style="margin-top:0.5rem">
+                            ${hc.podStatuses.map(p => `
+                                <span class="pod-status ${p.ready ? 'ready' : 'not-ready'}">${p.name.split('-').slice(-2).join('-')} (${p.phase})</span>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    <div class="progress-bar">
+                        <div class="progress-fill ${hc.status}" style="width: ${hc.status === 'healthy' ? 100 : hc.status === 'failed' ? 100 : Math.min(100, (hc.attempts / hc.maxAttempts) * 100)}%"></div>
+                    </div>
+                    <div style="font-size:0.7rem;color:var(--ctp-subtext0);margin-top:0.5rem">
+                        Started: ${new Date(hc.startTime).toLocaleString()} | Last check: ${new Date(hc.lastCheck).toLocaleString()}
+                    </div>
+                </div>
+            `).join('') : '<p style="color:var(--ctp-subtext0)">No active health checks</p>';
+        }
+
+        function viewLogs(name) {
+            document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+            document.querySelector('[data-tab="logs"]').classList.add('active');
+            document.getElementById('logs').classList.add('active');
+            document.getElementById('logs-select').value = name;
+            loadLogs();
+        }
+
+        // Setup SSE on page load
+        setupSSE();
+
         load();
-        setInterval(load,5000);
+        setInterval(load, 5000);
     </script>
 </body>
 </html>

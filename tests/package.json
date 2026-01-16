@@ -5,6 +5,9 @@
   "main": "runner.js",
   "scripts": {
     "test": "node runner.js",
+    "test:smoke": "node smoke/smoke-tests.js",
+    "test:smoke:quick": "node smoke/smoke-tests.js --quick",
+    "test:smoke:degraded": "node smoke/smoke-tests.js --degraded",
     "test:e2e": "node runner.js --suite e2e",
     "test:integration": "node runner.js --suite integration",
     "test:load": "node runner.js --suite load",

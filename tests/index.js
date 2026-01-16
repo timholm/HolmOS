@@ -29,6 +29,15 @@ const {
     runAllLoadTests,
 } = require('./load/load-test');
 
+// Smoke Tests
+const {
+    runSmokeTests,
+    quickCheck,
+    CRITICAL_SERVICES,
+    IMPORTANT_SERVICES,
+    CLUSTER_SERVICES,
+} = require('./smoke/smoke-tests');
+
 // Report Generator
 const { ReportGenerator } = require('./report-generator');
 
@@ -70,6 +79,15 @@ module.exports = {
         runNotificationHubLoad,
         runFileServiceLoad,
         runAllLoadTests,
+    },
+
+    // Smoke Tests
+    smoke: {
+        runSmokeTests,
+        quickCheck,
+        CRITICAL_SERVICES,
+        IMPORTANT_SERVICES,
+        CLUSTER_SERVICES,
     },
 
     // Report Generator

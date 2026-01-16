@@ -471,6 +471,11 @@ const chatUIHTML = `<!DOCTYPE html>
     ::-webkit-scrollbar-thumb { background: #45475a; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #585b70; }
 
+    /* Jump to latest button */
+    .jump-to-latest { display: none; position: fixed; bottom: 90px; right: 20px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 25px; padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: all 0.2s; }
+    .jump-to-latest:hover { background: #b4befe; transform: scale(1.05); }
+    .jump-to-latest.visible { display: flex; align-items: center; gap: 6px; }
+
     /* Mobile hamburger menu */
     .hamburger { display: none; background: none; border: none; color: #cdd6f4; font-size: 24px; padding: 8px 12px; cursor: pointer; position: fixed; top: 12px; left: 12px; z-index: 1001; border-radius: 8px; }
     .hamburger:hover { background: #313244; }
@@ -542,6 +547,7 @@ const chatUIHTML = `<!DOCTYPE html>
         <div class="agents-grid" id="agentsGrid"></div>
       </div>
       <div id="messages" style="display: none;"></div>
+      <button class="jump-to-latest" id="jumpToLatest" onclick="jumpToLatest()">&#8595; New Messages</button>
       <div class="input-area" id="inputArea" style="display: none;">
         <input type="text" id="input" placeholder="Type a message..." autocomplete="off">
         <button id="send">Send</button>
@@ -738,6 +744,19 @@ const chatUIHTML = `<!DOCTYPE html>
       document.getElementById('sidebar').classList.toggle('open');
       document.getElementById('sidebarOverlay').classList.toggle('open');
     }
+
+    function jumpToLatest() {
+      const messages = document.getElementById('messages');
+      messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
+      document.getElementById('jumpToLatest').classList.remove('visible');
+    }
+
+    // Track scroll position for jump to latest button
+    document.getElementById('messages').addEventListener('scroll', function() {
+      const messages = this;
+      const isNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
+      document.getElementById('jumpToLatest').classList.toggle('visible', !isNearBottom);
+    });
 
     function closeSidebar() {
       document.getElementById('sidebar').classList.remove('open');

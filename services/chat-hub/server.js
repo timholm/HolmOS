@@ -470,11 +470,47 @@ const chatUIHTML = `<!DOCTYPE html>
     ::-webkit-scrollbar-track { background: #181825; }
     ::-webkit-scrollbar-thumb { background: #45475a; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #585b70; }
+
+    /* Mobile hamburger menu */
+    .hamburger { display: none; background: none; border: none; color: #cdd6f4; font-size: 24px; padding: 8px 12px; cursor: pointer; position: fixed; top: 12px; left: 12px; z-index: 1001; border-radius: 8px; }
+    .hamburger:hover { background: #313244; }
+    .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 999; }
+
+    @media (max-width: 768px) {
+      .hamburger { display: block; }
+      .sidebar { position: fixed; left: -300px; top: 0; bottom: 0; z-index: 1000; transition: left 0.3s ease; width: 280px; }
+      .sidebar.open { left: 0; }
+      .sidebar-overlay.open { display: block; }
+      .main { margin-left: 0; }
+      .chat-header { padding: 12px 12px 12px 56px; }
+      .current-agent-avatar { width: 40px; height: 40px; font-size: 18px; }
+      .current-agent-info h2 { font-size: 16px; }
+      .current-agent-info p { font-size: 11px; }
+      .current-agent-info .personality { display: none; }
+      .header-actions { gap: 4px; }
+      .btn { padding: 8px 12px; font-size: 12px; }
+      #messages { padding: 12px; }
+      .message { max-width: 90%; }
+      .input-area { padding: 12px; position: fixed; bottom: 0; left: 0; right: 0; background: #181825; border-top: 1px solid #313244; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+      #input { padding: 12px 16px; font-size: 16px; }
+      #send { padding: 12px 20px; font-size: 14px; }
+      .welcome { padding: 20px; padding-top: 60px; }
+      .welcome h2 { font-size: 24px; }
+      .welcome p { font-size: 14px; }
+      .agents-grid { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .agent-card { padding: 14px; }
+      .agent-card .agent-avatar { width: 36px; height: 36px; font-size: 14px; }
+      .agent-card .agent-name { font-size: 11px; }
+      .agent-card .agent-desc { font-size: 9px; }
+      #messages { padding-bottom: 80px; }
+    }
   </style>
 </head>
 <body>
+  <button class="hamburger" id="hamburger" onclick="toggleSidebar()">&#9776;</button>
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
   <div class="container">
-    <div class="sidebar">
+    <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <h1>Chat Hub</h1>
         <p>12 AI Agents at your service</p>
@@ -697,6 +733,25 @@ const chatUIHTML = `<!DOCTYPE html>
     document.getElementById('input').addEventListener('keypress', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
+
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+      document.getElementById('sidebarOverlay').classList.toggle('open');
+    }
+
+    function closeSidebar() {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebarOverlay').classList.remove('open');
+    }
+
+    // Close sidebar on agent select (mobile)
+    const originalSelectAgent = selectAgent;
+    selectAgent = function(key) {
+      originalSelectAgent(key);
+      if (window.innerWidth <= 768) {
+        closeSidebar();
+      }
+    };
 
     connect();
     renderAgentsList();

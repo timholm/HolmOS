@@ -336,7 +336,8 @@ UI_HTML = '''<!DOCTYPE html>
             --ctp-mantle: #181825; --ctp-crust: #11111b;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'SF Pro Display', system-ui, sans-serif; background: var(--ctp-base); color: var(--ctp-text); min-height: 100vh; }
+        html, body { height: 100%; overflow-x: hidden; }
+        body { font-family: 'SF Pro Display', system-ui, sans-serif; background: var(--ctp-base); color: var(--ctp-text); min-height: 100vh; overflow-x: hidden; }
         
         .header { background: linear-gradient(135deg, var(--ctp-surface0) 0%, var(--ctp-mantle) 100%); padding: 25px 30px; border-bottom: 2px solid var(--ctp-pink); }
         .header-content { max-width: 1400px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
@@ -429,6 +430,37 @@ UI_HTML = '''<!DOCTYPE html>
         
         .empty-state { text-align: center; padding: 40px; color: var(--ctp-subtext0); }
         .empty-icon { font-size: 3em; margin-bottom: 15px; }
+
+        /* Mobile bottom tabs */
+        .bottom-tabs { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--ctp-mantle); border-top: 1px solid var(--ctp-surface1); padding: 8px 0; padding-bottom: max(8px, env(safe-area-inset-bottom)); z-index: 100; }
+        .bottom-tabs-inner { display: flex; justify-content: space-around; }
+        .bottom-tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 16px; border: none; background: none; color: var(--ctp-subtext0); font-size: 10px; cursor: pointer; }
+        .bottom-tab.active { color: var(--ctp-pink); }
+        .bottom-tab-icon { font-size: 22px; }
+
+        @media (max-width: 768px) {
+            .header { padding: 15px; }
+            .header-content { flex-direction: column; gap: 10px; }
+            .logo h1 { font-size: 1.4em; }
+            .status-indicators { flex-wrap: wrap; justify-content: center; }
+            .main { grid-template-columns: 1fr; padding: 15px; padding-bottom: 90px; gap: 15px; }
+            .tabs { display: none; }
+            .bottom-tabs { display: block; }
+            .section { padding: 15px; border-radius: 12px; }
+            .section-title { font-size: 1.1em; margin-bottom: 12px; }
+            .app-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; max-height: none; overflow: visible; }
+            .app-card { padding: 15px; }
+            .app-icon { font-size: 1.5em; }
+            .app-name { font-size: 0.9em; }
+            .chat-container { height: auto; min-height: 300px; }
+            .chat-messages { height: 250px; }
+            .chat-input textarea { min-height: 45px; font-size: 16px; }
+            .template-grid { grid-template-columns: 1fr; }
+            .right-panel { display: none; }
+            .right-panel.active { display: block; }
+            .left-panel { display: block; }
+            .left-panel.hidden { display: none; }
+        }
     </style>
 </head>
 <body>
@@ -499,6 +531,27 @@ UI_HTML = '''<!DOCTYPE html>
         </div>
     </main>
     
+    <nav class="bottom-tabs">
+        <div class="bottom-tabs-inner">
+            <button class="bottom-tab active" onclick="mobileTab('apps')">
+                <span class="bottom-tab-icon">📦</span>
+                <span>Apps</span>
+            </button>
+            <button class="bottom-tab" onclick="mobileTab('templates')">
+                <span class="bottom-tab-icon">📋</span>
+                <span>Templates</span>
+            </button>
+            <button class="bottom-tab" onclick="mobileTab('builds')">
+                <span class="bottom-tab-icon">🔨</span>
+                <span>Builds</span>
+            </button>
+            <button class="bottom-tab" onclick="mobileTab('chat')">
+                <span class="bottom-tab-icon">🤖</span>
+                <span>Chat</span>
+            </button>
+        </div>
+    </nav>
+
     <div class="modal" id="deployModal">
         <div class="modal-content">
             <h3>Deploy App</h3>
@@ -723,6 +776,32 @@ UI_HTML = '''<!DOCTYPE html>
                 alert('Deploy failed: ' + e.message);
             }
             closeModal();
+        }
+
+        function mobileTab(tab) {
+            document.querySelectorAll('.bottom-tab').forEach(t => t.classList.remove('active'));
+            event.target.closest('.bottom-tab').classList.add('active');
+
+            const leftPanel = document.querySelector('.left-panel');
+            const rightPanel = document.querySelector('.right-panel');
+
+            if (tab === 'chat') {
+                leftPanel.classList.add('hidden');
+                rightPanel.classList.add('active');
+            } else {
+                leftPanel.classList.remove('hidden');
+                rightPanel.classList.remove('active');
+
+                document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+                if (tab === 'apps') {
+                    document.getElementById('installedTab').style.display = 'block';
+                } else if (tab === 'templates') {
+                    document.getElementById('templatesTab').style.display = 'block';
+                } else if (tab === 'builds') {
+                    document.getElementById('buildsTab').style.display = 'block';
+                    loadBuilds();
+                }
+            }
         }
     </script>
 </body>

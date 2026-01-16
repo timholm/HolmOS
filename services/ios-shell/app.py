@@ -103,22 +103,10 @@ INDEX_HTML = '''<!DOCTYPE html>
             padding-top: var(--safe-top); padding-bottom: var(--safe-bottom);
         }
 
-        /* Status Bar */
-        .status-bar {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 8px 24px; font-size: 14px; font-weight: 600;
-            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-            padding-top: calc(var(--safe-top) + 8px);
-            background: linear-gradient(to bottom, rgba(30,30,46,0.9) 0%, transparent 100%);
-        }
-        .status-time { font-weight: 600; }
-        .status-icons { display: flex; gap: 4px; align-items: center; }
-        .status-icons svg { width: 18px; height: 18px; fill: var(--text); }
-
         /* Pages Container */
         .pages-wrapper {
             flex: 1; display: flex; overflow: hidden;
-            padding-top: 44px; padding-bottom: 120px;
+            padding-top: var(--safe-top); padding-bottom: 120px;
         }
         .pages {
             display: flex; transition: transform 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
@@ -243,15 +231,6 @@ INDEX_HTML = '''<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <div class="status-bar">
-        <span class="status-time" id="time">9:41</span>
-        <span style="font-size: 12px; opacity: 0.7;">HolmOS</span>
-        <div class="status-icons">
-            <svg viewBox="0 0 24 24"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>
-            <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="12" rx="2"/><path d="M22 11v4" stroke-width="2"/></svg>
-        </div>
-    </div>
-
     <div class="pages-wrapper" id="pagesWrapper">
         <div class="pages" id="pages"></div>
     </div>
@@ -437,16 +416,7 @@ INDEX_HTML = '''<!DOCTYPE html>
             }
         });
 
-        // Update time
-        function updateTime() {
-            const now = new Date();
-            document.getElementById('time').textContent =
-                now.getHours() + ':' + now.getMinutes().toString().padStart(2, '0');
-        }
-
         render();
-        updateTime();
-        setInterval(updateTime, 1000);
     </script>
 </body>
 </html>'''

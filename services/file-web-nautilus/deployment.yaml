@@ -1,4 +1,18 @@
 ---
+# PersistentVolumeClaim for Files storage - uses node13's 16TB SSDs via Longhorn
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: holmos-files-storage
+  namespace: holm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 500Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +33,16 @@ spec:
     spec:
       affinity:
         nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - rpi-13
+                      - rpi13
+                      - node13
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
@@ -33,6 +57,12 @@ spec:
         ports:
         - containerPort: 8080
           name: http
+        env:
+        - name: FILE_BASE_PATH
+          value: "/data"
+        volumeMounts:
+        - name: files-storage
+          mountPath: /data
         resources:
           requests:
             memory: "64Mi"
@@ -52,6 +82,10 @@ spec:
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
+      volumes:
+      - name: files-storage
+        persistentVolumeClaim:
+          claimName: holmos-files-storage
 ---
 apiVersion: v1
 kind: Service

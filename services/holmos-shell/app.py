@@ -325,33 +325,34 @@ INDEX_HTML = '''<!DOCTYPE html>
     <script>
         const HOST = "''' + CLUSTER_HOST + '''";
         
-        // iPhone-style apps (main grid)
+        // iPhone-style apps (main grid) - All microservices
         const mainApps = [
-            { id: "calculator", name: "Calculator", icon: "&#128425;", class: "app-calculator", port: 30007 },
-            { id: "notes", name: "Notes", icon: "&#128221;", class: "app-notes", port: 30010 },
-            { id: "video", name: "Video", icon: "&#127916;", class: "app-video", port: null },
-            { id: "clock", name: "Clock", icon: "&#9200;", class: "app-clock", port: 30007 },
-            { id: "maps", name: "Maps", icon: "&#128506;", class: "app-maps", port: null },
-            { id: "photos", name: "Photos", icon: "&#127749;", class: "app-photos", port: null },
-            { id: "browser", name: "Browser", icon: "&#127760;", class: "app-browser", port: null },
-            { id: "music", name: "Music", icon: "&#127925;", class: "app-music", port: null },
-            { id: "mail", name: "Mail", icon: "&#9993;", class: "app-mail", port: null },
-            { id: "reminders", name: "Reminders", icon: "&#128204;", class: "app-reminders", port: null },
-            { id: "contacts", name: "Contacts", icon: "&#128100;", class: "app-contacts", port: null },
-            { id: "cluster", name: "Nova", icon: "&#127760;", class: "app-cluster", port: 30004 },
-            { id: "metrics", name: "Pulse", icon: "&#128202;", class: "app-metrics", port: 30006 },
-            { id: "registry", name: "Harbor", icon: "&#128051;", class: "app-registry", port: 31750 }
+            { id: "calculator", name: "Calculator", icon: "&#128425;", class: "app-calculator", port: 30010 },
+            { id: "clock", name: "Clock", icon: "&#9200;", class: "app-clock", port: 30011 },
+            { id: "audiobook", name: "Audiobook", icon: "&#127911;", class: "app-music", port: 30700 },
+            { id: "terminal", name: "Terminal", icon: "&#128187;", class: "app-browser", port: 30800 },
+            { id: "vault", name: "Vault", icon: "&#128274;", class: "app-contacts", port: 30870 },
+            { id: "scribe", name: "Scribe", icon: "&#128221;", class: "app-notes", port: 30860 },
+            { id: "backup", name: "Backup", icon: "&#128190;", class: "app-photos", port: 30850 },
+            { id: "cluster", name: "Nova", icon: "&#129302;", class: "app-cluster", port: 30004 },
+            { id: "metrics", name: "Metrics", icon: "&#128202;", class: "app-metrics", port: 30950 },
+            { id: "registry", name: "Registry", icon: "&#128230;", class: "app-registry", port: 31750 },
+            { id: "test", name: "Tests", icon: "&#9989;", class: "app-reminders", port: 30900 },
+            { id: "auth", name: "Auth", icon: "&#128272;", class: "app-mail", port: 30100 }
         ];
-        
+
         // Developer tools section
         const devApps = [
-            { id: "git", name: "HolmGit", icon: "&#128256;", class: "app-git", port: 30009 }
+            { id: "git", name: "HolmGit", icon: "&#128736;", class: "app-git", port: 30500 },
+            { id: "cicd", name: "CI/CD", icon: "&#9881;", class: "app-settings", port: 30020 },
+            { id: "deploy", name: "Deploy", icon: "&#128640;", class: "app-store", port: 30021 },
+            { id: "k8s", name: "Cluster", icon: "&#9096;", class: "app-cluster", port: 30502 }
         ];
-        
+
         // Dock apps: Chat Hub, App Store, Settings, Files
         const dockApps = [
-            { id: "chat", name: "Chat Hub", icon: "&#128172;", class: "app-chat", port: 30003 },
-            { id: "store", name: "App Store", icon: "&#128242;", class: "app-store", port: 30002 },
+            { id: "chat", name: "Chat", icon: "&#128172;", class: "app-chat", port: 30003 },
+            { id: "store", name: "Store", icon: "&#128242;", class: "app-store", port: 30002 },
             { id: "settings", name: "Settings", icon: "&#9881;", class: "app-settings", port: 30600 },
             { id: "files", name: "Files", icon: "&#128193;", class: "app-files", port: 30088 }
         ];

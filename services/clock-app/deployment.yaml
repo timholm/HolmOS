@@ -28,10 +28,10 @@ spec:
                 - openmediavault
       containers:
       - name: clock-app
-        image: 192.168.8.197:30500/clock-app:latest
+        image: localhost:31500/clock-app:latest
         imagePullPolicy: Always
         ports:
-        - containerPort: 8080
+        - containerPort: 30007
           name: http
         resources:
           requests:
@@ -43,13 +43,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 30007
           initialDelaySeconds: 10
           periodSeconds: 30
         readinessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 30007
           initialDelaySeconds: 5
           periodSeconds: 10
 ---
@@ -64,7 +64,7 @@ spec:
   type: NodePort
   ports:
   - port: 80
-    targetPort: 8080
+    targetPort: 30007
     nodePort: 30011
     protocol: TCP
     name: http

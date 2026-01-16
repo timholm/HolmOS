@@ -1,4 +1,32 @@
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scribe
+  namespace: holm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scribe-log-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "namespaces"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scribe-log-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scribe-log-reader
+subjects:
+- kind: ServiceAccount
+  name: scribe
+  namespace: holm
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,6 +45,7 @@ spec:
       labels:
         app: scribe
     spec:
+      serviceAccountName: scribe
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

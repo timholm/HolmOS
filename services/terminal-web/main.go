@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/creack/pty"
@@ -27,6 +28,87 @@ var content embed.FS
 var db *sql.DB
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Session management
+type Session struct {
+	ID          string    `json:"id"`
+	Type        string    `json:"type"` // ssh, kubectl, local, pod
+	HostName    string    `json:"host_name"`
+	HostID      int       `json:"host_id,omitempty"`
+	PodName     string    `json:"pod_name,omitempty"`
+	Namespace   string    `json:"namespace,omitempty"`
+	Container   string    `json:"container,omitempty"`
+	StartedAt   time.Time `json:"started_at"`
+	LastActive  time.Time `json:"last_active"`
+	IsPrivileged bool     `json:"is_privileged"`
+}
+
+type CommandHistory struct {
+	SessionID string    `json:"session_id"`
+	Command   string    `json:"command"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+var (
+	sessions      = make(map[string]*Session)
+	sessionsMutex sync.RWMutex
+	commandHistory = make(map[string][]CommandHistory)
+	historyMutex   sync.RWMutex
+	sessionCounter int
+	counterMutex   sync.Mutex
+)
+
+func generateSessionID() string {
+	counterMutex.Lock()
+	defer counterMutex.Unlock()
+	sessionCounter++
+	return fmt.Sprintf("session-%d-%d", time.Now().Unix(), sessionCounter)
+}
+
+func registerSession(s *Session) {
+	sessionsMutex.Lock()
+	defer sessionsMutex.Unlock()
+	sessions[s.ID] = s
+	log.Printf("Session registered: %s (%s)", s.ID, s.Type)
+}
+
+func unregisterSession(id string) {
+	sessionsMutex.Lock()
+	defer sessionsMutex.Unlock()
+	if s, ok := sessions[id]; ok {
+		log.Printf("Session unregistered: %s (%s)", s.ID, s.Type)
+		delete(sessions, id)
+	}
+}
+
+func updateSessionActivity(id string) {
+	sessionsMutex.Lock()
+	defer sessionsMutex.Unlock()
+	if s, ok := sessions[id]; ok {
+		s.LastActive = time.Now()
+	}
+}
+
+func addCommandToHistory(sessionID, command string) {
+	historyMutex.Lock()
+	defer historyMutex.Unlock()
+
+	entry := CommandHistory{
+		SessionID: sessionID,
+		Command:   command,
+		Timestamp: time.Now(),
+	}
+
+	if _, ok := commandHistory[sessionID]; !ok {
+		commandHistory[sessionID] = []CommandHistory{}
+	}
+
+	// Keep last 1000 commands per session
+	if len(commandHistory[sessionID]) >= 1000 {
+		commandHistory[sessionID] = commandHistory[sessionID][1:]
+	}
+	commandHistory[sessionID] = append(commandHistory[sessionID], entry)
 }
 
 type Host struct {
@@ -157,9 +239,14 @@ func main() {
 	http.HandleFunc("/api/hosts/init", handleInitHosts)
 	http.HandleFunc("/api/themes", handleThemes)
 	http.HandleFunc("/api/exec", handleExec)
+	http.HandleFunc("/api/sessions", handleSessions)
+	http.HandleFunc("/api/sessions/history", handleSessionHistory)
+	http.HandleFunc("/api/pods", handlePods)
+	http.HandleFunc("/api/namespaces", handleNamespaces)
 	http.HandleFunc("/ws/terminal", handleTerminal)
 	http.HandleFunc("/ws/kubectl", handleKubectl)
 	http.HandleFunc("/ws/local", handleLocalShell)
+	http.HandleFunc("/ws/pod", handlePodExec)
 	http.HandleFunc("/health", handleHealth)
 
 	log.Println("Terminal Web listening on :8080")
@@ -178,6 +265,306 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
+}
+
+// handleSessions returns all active terminal sessions
+func handleSessions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	// Handle DELETE to terminate a session
+	if r.Method == "DELETE" {
+		sessionID := r.URL.Query().Get("id")
+		if sessionID == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "session id required",
+			})
+			return
+		}
+		unregisterSession(sessionID)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "session terminated",
+		})
+		return
+	}
+
+	sessionsMutex.RLock()
+	defer sessionsMutex.RUnlock()
+
+	sessionList := make([]*Session, 0, len(sessions))
+	for _, s := range sessions {
+		sessionList = append(sessionList, s)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"sessions": sessionList,
+		"count":    len(sessionList),
+	})
+}
+
+// handleSessionHistory returns command history for a session
+func handleSessionHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	sessionID := r.URL.Query().Get("session_id")
+
+	historyMutex.RLock()
+	defer historyMutex.RUnlock()
+
+	if sessionID != "" {
+		// Return history for specific session
+		history, ok := commandHistory[sessionID]
+		if !ok {
+			history = []CommandHistory{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"history": history,
+		})
+		return
+	}
+
+	// Return all history
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"history": commandHistory,
+	})
+}
+
+// handleNamespaces lists all Kubernetes namespaces
+func handleNamespaces(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}")
+	cmd.Env = getKubeEnv()
+
+	output, err := cmd.Output()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	namespaces := strings.Fields(string(output))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"namespaces": namespaces,
+	})
+}
+
+// handlePods lists pods, optionally filtered by namespace
+func handlePods(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get pods with their containers
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", namespace,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}|{.status.phase}|{range .spec.containers[*]}{.name},{end};{end}")
+	cmd.Env = getKubeEnv()
+
+	output, err := cmd.Output()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	type PodInfo struct {
+		Name       string   `json:"name"`
+		Namespace  string   `json:"namespace"`
+		Status     string   `json:"status"`
+		Containers []string `json:"containers"`
+	}
+
+	var pods []PodInfo
+	podEntries := strings.Split(string(output), ";")
+	for _, entry := range podEntries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.Split(entry, "|")
+		if len(parts) >= 3 {
+			containers := strings.Split(strings.TrimSuffix(parts[2], ","), ",")
+			// Filter out empty strings
+			var cleanContainers []string
+			for _, c := range containers {
+				if c != "" {
+					cleanContainers = append(cleanContainers, c)
+				}
+			}
+			pods = append(pods, PodInfo{
+				Name:       parts[0],
+				Namespace:  namespace,
+				Status:     parts[1],
+				Containers: cleanContainers,
+			})
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"pods":    pods,
+	})
+}
+
+// getKubeEnv returns environment variables needed for kubectl
+func getKubeEnv() []string {
+	env := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin:/sbin",
+		"HOME=/root",
+		"TERM=xterm-256color",
+	}
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "KUBERNETES_") {
+			env = append(env, e)
+		}
+	}
+	return env
+}
+
+// handlePodExec opens an interactive shell to a pod
+func handlePodExec(w http.ResponseWriter, r *http.Request) {
+	namespace := r.URL.Query().Get("namespace")
+	podName := r.URL.Query().Get("pod")
+	container := r.URL.Query().Get("container")
+
+	if namespace == "" {
+		namespace = "default"
+	}
+	if podName == "" {
+		http.Error(w, "pod parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Upgrade to WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	// Create session
+	sessionID := generateSessionID()
+	session := &Session{
+		ID:         sessionID,
+		Type:       "pod",
+		HostName:   fmt.Sprintf("%s/%s", namespace, podName),
+		PodName:    podName,
+		Namespace:  namespace,
+		Container:  container,
+		StartedAt:  time.Now(),
+		LastActive: time.Now(),
+	}
+	registerSession(session)
+	defer unregisterSession(sessionID)
+
+	log.Printf("Pod exec connection: %s/%s (container: %s)", namespace, podName, container)
+
+	// Build kubectl exec command
+	args := []string{"exec", "-it", "-n", namespace, podName}
+	if container != "" {
+		args = append(args, "-c", container)
+	}
+	args = append(args, "--", "/bin/sh", "-c", "exec /bin/bash 2>/dev/null || exec /bin/sh")
+
+	cmd := exec.Command("kubectl", args...)
+	cmd.Env = getKubeEnv()
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte("Failed to exec into pod: "+err.Error()))
+		return
+	}
+	defer ptmx.Close()
+
+	done := make(chan struct{})
+	var inputBuffer bytes.Buffer
+
+	// Read from PTY -> WebSocket
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				n, err := ptmx.Read(buf)
+				if err != nil {
+					return
+				}
+				conn.WriteMessage(websocket.BinaryMessage, buf[:n])
+			}
+		}
+	}()
+
+	// Read from WebSocket -> PTY
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			close(done)
+			cmd.Process.Kill()
+			return
+		}
+
+		updateSessionActivity(sessionID)
+
+		// Handle resize messages
+		if len(msg) > 0 && msg[0] == 1 {
+			if len(msg) >= 5 {
+				cols := int(msg[1])<<8 | int(msg[2])
+				rows := int(msg[3])<<8 | int(msg[4])
+				pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+			}
+			continue
+		}
+
+		// Track command history (on Enter key)
+		for _, b := range msg {
+			if b == '\r' || b == '\n' {
+				cmd := strings.TrimSpace(inputBuffer.String())
+				if cmd != "" {
+					addCommandToHistory(sessionID, cmd)
+				}
+				inputBuffer.Reset()
+			} else if b == 127 || b == 8 { // Backspace
+				if inputBuffer.Len() > 0 {
+					inputBuffer.Truncate(inputBuffer.Len() - 1)
+				}
+			} else if b >= 32 && b < 127 { // Printable characters
+				inputBuffer.WriteByte(b)
+			}
+		}
+
+		ptmx.Write(msg)
+	}
 }
 
 // handleExec executes a command with a 10-second timeout and returns the output
@@ -479,7 +866,20 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	log.Printf("Terminal connection to %s (%s@%s:%d)", h.Name, h.Username, h.Hostname, h.Port)
+	// Create session
+	sessionID := generateSessionID()
+	termSession := &Session{
+		ID:         sessionID,
+		Type:       "ssh",
+		HostName:   h.Name,
+		HostID:     h.ID,
+		StartedAt:  time.Now(),
+		LastActive: time.Now(),
+	}
+	registerSession(termSession)
+	defer unregisterSession(sessionID)
+
+	log.Printf("Terminal connection to %s (%s@%s:%d) [session: %s]", h.Name, h.Username, h.Hostname, h.Port, sessionID)
 
 	// Connect to SSH
 	config := &ssh.ClientConfig{
@@ -507,12 +907,12 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 
-	session, err := client.NewSession()
+	sshSession, err := client.NewSession()
 	if err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte("SSH session error: "+err.Error()))
 		return
 	}
-	defer session.Close()
+	defer sshSession.Close()
 
 	// Set up PTY
 	modes := ssh.TerminalModes{
@@ -521,32 +921,33 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 		ssh.TTY_OP_OSPEED: 14400,
 	}
 
-	if err := session.RequestPty("xterm-256color", 24, 80, modes); err != nil {
+	if err := sshSession.RequestPty("xterm-256color", 24, 80, modes); err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte("PTY error: "+err.Error()))
 		return
 	}
 
-	stdin, err := session.StdinPipe()
+	stdin, err := sshSession.StdinPipe()
 	if err != nil {
 		return
 	}
 
-	stdout, err := session.StdoutPipe()
+	stdout, err := sshSession.StdoutPipe()
 	if err != nil {
 		return
 	}
 
-	stderr, err := session.StderrPipe()
+	stderr, err := sshSession.StderrPipe()
 	if err != nil {
 		return
 	}
 
-	if err := session.Shell(); err != nil {
+	if err := sshSession.Shell(); err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte("Shell error: "+err.Error()))
 		return
 	}
 
 	done := make(chan struct{})
+	var inputBuffer bytes.Buffer
 
 	// Read from SSH stdout -> WebSocket
 	go func() {
@@ -590,15 +991,42 @@ func handleTerminal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		updateSessionActivity(sessionID)
+
 		// Handle resize messages
 		if len(msg) > 0 && msg[0] == 1 {
 			// Resize: [1, cols_high, cols_low, rows_high, rows_low]
 			if len(msg) >= 5 {
 				cols := int(msg[1])<<8 | int(msg[2])
 				rows := int(msg[3])<<8 | int(msg[4])
-				session.WindowChange(rows, cols)
+				sshSession.WindowChange(rows, cols)
 			}
 			continue
+		}
+
+		// Track command history (on Enter key)
+		for _, b := range msg {
+			if b == '\r' || b == '\n' {
+				cmdStr := strings.TrimSpace(inputBuffer.String())
+				if cmdStr != "" {
+					addCommandToHistory(sessionID, cmdStr)
+					// Detect sudo/privilege escalation
+					if strings.HasPrefix(cmdStr, "sudo ") || strings.Contains(cmdStr, "| sudo") {
+						sessionsMutex.Lock()
+						if s, ok := sessions[sessionID]; ok {
+							s.IsPrivileged = true
+						}
+						sessionsMutex.Unlock()
+					}
+				}
+				inputBuffer.Reset()
+			} else if b == 127 || b == 8 { // Backspace
+				if inputBuffer.Len() > 0 {
+					inputBuffer.Truncate(inputBuffer.Len() - 1)
+				}
+			} else if b >= 32 && b < 127 { // Printable characters
+				inputBuffer.WriteByte(b)
+			}
 		}
 
 		stdin.Write(msg)
@@ -614,7 +1042,19 @@ func handleKubectl(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	log.Println("kubectl shell connection")
+	// Create session
+	sessionID := generateSessionID()
+	session := &Session{
+		ID:         sessionID,
+		Type:       "kubectl",
+		HostName:   "cluster",
+		StartedAt:  time.Now(),
+		LastActive: time.Now(),
+	}
+	registerSession(session)
+	defer unregisterSession(sessionID)
+
+	log.Printf("kubectl shell connection (session: %s)", sessionID)
 
 	// Start bash shell for kubectl access
 	// Use bash for better command-line experience, fall back to sh
@@ -648,6 +1088,7 @@ func handleKubectl(w http.ResponseWriter, r *http.Request) {
 	defer ptmx.Close()
 
 	done := make(chan struct{})
+	var inputBuffer bytes.Buffer
 
 	// Read from PTY -> WebSocket
 	go func() {
@@ -675,6 +1116,8 @@ func handleKubectl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		updateSessionActivity(sessionID)
+
 		// Handle resize messages
 		if len(msg) > 0 && msg[0] == 1 {
 			if len(msg) >= 5 {
@@ -683,6 +1126,31 @@ func handleKubectl(w http.ResponseWriter, r *http.Request) {
 				pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 			}
 			continue
+		}
+
+		// Track command history (on Enter key)
+		for _, b := range msg {
+			if b == '\r' || b == '\n' {
+				cmdStr := strings.TrimSpace(inputBuffer.String())
+				if cmdStr != "" {
+					addCommandToHistory(sessionID, cmdStr)
+					// Detect sudo/privilege escalation
+					if strings.HasPrefix(cmdStr, "sudo ") || strings.Contains(cmdStr, "| sudo") {
+						sessionsMutex.Lock()
+						if s, ok := sessions[sessionID]; ok {
+							s.IsPrivileged = true
+						}
+						sessionsMutex.Unlock()
+					}
+				}
+				inputBuffer.Reset()
+			} else if b == 127 || b == 8 { // Backspace
+				if inputBuffer.Len() > 0 {
+					inputBuffer.Truncate(inputBuffer.Len() - 1)
+				}
+			} else if b >= 32 && b < 127 { // Printable characters
+				inputBuffer.WriteByte(b)
+			}
 		}
 
 		ptmx.Write(msg)
@@ -698,7 +1166,19 @@ func handleLocalShell(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	log.Println("local shell connection")
+	// Create session
+	sessionID := generateSessionID()
+	session := &Session{
+		ID:         sessionID,
+		Type:       "local",
+		HostName:   "localhost",
+		StartedAt:  time.Now(),
+		LastActive: time.Now(),
+	}
+	registerSession(session)
+	defer unregisterSession(sessionID)
+
+	log.Printf("local shell connection (session: %s)", sessionID)
 
 	// Start local shell
 	shell := os.Getenv("SHELL")
@@ -717,6 +1197,7 @@ func handleLocalShell(w http.ResponseWriter, r *http.Request) {
 	defer ptmx.Close()
 
 	done := make(chan struct{})
+	var inputBuffer bytes.Buffer
 
 	// Read from PTY -> WebSocket
 	go func() {
@@ -744,6 +1225,8 @@ func handleLocalShell(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		updateSessionActivity(sessionID)
+
 		// Handle resize messages
 		if len(msg) > 0 && msg[0] == 1 {
 			if len(msg) >= 5 {
@@ -752,6 +1235,31 @@ func handleLocalShell(w http.ResponseWriter, r *http.Request) {
 				pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 			}
 			continue
+		}
+
+		// Track command history (on Enter key)
+		for _, b := range msg {
+			if b == '\r' || b == '\n' {
+				cmdStr := strings.TrimSpace(inputBuffer.String())
+				if cmdStr != "" {
+					addCommandToHistory(sessionID, cmdStr)
+					// Detect sudo/privilege escalation
+					if strings.HasPrefix(cmdStr, "sudo ") || strings.Contains(cmdStr, "| sudo") {
+						sessionsMutex.Lock()
+						if s, ok := sessions[sessionID]; ok {
+							s.IsPrivileged = true
+						}
+						sessionsMutex.Unlock()
+					}
+				}
+				inputBuffer.Reset()
+			} else if b == 127 || b == 8 { // Backspace
+				if inputBuffer.Len() > 0 {
+					inputBuffer.Truncate(inputBuffer.Len() - 1)
+				}
+			} else if b >= 32 && b < 127 { // Printable characters
+				inputBuffer.WriteByte(b)
+			}
 		}
 
 		ptmx.Write(msg)

@@ -11,7 +11,7 @@ from collections import defaultdict
 
 app = Flask(__name__)
 
-REGISTRY_URL = "http://10.110.67.87:5000"
+REGISTRY_URL = os.environ.get("REGISTRY_URL", "http://registry.holm.svc.cluster.local:5000")
 MERCHANT_URL = "http://merchant.holm.svc.cluster.local"
 FORGE_URL = "http://forge.holm.svc.cluster.local"
 NAMESPACE = "holm"
@@ -19,12 +19,55 @@ NAMESPACE = "holm"
 # In-memory build tracking
 build_sessions = {}
 
+# Cache for apps list (registry queries are slow)
+_apps_cache = {
+    "data": None,
+    "timestamp": 0,
+    "lock": threading.Lock()
+}
+APPS_CACHE_TTL = 120  # Cache for 2 minutes (registry is slow on Pi cluster)
+
+def apps_cache_warmer():
+    """Background thread to keep apps cache warm."""
+    while True:
+        try:
+            resp = requests.get(f"{REGISTRY_URL}/v2/_catalog", timeout=10)
+            repos = resp.json().get("repositories", [])
+            apps = []
+            icons = ['🚀', '🎯', '💡', '🔧', '📊', '🎨', '🔥', '⚡', '🌟', '🎮', '📱', '🎪', '🎭', '🎬', '🎵']
+            for i, repo in enumerate(repos):
+                try:
+                    tags_resp = requests.get(f"{REGISTRY_URL}/v2/{repo}/tags/list", timeout=5)
+                    tags = tags_resp.json().get("tags", [])
+                except:
+                    tags = []
+                apps.append({
+                    "name": repo,
+                    "icon": icons[i % len(icons)],
+                    "tags": tags[:5] if tags else ["latest"],
+                    "description": f"Container app: {repo}"
+                })
+            with _apps_cache["lock"]:
+                _apps_cache["data"] = {"apps": apps, "count": len(apps), "cached": True}
+                _apps_cache["timestamp"] = time.time()
+            print(f"[AppStore] Cache warmed with {len(apps)} apps")
+        except Exception as e:
+            print(f"[AppStore] Cache warmer error: {e}")
+        time.sleep(60)  # Refresh every 60 seconds
+
 @app.route('/health')
 def health():
     return jsonify({"status": "healthy", "service": "app-store-ai"})
 
 @app.route('/apps')
+@app.route('/api/apps')
 def list_apps():
+    # Check cache first
+    current_time = time.time()
+    with _apps_cache["lock"]:
+        if _apps_cache["data"] and (current_time - _apps_cache["timestamp"]) < APPS_CACHE_TTL:
+            return jsonify(_apps_cache["data"])
+
     try:
         resp = requests.get(f"{REGISTRY_URL}/v2/_catalog", timeout=5)
         repos = resp.json().get("repositories", [])
@@ -42,7 +85,15 @@ def list_apps():
                 "tags": tags[:5] if tags else ["latest"],
                 "description": f"Container app: {repo}"
             })
-        return jsonify({"apps": apps, "count": len(apps)})
+
+        result = {"apps": apps, "count": len(apps), "cached": False, "timestamp": current_time}
+
+        # Update cache
+        with _apps_cache["lock"]:
+            _apps_cache["data"] = {"apps": apps, "count": len(apps), "cached": True}
+            _apps_cache["timestamp"] = current_time
+
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e), "apps": []}), 500
 
@@ -747,4 +798,8 @@ def index():
     return render_template_string(UI_HTML)
 
 if __name__ == '__main__':
+    # Start background cache warmer
+    warmer = threading.Thread(target=apps_cache_warmer, daemon=True)
+    warmer.start()
+    print("[AppStore] Background cache warmer started")
     app.run(host='0.0.0.0', port=8080)

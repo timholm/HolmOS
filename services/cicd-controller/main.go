@@ -3,19 +3,23 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-batchv1 "k8s.io/api/batch/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,16 +28,20 @@ batchv1 "k8s.io/api/batch/v1"
 )
 
 var (
-	registryURL = os.Getenv("REGISTRY_URL")
-	holmGitURL  = os.Getenv("HOLMGIT_URL")
-	port        = os.Getenv("PORT")
-	clientset   *kubernetes.Clientset
+	registryURL      = os.Getenv("REGISTRY_URL")
+	holmGitURL       = os.Getenv("HOLMGIT_URL")
+	port             = os.Getenv("PORT")
+	webhookSecret    = os.Getenv("WEBHOOK_SECRET")
+	maxConcurrent    = getEnvInt("MAX_CONCURRENT_BUILDS", 3)
+	maxQueueSize     = getEnvInt("MAX_QUEUE_SIZE", 100)
+	executionHistory = getEnvInt("EXECUTION_HISTORY_SIZE", 500)
+	clientset        *kubernetes.Clientset
 
 	// Pipeline definitions
 	pipelines   = make(map[string]*Pipeline)
 	pipelinesMu sync.RWMutex
 
-	// Build queue
+	// Build queue with priority support
 	buildQueue   = make([]*BuildJob, 0)
 	buildQueueMu sync.RWMutex
 
@@ -48,7 +56,81 @@ var (
 	// Webhook events
 	webhookEvents   = make([]*WebhookEvent, 0)
 	webhookEventsMu sync.RWMutex
+
+	// SSE subscribers for real-time events
+	sseSubscribers   = make(map[string][]chan *SSEEvent)
+	sseSubscribersMu sync.RWMutex
+
+	// Build statistics cache
+	statsCache     *BuildStats
+	statsCacheMu   sync.RWMutex
+	statsCacheTime time.Time
+
+	// Service start time for uptime tracking
+	serviceStartTime = time.Now()
 )
+
+// getEnvInt gets an integer from environment variable with default
+func getEnvInt(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			return i
+		}
+	}
+	return defaultVal
+}
+
+// SSEEvent represents a Server-Sent Event
+type SSEEvent struct {
+	ID        string                 `json:"id"`
+	Type      string                 `json:"type"`
+	Data      map[string]interface{} `json:"data"`
+	Timestamp time.Time              `json:"timestamp"`
+}
+
+// BuildStats represents aggregated build statistics
+type BuildStats struct {
+	TotalBuilds       int            `json:"totalBuilds"`
+	SuccessfulBuilds  int            `json:"successfulBuilds"`
+	FailedBuilds      int            `json:"failedBuilds"`
+	CancelledBuilds   int            `json:"cancelledBuilds"`
+	RunningBuilds     int            `json:"runningBuilds"`
+	QueuedBuilds      int            `json:"queuedBuilds"`
+	SuccessRate       float64        `json:"successRate"`
+	AvgBuildTime      float64        `json:"avgBuildTime"`
+	MedianBuildTime   float64        `json:"medianBuildTime"`
+	P95BuildTime      float64        `json:"p95BuildTime"`
+	BuildsToday       int            `json:"buildsToday"`
+	BuildsThisWeek    int            `json:"buildsThisWeek"`
+	BuildsByPipeline  map[string]int `json:"buildsByPipeline"`
+	BuildsByStatus    map[string]int `json:"buildsByStatus"`
+	BuildsByBranch    map[string]int `json:"buildsByBranch"`
+	BuildsByAuthor    map[string]int `json:"buildsByAuthor"`
+	RecentTrend       []DailyStats   `json:"recentTrend"`
+	ServiceUptime     float64        `json:"serviceUptime"`
+	LastBuildTime     *time.Time     `json:"lastBuildTime"`
+	LongestBuild      *BuildDuration `json:"longestBuild"`
+	ShortestBuild     *BuildDuration `json:"shortestBuild"`
+	CalculatedAt      time.Time      `json:"calculatedAt"`
+}
+
+// DailyStats represents build statistics for a single day
+type DailyStats struct {
+	Date        string  `json:"date"`
+	Total       int     `json:"total"`
+	Successful  int     `json:"successful"`
+	Failed      int     `json:"failed"`
+	SuccessRate float64 `json:"successRate"`
+	AvgDuration float64 `json:"avgDuration"`
+}
+
+// BuildDuration represents a build with its duration info
+type BuildDuration struct {
+	ExecutionID  string  `json:"executionId"`
+	PipelineName string  `json:"pipelineName"`
+	Duration     float64 `json:"duration"`
+	Status       string  `json:"status"`
+}
 
 // Pipeline defines a CI/CD pipeline with stages
 type Pipeline struct {
@@ -85,23 +167,54 @@ type PipelineTrigger struct {
 	Schedule string   `json:"schedule"`
 }
 
-// BuildJob represents a queued build
+// BuildJob represents a queued build with enhanced priority support
 type BuildJob struct {
-	ID          string            `json:"id"`
-	PipelineID  string            `json:"pipelineId"`
-	Pipeline    string            `json:"pipeline"`
-	Repo        string            `json:"repo"`
-	RepoURL     string            `json:"repoUrl"`
-	Branch      string            `json:"branch"`
-	Commit      string            `json:"commit"`
-	Author      string            `json:"author"`
-	Message     string            `json:"message"`
-	Status      string            `json:"status"` // queued, running, success, failed, cancelled
-	Priority    int               `json:"priority"`
-	Variables   map[string]string `json:"variables"`
-	CreatedAt   time.Time         `json:"createdAt"`
-	StartedAt   *time.Time        `json:"startedAt"`
-	CompletedAt *time.Time        `json:"completedAt"`
+	ID           string            `json:"id"`
+	PipelineID   string            `json:"pipelineId"`
+	Pipeline     string            `json:"pipeline"`
+	Repo         string            `json:"repo"`
+	Branch       string            `json:"branch"`
+	Commit       string            `json:"commit"`
+	Author       string            `json:"author"`
+	Message      string            `json:"message"`
+	Status       string            `json:"status"` // queued, running, success, failed, cancelled, skipped
+	Priority     int               `json:"priority"` // 1=low, 2=normal, 3=high, 4=critical
+	PriorityName string            `json:"priorityName"`
+	Variables    map[string]string `json:"variables"`
+	Labels       map[string]string `json:"labels"`
+	TriggerType  string            `json:"triggerType"` // manual, webhook, schedule, api
+	TriggerBy    string            `json:"triggerBy"`
+	RetryCount   int               `json:"retryCount"`
+	MaxRetries   int               `json:"maxRetries"`
+	QueuedAt     time.Time         `json:"queuedAt"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	StartedAt    *time.Time        `json:"startedAt"`
+	CompletedAt  *time.Time        `json:"completedAt"`
+	EstimatedEnd *time.Time        `json:"estimatedEnd"`
+}
+
+// Priority constants
+const (
+	PriorityLow      = 1
+	PriorityNormal   = 2
+	PriorityHigh     = 3
+	PriorityCritical = 4
+)
+
+// getPriorityName returns a human-readable priority name
+func getPriorityName(priority int) string {
+	switch priority {
+	case PriorityLow:
+		return "low"
+	case PriorityNormal:
+		return "normal"
+	case PriorityHigh:
+		return "high"
+	case PriorityCritical:
+		return "critical"
+	default:
+		return "unknown"
+	}
 }
 
 // PipelineExecution represents a pipeline run history entry
@@ -151,20 +264,47 @@ type LogLine struct {
 	Message   string    `json:"message"`
 }
 
-// WebhookEvent represents an incoming webhook
+// WebhookEvent represents an incoming webhook with enhanced metadata
 type WebhookEvent struct {
-	ID         string                 `json:"id"`
-	Type       string                 `json:"type"`
-	Source     string                 `json:"source"`
-	Repo       string                 `json:"repo"`
-	Branch     string                 `json:"branch"`
-	Commit     string                 `json:"commit"`
-	Author     string                 `json:"author"`
-	Message    string                 `json:"message"`
-	Payload    map[string]interface{} `json:"payload"`
-	Timestamp  time.Time              `json:"timestamp"`
-	Processed  bool                   `json:"processed"`
-	PipelineID string                 `json:"pipelineId"`
+	ID              string                 `json:"id"`
+	Type            string                 `json:"type"` // push, pull_request, tag, release, comment
+	Action          string                 `json:"action"` // opened, closed, merged, etc.
+	Source          string                 `json:"source"` // github, gitlab, holmgit, bitbucket
+	Repo            string                 `json:"repo"`
+	RepoFullName    string                 `json:"repoFullName"`
+	Branch          string                 `json:"branch"`
+	BaseBranch      string                 `json:"baseBranch"` // for PRs
+	Commit          string                 `json:"commit"`
+	CommitShort     string                 `json:"commitShort"`
+	Author          string                 `json:"author"`
+	AuthorEmail     string                 `json:"authorEmail"`
+	Message         string                 `json:"message"`
+	PRNumber        int                    `json:"prNumber"`
+	PRTitle         string                 `json:"prTitle"`
+	TagName         string                 `json:"tagName"`
+	Payload         map[string]interface{} `json:"payload"`
+	Headers         map[string]string      `json:"headers"`
+	Signature       string                 `json:"signature"`
+	SignatureValid  bool                   `json:"signatureValid"`
+	Timestamp       time.Time              `json:"timestamp"`
+	Processed       bool                   `json:"processed"`
+	ProcessedAt     *time.Time             `json:"processedAt"`
+	PipelineID      string                 `json:"pipelineId"`
+	BuildID         string                 `json:"buildId"`
+	Error           string                 `json:"error"`
+	DeliveryID      string                 `json:"deliveryId"`
+}
+
+// WebhookConfig represents webhook configuration for a repository
+type WebhookConfig struct {
+	ID          string   `json:"id"`
+	Repo        string   `json:"repo"`
+	Secret      string   `json:"secret"`
+	Events      []string `json:"events"`
+	Active      bool     `json:"active"`
+	URL         string   `json:"url"`
+	ContentType string   `json:"contentType"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 // KanikoBuild represents a Kaniko build job
@@ -218,27 +358,43 @@ func main() {
 	// API routes
 	http.HandleFunc("/", handleUI)
 	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/ready", handleReadiness)
 
 	// Pipeline management
 	http.HandleFunc("/api/pipelines", handlePipelines)
 	http.HandleFunc("/api/pipelines/", handlePipelineActions)
 
-	// Webhook endpoints
+	// Webhook endpoints - enhanced with signature validation
 	http.HandleFunc("/api/webhook/git", handleGitWebhook)
+	http.HandleFunc("/api/webhook/github", handleGitHubWebhook)
+	http.HandleFunc("/api/webhook/gitlab", handleGitLabWebhook)
 	http.HandleFunc("/api/webhook/holmgit", handleHolmGitWebhook)
 	http.HandleFunc("/api/webhooks", handleWebhooks)
+	http.HandleFunc("/api/webhooks/", handleWebhookActions)
 
-	// Build queue
+	// Build queue with priority management
 	http.HandleFunc("/api/queue", handleQueue)
 	http.HandleFunc("/api/queue/", handleQueueActions)
+	http.HandleFunc("/api/queue/reorder", handleQueueReorder)
+	http.HandleFunc("/api/queue/pause", handleQueuePause)
+	http.HandleFunc("/api/queue/resume", handleQueueResume)
 
-	// Pipeline executions (history)
+	// Pipeline executions (history) - enhanced with filtering and pagination
 	http.HandleFunc("/api/executions", handleExecutions)
 	http.HandleFunc("/api/executions/", handleExecutionActions)
 
+	// Build statistics endpoint
+	http.HandleFunc("/api/stats", handleStats)
+	http.HandleFunc("/api/stats/trends", handleStatsTrends)
+	http.HandleFunc("/api/stats/pipelines", handleStatsByPipeline)
+
+	// Real-time event streams (SSE)
+	http.HandleFunc("/api/events", handleSSEEvents)
+	http.HandleFunc("/api/events/builds", handleSSEBuildEvents)
+	http.HandleFunc("/api/logs-stream/", handleLogsStream)
+
 	// Build logs
 	http.HandleFunc("/api/logs/", handleLogs)
-	http.HandleFunc("/api/logs-stream/", handleLogsStream)
 
 	// Kaniko builds
 	http.HandleFunc("/api/build", handleBuild)
@@ -247,6 +403,7 @@ func main() {
 	// Deployment triggers
 	http.HandleFunc("/api/deploy", handleDeploy)
 
+	log.Printf("CI/CD Controller ready - listening on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
@@ -306,11 +463,34 @@ func buildQueueWorker() {
 	}
 }
 
+// queuePaused tracks if the build queue is paused
+var queuePaused bool
+var queuePausedMu sync.RWMutex
+
 func processNextBuild() {
+	// Check if queue is paused
+	queuePausedMu.RLock()
+	if queuePaused {
+		queuePausedMu.RUnlock()
+		return
+	}
+	queuePausedMu.RUnlock()
+
 	buildQueueMu.Lock()
 	defer buildQueueMu.Unlock()
 
-	// Find next queued build
+	// Sort queue by priority (highest first), then by created time (oldest first)
+	sort.SliceStable(buildQueue, func(i, j int) bool {
+		if buildQueue[i].Status != "queued" || buildQueue[j].Status != "queued" {
+			return false
+		}
+		if buildQueue[i].Priority != buildQueue[j].Priority {
+			return buildQueue[i].Priority > buildQueue[j].Priority
+		}
+		return buildQueue[i].CreatedAt.Before(buildQueue[j].CreatedAt)
+	})
+
+	// Find next queued build (now sorted by priority)
 	var nextBuild *BuildJob
 	for _, job := range buildQueue {
 		if job.Status == "queued" {
@@ -331,16 +511,61 @@ func processNextBuild() {
 		}
 	}
 
-	if runningCount >= 3 {
-		return // Max 3 concurrent builds
+	if runningCount >= maxConcurrent {
+		return // Max concurrent builds reached
 	}
 
 	// Start the build
 	now := time.Now()
 	nextBuild.Status = "running"
 	nextBuild.StartedAt = &now
+	nextBuild.PriorityName = getPriorityName(nextBuild.Priority)
+
+	// Estimate completion time based on historical data
+	avgDuration := getAverageBuildDuration(nextBuild.PipelineID)
+	if avgDuration > 0 {
+		estimatedEnd := now.Add(time.Duration(avgDuration) * time.Second)
+		nextBuild.EstimatedEnd = &estimatedEnd
+	}
+
+	// Broadcast build started event
+	broadcastEvent(&SSEEvent{
+		ID:   generateID("event"),
+		Type: "build_started",
+		Data: map[string]interface{}{
+			"buildId":    nextBuild.ID,
+			"pipelineId": nextBuild.PipelineID,
+			"repo":       nextBuild.Repo,
+			"branch":     nextBuild.Branch,
+			"priority":   nextBuild.Priority,
+		},
+		Timestamp: now,
+	})
 
 	go executePipeline(nextBuild)
+}
+
+// getAverageBuildDuration calculates average build duration for a pipeline
+func getAverageBuildDuration(pipelineID string) float64 {
+	executionsMu.RLock()
+	defer executionsMu.RUnlock()
+
+	var totalDuration float64
+	var count int
+	for _, exec := range executions {
+		if exec.PipelineID == pipelineID && exec.Status == "success" && exec.Duration > 0 {
+			totalDuration += exec.Duration
+			count++
+			if count >= 10 { // Use last 10 successful builds
+				break
+			}
+		}
+	}
+
+	if count == 0 {
+		return 0
+	}
+	return totalDuration / float64(count)
 }
 
 func executePipeline(job *BuildJob) {
@@ -416,6 +641,28 @@ func executePipeline(job *BuildJob) {
 	}
 
 	log.Printf("Pipeline execution %s completed with status: %s", execution.ID, execution.Status)
+
+	// Broadcast build completed event
+	broadcastEvent(&SSEEvent{
+		ID:   generateID("event"),
+		Type: "build_completed",
+		Data: map[string]interface{}{
+			"executionId":  execution.ID,
+			"buildId":      job.ID,
+			"pipelineId":   execution.PipelineID,
+			"pipelineName": execution.PipelineName,
+			"repo":         execution.Repo,
+			"branch":       execution.Branch,
+			"status":       execution.Status,
+			"duration":     execution.Duration,
+		},
+		Timestamp: time.Now(),
+	})
+
+	// Invalidate stats cache
+	statsCacheMu.Lock()
+	statsCache = nil
+	statsCacheMu.Unlock()
 }
 
 func executeStage(execution *PipelineExecution, stage PipelineStage, job *BuildJob) StageExecution {
@@ -484,6 +731,22 @@ func executeStage(execution *PipelineExecution, stage PipelineStage, job *BuildJ
 	stageExec.CompletedAt = &completed
 	stageExec.Duration = completed.Sub(*stageExec.StartedAt).Seconds()
 
+	// Broadcast stage completion event
+	broadcastEvent(&SSEEvent{
+		ID:   generateID("event"),
+		Type: "stage_completed",
+		Data: map[string]interface{}{
+			"executionId": execution.ID,
+			"pipelineId":  execution.PipelineID,
+			"stageName":   stage.Name,
+			"stageType":   stage.Type,
+			"status":      stageExec.Status,
+			"duration":    stageExec.Duration,
+			"error":       stageExec.Error,
+		},
+		Timestamp: time.Now(),
+	})
+
 	return stageExec
 }
 
@@ -534,15 +797,8 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 							Image: "alpine/git:latest",
 							Command: []string{"sh", "-c"},
 							Args: []string{
-								func() string {
-									// Use pipeline's repoUrl if set, otherwise construct from HolmGit
-									repoURL := job.RepoURL
-									if repoURL == "" {
-										repoURL = fmt.Sprintf("%s/git/%s.git", holmGitURL, job.Repo)
-									}
-									return fmt.Sprintf("set -ex && echo 'Cloning repository %s branch %s...' && git clone --depth 1 --branch %s %s /workspace && echo 'Clone successful' && ls -la /workspace",
-										job.Repo, job.Branch, job.Branch, repoURL)
-								}(),
+								fmt.Sprintf("set -ex && echo 'Cloning repository %s branch %s...' && git clone --depth 1 --branch %s %s/git/%s.git /workspace && echo 'Clone successful' && ls -la /workspace",
+									job.Repo, job.Branch, job.Branch, holmGitURL, job.Repo),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "workspace", MountPath: "/workspace"},
@@ -1460,17 +1716,21 @@ func handlePipelineActions(w http.ResponseWriter, r *http.Request) {
 			req.Branch = "main"
 		}
 
+		now := time.Now()
 		job := &BuildJob{
-			ID:         generateID("build"),
-			PipelineID: pipelineID,
-			Pipeline:   pipeline.Name,
-			Repo:       pipeline.RepoURL,
-			Branch:     req.Branch,
-			Commit:     req.Commit,
-			Status:     "queued",
-			Priority:   1,
-			Variables:  req.Variables,
-			CreatedAt:  time.Now(),
+			ID:           generateID("build"),
+			PipelineID:   pipelineID,
+			Pipeline:     pipeline.Name,
+			Repo:         pipeline.RepoURL,
+			Branch:       req.Branch,
+			Commit:       req.Commit,
+			Status:       "queued",
+			Priority:     PriorityNormal,
+			PriorityName: getPriorityName(PriorityNormal),
+			Variables:    req.Variables,
+			TriggerType:  "manual",
+			QueuedAt:     now,
+			CreatedAt:    now,
 		}
 
 		buildQueueMu.Lock()
@@ -1695,36 +1955,72 @@ func processTrigger(event *WebhookEvent) {
 			// Trigger the pipeline
 			log.Printf("Triggering pipeline %s for %s/%s", pipeline.Name, event.Repo, event.Branch)
 
+			now := time.Now()
 			job := &BuildJob{
-				ID:         generateID("build"),
-				PipelineID: pipeline.ID,
-				Pipeline:   pipeline.Name,
-				Repo:       event.Repo,
-				RepoURL:    pipeline.RepoURL,
-				Branch:     event.Branch,
-				Commit:     event.Commit,
-				Author:     event.Author,
-				Message:    event.Message,
-				Status:     "queued",
-				Priority:   1,
-				Variables:  make(map[string]string),
-				CreatedAt:  time.Now(),
+				ID:           generateID("build"),
+				PipelineID:   pipeline.ID,
+				Pipeline:     pipeline.Name,
+				Repo:         event.Repo,
+				Branch:       event.Branch,
+				Commit:       event.Commit,
+				Author:       event.Author,
+				Message:      event.Message,
+				Status:       "queued",
+				Priority:     PriorityNormal,
+				PriorityName: getPriorityName(PriorityNormal),
+				Variables:    make(map[string]string),
+				TriggerType:  "webhook",
+				TriggerBy:    event.Author,
+				QueuedAt:     now,
+				CreatedAt:    now,
+			}
+
+			// Check queue size limit
+			if len(buildQueue) >= maxQueueSize {
+				log.Printf("Build queue full (max %d), skipping trigger for %s", maxQueueSize, event.Repo)
+				webhookEventsMu.Lock()
+				for _, we := range webhookEvents {
+					if we.ID == event.ID {
+						we.Error = "Build queue full"
+						break
+					}
+				}
+				webhookEventsMu.Unlock()
+				continue
 			}
 
 			buildQueueMu.Lock()
 			buildQueue = append([]*BuildJob{job}, buildQueue...)
 			buildQueueMu.Unlock()
 
-			// Mark event as processed
+			// Mark event as processed with build ID
+			processedAt := time.Now()
 			webhookEventsMu.Lock()
 			for _, we := range webhookEvents {
 				if we.ID == event.ID {
 					we.Processed = true
+					we.ProcessedAt = &processedAt
 					we.PipelineID = pipeline.ID
+					we.BuildID = job.ID
 					break
 				}
 			}
 			webhookEventsMu.Unlock()
+
+			// Broadcast webhook processed event
+			broadcastEvent(&SSEEvent{
+				ID:   generateID("event"),
+				Type: "webhook_triggered",
+				Data: map[string]interface{}{
+					"webhookId":    event.ID,
+					"buildId":      job.ID,
+					"pipelineId":   pipeline.ID,
+					"pipelineName": pipeline.Name,
+					"repo":         event.Repo,
+					"branch":       event.Branch,
+				},
+				Timestamp: processedAt,
+			})
 
 			break // Only trigger once per pipeline
 		}
@@ -1768,17 +2064,21 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 			req.Branch = "main"
 		}
 
+		now := time.Now()
 		job := &BuildJob{
-			ID:         generateID("build"),
-			PipelineID: req.PipelineID,
-			Pipeline:   req.Pipeline,
-			Repo:       req.Repo,
-			Branch:     req.Branch,
-			Commit:     req.Commit,
-			Status:     "queued",
-			Priority:   1,
-			Variables:  req.Variables,
-			CreatedAt:  time.Now(),
+			ID:           generateID("build"),
+			PipelineID:   req.PipelineID,
+			Pipeline:     req.Pipeline,
+			Repo:         req.Repo,
+			Branch:       req.Branch,
+			Commit:       req.Commit,
+			Status:       "queued",
+			Priority:     PriorityNormal,
+			PriorityName: getPriorityName(PriorityNormal),
+			Variables:    req.Variables,
+			TriggerType:  "api",
+			QueuedAt:     now,
+			CreatedAt:    now,
 		}
 
 		buildQueueMu.Lock()
@@ -1844,26 +2144,171 @@ func handleExecutions(w http.ResponseWriter, r *http.Request) {
 	executionsMu.RLock()
 	defer executionsMu.RUnlock()
 
-	// Support filtering
-	pipelineID := r.URL.Query().Get("pipelineId")
-	status := r.URL.Query().Get("status")
-	limit := 50
+	// Parse query parameters for filtering
+	q := r.URL.Query()
+	pipelineID := q.Get("pipelineId")
+	pipelineName := q.Get("pipeline")
+	status := q.Get("status")
+	branch := q.Get("branch")
+	author := q.Get("author")
+	repo := q.Get("repo")
+	trigger := q.Get("trigger")
+	sinceStr := q.Get("since")
+	untilStr := q.Get("until")
+	search := strings.ToLower(q.Get("search"))
 
-	result := make([]*PipelineExecution, 0)
-	for _, exec := range executions {
-		if pipelineID != "" && exec.PipelineID != pipelineID {
-			continue
+	// Pagination parameters
+	page := 1
+	limit := 50
+	if p := q.Get("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
 		}
-		if status != "" && exec.Status != status {
-			continue
-		}
-		result = append(result, exec)
-		if len(result) >= limit {
-			break
+	}
+	if l := q.Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
+			limit = parsed
 		}
 	}
 
-	json.NewEncoder(w).Encode(result)
+	// Parse date filters
+	var sinceTime, untilTime time.Time
+	if sinceStr != "" {
+		if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			sinceTime = t
+		} else if t, err := time.Parse("2006-01-02", sinceStr); err == nil {
+			sinceTime = t
+		}
+	}
+	if untilStr != "" {
+		if t, err := time.Parse(time.RFC3339, untilStr); err == nil {
+			untilTime = t
+		} else if t, err := time.Parse("2006-01-02", untilStr); err == nil {
+			untilTime = t.Add(24 * time.Hour) // Include the entire day
+		}
+	}
+
+	// Sort order
+	sortBy := q.Get("sort")
+	sortOrder := q.Get("order")
+	if sortBy == "" {
+		sortBy = "startedAt"
+	}
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+
+	// Filter executions
+	filtered := make([]*PipelineExecution, 0)
+	for _, exec := range executions {
+		// Apply filters
+		if pipelineID != "" && exec.PipelineID != pipelineID {
+			continue
+		}
+		if pipelineName != "" && !strings.EqualFold(exec.PipelineName, pipelineName) {
+			continue
+		}
+		if status != "" {
+			// Support comma-separated status list
+			statuses := strings.Split(status, ",")
+			matched := false
+			for _, s := range statuses {
+				if strings.EqualFold(exec.Status, strings.TrimSpace(s)) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		if branch != "" && !strings.EqualFold(exec.Branch, branch) {
+			continue
+		}
+		if author != "" && !strings.Contains(strings.ToLower(exec.Author), strings.ToLower(author)) {
+			continue
+		}
+		if repo != "" && !strings.Contains(strings.ToLower(exec.Repo), strings.ToLower(repo)) {
+			continue
+		}
+		if trigger != "" && !strings.EqualFold(exec.Trigger, trigger) {
+			continue
+		}
+		if !sinceTime.IsZero() && exec.StartedAt.Before(sinceTime) {
+			continue
+		}
+		if !untilTime.IsZero() && exec.StartedAt.After(untilTime) {
+			continue
+		}
+		if search != "" {
+			// Search across multiple fields
+			searchFields := strings.ToLower(exec.PipelineName + " " + exec.Repo + " " + exec.Branch + " " + exec.Author + " " + exec.Message + " " + exec.Commit)
+			if !strings.Contains(searchFields, search) {
+				continue
+			}
+		}
+
+		filtered = append(filtered, exec)
+	}
+
+	// Sort results
+	sort.Slice(filtered, func(i, j int) bool {
+		var less bool
+		switch sortBy {
+		case "duration":
+			less = filtered[i].Duration < filtered[j].Duration
+		case "buildNumber":
+			less = filtered[i].BuildNumber < filtered[j].BuildNumber
+		case "pipeline":
+			less = filtered[i].PipelineName < filtered[j].PipelineName
+		case "status":
+			less = filtered[i].Status < filtered[j].Status
+		default: // startedAt
+			less = filtered[i].StartedAt.Before(filtered[j].StartedAt)
+		}
+		if sortOrder == "desc" {
+			return !less
+		}
+		return less
+	})
+
+	// Calculate pagination
+	totalCount := len(filtered)
+	totalPages := (totalCount + limit - 1) / limit
+	start := (page - 1) * limit
+	end := start + limit
+
+	if start > totalCount {
+		start = totalCount
+	}
+	if end > totalCount {
+		end = totalCount
+	}
+
+	paginated := filtered[start:end]
+
+	// Build response with metadata
+	response := map[string]interface{}{
+		"executions": paginated,
+		"pagination": map[string]interface{}{
+			"page":       page,
+			"limit":      limit,
+			"total":      totalCount,
+			"totalPages": totalPages,
+			"hasMore":    page < totalPages,
+		},
+		"filters": map[string]interface{}{
+			"pipelineId": pipelineID,
+			"status":     status,
+			"branch":     branch,
+			"author":     author,
+			"since":      sinceStr,
+			"until":      untilStr,
+			"search":     search,
+		},
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func handleExecutionActions(w http.ResponseWriter, r *http.Request) {
@@ -1913,18 +2358,25 @@ func handleExecutionActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Create new build job from execution
+		// Create new build job from execution with retry tracking
+		now := time.Now()
 		job := &BuildJob{
-			ID:         generateID("build"),
-			PipelineID: execution.PipelineID,
-			Pipeline:   execution.PipelineName,
-			Repo:       execution.Repo,
-			Branch:     execution.Branch,
-			Commit:     execution.Commit,
-			Status:     "queued",
-			Priority:   1,
-			Variables:  make(map[string]string),
-			CreatedAt:  time.Now(),
+			ID:           generateID("build"),
+			PipelineID:   execution.PipelineID,
+			Pipeline:     execution.PipelineName,
+			Repo:         execution.Repo,
+			Branch:       execution.Branch,
+			Commit:       execution.Commit,
+			Author:       execution.Author,
+			Message:      execution.Message,
+			Status:       "queued",
+			Priority:     PriorityHigh, // Retries get higher priority
+			PriorityName: getPriorityName(PriorityHigh),
+			Variables:    make(map[string]string),
+			TriggerType:  "retry",
+			RetryCount:   1,
+			QueuedAt:     now,
+			CreatedAt:    now,
 		}
 
 		buildQueueMu.Lock()
@@ -2117,27 +2569,28 @@ func handleBuild(w http.ResponseWriter, r *http.Request) {
 		req.Context = "."
 	}
 
-	// Create a quick build job
+	// Create a quick build job with high priority for manual builds
+	now := time.Now()
 	job := &BuildJob{
-		ID:        generateID("build"),
-		Repo:      req.Repo,
-		Branch:    req.Branch,
-		Status:    "queued",
-		Priority:  2, // Higher priority for manual builds
+		ID:           generateID("build"),
+		Repo:         req.Repo,
+		Branch:       req.Branch,
+		Status:       "queued",
+		Priority:     PriorityHigh, // Higher priority for manual builds
+		PriorityName: getPriorityName(PriorityHigh),
 		Variables: map[string]string{
 			"DOCKERFILE":  req.Dockerfile,
 			"CONTEXT":     req.Context,
 			"DESTINATION": req.Destination,
 		},
-		CreatedAt: time.Now(),
+		TriggerType: "manual",
+		QueuedAt:    now,
+		CreatedAt:   now,
 	}
 
 	buildQueueMu.Lock()
 	// Insert at front for priority
-	newQueue := make([]*BuildJob, 0, len(buildQueue)+1)
-	newQueue = append(newQueue, job)
-	newQueue = append(newQueue, buildQueue...)
-	buildQueue = newQueue
+	buildQueue = append([]*BuildJob{job}, buildQueue...)
 	buildQueueMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2159,7 +2612,15 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 		limit = len(buildQueue)
 	}
 
-	json.NewEncoder(w).Encode(buildQueue[:limit])
+	builds := buildQueue[:limit]
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"count":     len(builds),
+		"builds":    builds,
+		"service":   "CI/CD Controller",
+		"timestamp": time.Now().Format(time.RFC3339),
+		"status":    "ok",
+		"queue_size": len(buildQueue),
+	})
 }
 
 func handleDeploy(w http.ResponseWriter, r *http.Request) {
@@ -2240,3 +2701,1054 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 const fallbackUI = `<!DOCTYPE html>
 <html><head><title>CI/CD Controller</title></head>
 <body><h1>CI/CD Controller</h1><p>UI loading...</p></body></html>`
+
+// =============================================================================
+// STATS ENDPOINTS - Build statistics and analytics
+// =============================================================================
+
+// handleStats returns comprehensive build statistics
+func handleStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check cache (refresh every 30 seconds)
+	statsCacheMu.RLock()
+	if statsCache != nil && time.Since(statsCacheTime) < 30*time.Second {
+		json.NewEncoder(w).Encode(statsCache)
+		statsCacheMu.RUnlock()
+		return
+	}
+	statsCacheMu.RUnlock()
+
+	// Calculate fresh stats
+	stats := calculateBuildStats()
+
+	// Update cache
+	statsCacheMu.Lock()
+	statsCache = stats
+	statsCacheTime = time.Now()
+	statsCacheMu.Unlock()
+
+	json.NewEncoder(w).Encode(stats)
+}
+
+// calculateBuildStats computes comprehensive build statistics
+func calculateBuildStats() *BuildStats {
+	executionsMu.RLock()
+	buildQueueMu.RLock()
+	defer executionsMu.RUnlock()
+	defer buildQueueMu.RUnlock()
+
+	stats := &BuildStats{
+		BuildsByPipeline: make(map[string]int),
+		BuildsByStatus:   make(map[string]int),
+		BuildsByBranch:   make(map[string]int),
+		BuildsByAuthor:   make(map[string]int),
+		RecentTrend:      make([]DailyStats, 0),
+		CalculatedAt:     time.Now(),
+		ServiceUptime:    time.Since(serviceStartTime).Seconds(),
+	}
+
+	// Calculate queue stats
+	for _, job := range buildQueue {
+		if job.Status == "queued" {
+			stats.QueuedBuilds++
+		} else if job.Status == "running" {
+			stats.RunningBuilds++
+		}
+	}
+
+	if len(executions) == 0 {
+		return stats
+	}
+
+	// Track build durations for percentile calculations
+	var durations []float64
+	today := time.Now().Truncate(24 * time.Hour)
+	weekAgo := today.AddDate(0, 0, -7)
+
+	// Daily stats for trend (last 14 days)
+	dailyStats := make(map[string]*DailyStats)
+	for i := 0; i < 14; i++ {
+		date := today.AddDate(0, 0, -i).Format("2006-01-02")
+		dailyStats[date] = &DailyStats{Date: date}
+	}
+
+	// Process all executions
+	for _, exec := range executions {
+		stats.TotalBuilds++
+
+		// Status counts
+		stats.BuildsByStatus[exec.Status]++
+		switch exec.Status {
+		case "success":
+			stats.SuccessfulBuilds++
+		case "failed":
+			stats.FailedBuilds++
+		case "cancelled":
+			stats.CancelledBuilds++
+		}
+
+		// Pipeline counts
+		if exec.PipelineName != "" {
+			stats.BuildsByPipeline[exec.PipelineName]++
+		}
+
+		// Branch counts
+		if exec.Branch != "" {
+			stats.BuildsByBranch[exec.Branch]++
+		}
+
+		// Author counts
+		if exec.Author != "" {
+			stats.BuildsByAuthor[exec.Author]++
+		}
+
+		// Duration tracking (for completed builds)
+		if exec.Duration > 0 {
+			durations = append(durations, exec.Duration)
+		}
+
+		// Track last build time
+		if stats.LastBuildTime == nil || exec.StartedAt.After(*stats.LastBuildTime) {
+			t := exec.StartedAt
+			stats.LastBuildTime = &t
+		}
+
+		// Track longest/shortest builds
+		if exec.Status == "success" && exec.Duration > 0 {
+			if stats.LongestBuild == nil || exec.Duration > stats.LongestBuild.Duration {
+				stats.LongestBuild = &BuildDuration{
+					ExecutionID:  exec.ID,
+					PipelineName: exec.PipelineName,
+					Duration:     exec.Duration,
+					Status:       exec.Status,
+				}
+			}
+			if stats.ShortestBuild == nil || exec.Duration < stats.ShortestBuild.Duration {
+				stats.ShortestBuild = &BuildDuration{
+					ExecutionID:  exec.ID,
+					PipelineName: exec.PipelineName,
+					Duration:     exec.Duration,
+					Status:       exec.Status,
+				}
+			}
+		}
+
+		// Builds today and this week
+		execDate := exec.StartedAt.Truncate(24 * time.Hour)
+		if execDate.Equal(today) {
+			stats.BuildsToday++
+		}
+		if exec.StartedAt.After(weekAgo) {
+			stats.BuildsThisWeek++
+		}
+
+		// Daily trend
+		dateStr := exec.StartedAt.Format("2006-01-02")
+		if daily, exists := dailyStats[dateStr]; exists {
+			daily.Total++
+			if exec.Status == "success" {
+				daily.Successful++
+			} else if exec.Status == "failed" {
+				daily.Failed++
+			}
+			if exec.Duration > 0 {
+				daily.AvgDuration = (daily.AvgDuration*float64(daily.Total-1) + exec.Duration) / float64(daily.Total)
+			}
+		}
+	}
+
+	// Calculate success rate
+	completedBuilds := stats.SuccessfulBuilds + stats.FailedBuilds
+	if completedBuilds > 0 {
+		stats.SuccessRate = float64(stats.SuccessfulBuilds) / float64(completedBuilds) * 100
+	}
+
+	// Calculate duration statistics
+	if len(durations) > 0 {
+		sort.Float64s(durations)
+
+		// Average
+		var sum float64
+		for _, d := range durations {
+			sum += d
+		}
+		stats.AvgBuildTime = sum / float64(len(durations))
+
+		// Median
+		mid := len(durations) / 2
+		if len(durations)%2 == 0 {
+			stats.MedianBuildTime = (durations[mid-1] + durations[mid]) / 2
+		} else {
+			stats.MedianBuildTime = durations[mid]
+		}
+
+		// P95
+		p95Index := int(float64(len(durations)) * 0.95)
+		if p95Index >= len(durations) {
+			p95Index = len(durations) - 1
+		}
+		stats.P95BuildTime = durations[p95Index]
+	}
+
+	// Build trend array (sorted by date)
+	for _, daily := range dailyStats {
+		if daily.Total > 0 {
+			daily.SuccessRate = float64(daily.Successful) / float64(daily.Total) * 100
+		}
+		stats.RecentTrend = append(stats.RecentTrend, *daily)
+	}
+	sort.Slice(stats.RecentTrend, func(i, j int) bool {
+		return stats.RecentTrend[i].Date < stats.RecentTrend[j].Date
+	})
+
+	return stats
+}
+
+// handleStatsTrends returns build trend data for charting
+func handleStatsTrends(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 && parsed <= 90 {
+			days = parsed
+		}
+	}
+
+	executionsMu.RLock()
+	defer executionsMu.RUnlock()
+
+	trends := make(map[string]*DailyStats)
+	today := time.Now().Truncate(24 * time.Hour)
+
+	for i := 0; i < days; i++ {
+		date := today.AddDate(0, 0, -i).Format("2006-01-02")
+		trends[date] = &DailyStats{Date: date}
+	}
+
+	cutoff := today.AddDate(0, 0, -days)
+	for _, exec := range executions {
+		if exec.StartedAt.Before(cutoff) {
+			continue
+		}
+		dateStr := exec.StartedAt.Format("2006-01-02")
+		if daily, exists := trends[dateStr]; exists {
+			daily.Total++
+			if exec.Status == "success" {
+				daily.Successful++
+			} else if exec.Status == "failed" {
+				daily.Failed++
+			}
+		}
+	}
+
+	// Convert to sorted slice
+	result := make([]DailyStats, 0, len(trends))
+	for _, daily := range trends {
+		if daily.Total > 0 {
+			daily.SuccessRate = float64(daily.Successful) / float64(daily.Total) * 100
+		}
+		result = append(result, *daily)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Date < result[j].Date
+	})
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"days":   days,
+		"trends": result,
+	})
+}
+
+// handleStatsByPipeline returns per-pipeline statistics
+func handleStatsByPipeline(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	executionsMu.RLock()
+	pipelinesMu.RLock()
+	defer executionsMu.RUnlock()
+	defer pipelinesMu.RUnlock()
+
+	type PipelineStats struct {
+		PipelineID   string  `json:"pipelineId"`
+		PipelineName string  `json:"pipelineName"`
+		TotalBuilds  int     `json:"totalBuilds"`
+		Successful   int     `json:"successful"`
+		Failed       int     `json:"failed"`
+		SuccessRate  float64 `json:"successRate"`
+		AvgDuration  float64 `json:"avgDuration"`
+		LastBuild    *time.Time `json:"lastBuild"`
+	}
+
+	pipelineStats := make(map[string]*PipelineStats)
+
+	for _, exec := range executions {
+		ps, exists := pipelineStats[exec.PipelineID]
+		if !exists {
+			ps = &PipelineStats{
+				PipelineID:   exec.PipelineID,
+				PipelineName: exec.PipelineName,
+			}
+			pipelineStats[exec.PipelineID] = ps
+		}
+
+		ps.TotalBuilds++
+		if exec.Status == "success" {
+			ps.Successful++
+		} else if exec.Status == "failed" {
+			ps.Failed++
+		}
+
+		if exec.Duration > 0 {
+			ps.AvgDuration = (ps.AvgDuration*float64(ps.TotalBuilds-1) + exec.Duration) / float64(ps.TotalBuilds)
+		}
+
+		if ps.LastBuild == nil || exec.StartedAt.After(*ps.LastBuild) {
+			t := exec.StartedAt
+			ps.LastBuild = &t
+		}
+	}
+
+	// Calculate success rates
+	result := make([]*PipelineStats, 0, len(pipelineStats))
+	for _, ps := range pipelineStats {
+		completed := ps.Successful + ps.Failed
+		if completed > 0 {
+			ps.SuccessRate = float64(ps.Successful) / float64(completed) * 100
+		}
+		result = append(result, ps)
+	}
+
+	// Sort by total builds descending
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].TotalBuilds > result[j].TotalBuilds
+	})
+
+	json.NewEncoder(w).Encode(result)
+}
+
+// =============================================================================
+// ENHANCED WEBHOOK HANDLERS - GitHub and GitLab support with signature validation
+// =============================================================================
+
+// handleGitHubWebhook processes GitHub webhooks with signature validation
+func handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Parse headers
+	headers := make(map[string]string)
+	for key, values := range r.Header {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+
+	event := &WebhookEvent{
+		ID:         generateID("webhook"),
+		Source:     "github",
+		Timestamp:  time.Now(),
+		Headers:    headers,
+		DeliveryID: r.Header.Get("X-GitHub-Delivery"),
+	}
+
+	// Validate signature if secret is configured
+	signature := r.Header.Get("X-Hub-Signature-256")
+	if webhookSecret != "" && signature != "" {
+		expectedSig := "sha256=" + computeHMAC(body, webhookSecret)
+		if hmac.Equal([]byte(signature), []byte(expectedSig)) {
+			event.SignatureValid = true
+		} else {
+			event.SignatureValid = false
+			event.Error = "Invalid webhook signature"
+			log.Printf("GitHub webhook signature validation failed")
+		}
+		event.Signature = signature
+	}
+
+	// Parse event type
+	eventType := r.Header.Get("X-GitHub-Event")
+	event.Type = eventType
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	event.Payload = payload
+
+	// Parse common fields
+	parseGitHubPayload(event, payload, eventType)
+
+	log.Printf("GitHub webhook received: event=%s repo=%s branch=%s", eventType, event.Repo, event.Branch)
+
+	// Store event
+	webhookEventsMu.Lock()
+	webhookEvents = append([]*WebhookEvent{event}, webhookEvents...)
+	if len(webhookEvents) > 100 {
+		webhookEvents = webhookEvents[:100]
+	}
+	webhookEventsMu.Unlock()
+
+	// Process trigger
+	go processTrigger(event)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":         "received",
+		"eventId":        event.ID,
+		"eventType":      event.Type,
+		"signatureValid": event.SignatureValid,
+	})
+}
+
+// parseGitHubPayload extracts fields from GitHub webhook payload
+func parseGitHubPayload(event *WebhookEvent, payload map[string]interface{}, eventType string) {
+	// Repository info
+	if repo, ok := payload["repository"].(map[string]interface{}); ok {
+		if name, ok := repo["name"].(string); ok {
+			event.Repo = name
+		}
+		if fullName, ok := repo["full_name"].(string); ok {
+			event.RepoFullName = fullName
+		}
+	}
+
+	switch eventType {
+	case "push":
+		if ref, ok := payload["ref"].(string); ok {
+			event.Branch = strings.TrimPrefix(ref, "refs/heads/")
+			if strings.HasPrefix(ref, "refs/tags/") {
+				event.Type = "tag"
+				event.TagName = strings.TrimPrefix(ref, "refs/tags/")
+			}
+		}
+		if after, ok := payload["after"].(string); ok {
+			event.Commit = after
+			if len(after) >= 7 {
+				event.CommitShort = after[:7]
+			}
+		}
+		if commits, ok := payload["commits"].([]interface{}); ok && len(commits) > 0 {
+			if commit, ok := commits[len(commits)-1].(map[string]interface{}); ok {
+				if msg, ok := commit["message"].(string); ok {
+					event.Message = msg
+				}
+				if author, ok := commit["author"].(map[string]interface{}); ok {
+					if name, ok := author["name"].(string); ok {
+						event.Author = name
+					}
+					if email, ok := author["email"].(string); ok {
+						event.AuthorEmail = email
+					}
+				}
+			}
+		}
+
+	case "pull_request":
+		if action, ok := payload["action"].(string); ok {
+			event.Action = action
+		}
+		if pr, ok := payload["pull_request"].(map[string]interface{}); ok {
+			if num, ok := pr["number"].(float64); ok {
+				event.PRNumber = int(num)
+			}
+			if title, ok := pr["title"].(string); ok {
+				event.PRTitle = title
+			}
+			if head, ok := pr["head"].(map[string]interface{}); ok {
+				if ref, ok := head["ref"].(string); ok {
+					event.Branch = ref
+				}
+				if sha, ok := head["sha"].(string); ok {
+					event.Commit = sha
+					if len(sha) >= 7 {
+						event.CommitShort = sha[:7]
+					}
+				}
+			}
+			if base, ok := pr["base"].(map[string]interface{}); ok {
+				if ref, ok := base["ref"].(string); ok {
+					event.BaseBranch = ref
+				}
+			}
+		}
+		if sender, ok := payload["sender"].(map[string]interface{}); ok {
+			if login, ok := sender["login"].(string); ok {
+				event.Author = login
+			}
+		}
+
+	case "release":
+		if action, ok := payload["action"].(string); ok {
+			event.Action = action
+		}
+		if release, ok := payload["release"].(map[string]interface{}); ok {
+			if tagName, ok := release["tag_name"].(string); ok {
+				event.TagName = tagName
+			}
+		}
+	}
+}
+
+// handleGitLabWebhook processes GitLab webhooks with token validation
+func handleGitLabWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	headers := make(map[string]string)
+	for key, values := range r.Header {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+
+	event := &WebhookEvent{
+		ID:        generateID("webhook"),
+		Source:    "gitlab",
+		Timestamp: time.Now(),
+		Headers:   headers,
+	}
+
+	// Validate token if configured
+	token := r.Header.Get("X-Gitlab-Token")
+	if webhookSecret != "" {
+		if token == webhookSecret {
+			event.SignatureValid = true
+		} else {
+			event.SignatureValid = false
+			event.Error = "Invalid webhook token"
+		}
+	}
+
+	eventType := r.Header.Get("X-Gitlab-Event")
+	event.Type = strings.ToLower(strings.ReplaceAll(eventType, " ", "_"))
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	event.Payload = payload
+
+	// Parse GitLab payload
+	parseGitLabPayload(event, payload)
+
+	log.Printf("GitLab webhook received: event=%s repo=%s branch=%s", event.Type, event.Repo, event.Branch)
+
+	webhookEventsMu.Lock()
+	webhookEvents = append([]*WebhookEvent{event}, webhookEvents...)
+	if len(webhookEvents) > 100 {
+		webhookEvents = webhookEvents[:100]
+	}
+	webhookEventsMu.Unlock()
+
+	go processTrigger(event)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "received",
+		"eventId":   event.ID,
+		"eventType": event.Type,
+	})
+}
+
+// parseGitLabPayload extracts fields from GitLab webhook payload
+func parseGitLabPayload(event *WebhookEvent, payload map[string]interface{}) {
+	if project, ok := payload["project"].(map[string]interface{}); ok {
+		if name, ok := project["name"].(string); ok {
+			event.Repo = name
+		}
+		if pathWithNs, ok := project["path_with_namespace"].(string); ok {
+			event.RepoFullName = pathWithNs
+		}
+	}
+
+	if ref, ok := payload["ref"].(string); ok {
+		event.Branch = strings.TrimPrefix(ref, "refs/heads/")
+	}
+
+	if checkout, ok := payload["checkout_sha"].(string); ok {
+		event.Commit = checkout
+		if len(checkout) >= 7 {
+			event.CommitShort = checkout[:7]
+		}
+	} else if after, ok := payload["after"].(string); ok {
+		event.Commit = after
+		if len(after) >= 7 {
+			event.CommitShort = after[:7]
+		}
+	}
+
+	if commits, ok := payload["commits"].([]interface{}); ok && len(commits) > 0 {
+		if commit, ok := commits[len(commits)-1].(map[string]interface{}); ok {
+			if msg, ok := commit["message"].(string); ok {
+				event.Message = msg
+			}
+			if author, ok := commit["author"].(map[string]interface{}); ok {
+				if name, ok := author["name"].(string); ok {
+					event.Author = name
+				}
+				if email, ok := author["email"].(string); ok {
+					event.AuthorEmail = email
+				}
+			}
+		}
+	}
+
+	if userName, ok := payload["user_name"].(string); ok && event.Author == "" {
+		event.Author = userName
+	}
+}
+
+// computeHMAC computes HMAC-SHA256 signature
+func computeHMAC(message []byte, secret string) string {
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write(message)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// handleWebhookActions handles individual webhook event actions
+func handleWebhookActions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/webhooks/")
+	parts := strings.SplitN(path, "/", 2)
+	webhookID := parts[0]
+
+	webhookEventsMu.RLock()
+	var event *WebhookEvent
+	for _, e := range webhookEvents {
+		if e.ID == webhookID {
+			event = e
+			break
+		}
+	}
+	webhookEventsMu.RUnlock()
+
+	if event == nil {
+		http.Error(w, "Webhook event not found", http.StatusNotFound)
+		return
+	}
+
+	if len(parts) == 1 {
+		// Return webhook details
+		json.NewEncoder(w).Encode(event)
+		return
+	}
+
+	action := parts[1]
+	switch action {
+	case "redeliver":
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Create a new event based on the original
+		newEvent := *event
+		newEvent.ID = generateID("webhook")
+		newEvent.Timestamp = time.Now()
+		newEvent.Processed = false
+		newEvent.ProcessedAt = nil
+		newEvent.BuildID = ""
+		newEvent.Error = ""
+
+		webhookEventsMu.Lock()
+		webhookEvents = append([]*WebhookEvent{&newEvent}, webhookEvents...)
+		webhookEventsMu.Unlock()
+
+		go processTrigger(&newEvent)
+
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "redelivered",
+			"eventId": newEvent.ID,
+		})
+
+	default:
+		http.Error(w, "Unknown action", http.StatusNotFound)
+	}
+}
+
+// =============================================================================
+// BUILD QUEUE MANAGEMENT - Priority and queue control
+// =============================================================================
+
+// handleQueueReorder allows reordering builds in the queue
+func handleQueueReorder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		BuildID     string `json:"buildId"`
+		NewPriority int    `json:"priority"`
+		Position    string `json:"position"` // "top", "bottom", or empty for priority-based
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	buildQueueMu.Lock()
+	defer buildQueueMu.Unlock()
+
+	var targetJob *BuildJob
+	var targetIndex int
+	for i, job := range buildQueue {
+		if job.ID == req.BuildID {
+			targetJob = job
+			targetIndex = i
+			break
+		}
+	}
+
+	if targetJob == nil {
+		http.Error(w, "Build not found", http.StatusNotFound)
+		return
+	}
+
+	if targetJob.Status != "queued" {
+		http.Error(w, "Can only reorder queued builds", http.StatusBadRequest)
+		return
+	}
+
+	// Update priority if specified
+	if req.NewPriority > 0 {
+		targetJob.Priority = req.NewPriority
+		targetJob.PriorityName = getPriorityName(req.NewPriority)
+	}
+
+	// Reposition if requested
+	if req.Position != "" {
+		// Remove from current position
+		buildQueue = append(buildQueue[:targetIndex], buildQueue[targetIndex+1:]...)
+
+		switch req.Position {
+		case "top":
+			buildQueue = append([]*BuildJob{targetJob}, buildQueue...)
+		case "bottom":
+			buildQueue = append(buildQueue, targetJob)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "reordered",
+		"buildId":  targetJob.ID,
+		"priority": targetJob.Priority,
+	})
+}
+
+// handleQueuePause pauses the build queue
+func handleQueuePause(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	queuePausedMu.Lock()
+	queuePaused = true
+	queuePausedMu.Unlock()
+
+	log.Println("Build queue paused")
+
+	// Broadcast event
+	broadcastEvent(&SSEEvent{
+		ID:        generateID("event"),
+		Type:      "queue_paused",
+		Data:      map[string]interface{}{"paused": true},
+		Timestamp: time.Now(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "paused",
+		"paused": true,
+	})
+}
+
+// handleQueueResume resumes the build queue
+func handleQueueResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	queuePausedMu.Lock()
+	queuePaused = false
+	queuePausedMu.Unlock()
+
+	log.Println("Build queue resumed")
+
+	// Broadcast event
+	broadcastEvent(&SSEEvent{
+		ID:        generateID("event"),
+		Type:      "queue_resumed",
+		Data:      map[string]interface{}{"paused": false},
+		Timestamp: time.Now(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "resumed",
+		"paused": false,
+	})
+}
+
+// =============================================================================
+// SSE EVENT STREAMING - Real-time build status updates
+// =============================================================================
+
+// broadcastEvent sends an event to all SSE subscribers
+func broadcastEvent(event *SSEEvent) {
+	sseSubscribersMu.RLock()
+	defer sseSubscribersMu.RUnlock()
+
+	for _, subscribers := range sseSubscribers {
+		for _, ch := range subscribers {
+			select {
+			case ch <- event:
+			default:
+				// Channel full, skip
+			}
+		}
+	}
+}
+
+// handleSSEEvents provides a general SSE stream for all build events
+func handleSSEEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Create subscriber channel
+	eventCh := make(chan *SSEEvent, 100)
+	subscriberID := generateID("sub")
+
+	sseSubscribersMu.Lock()
+	if sseSubscribers["all"] == nil {
+		sseSubscribers["all"] = make([]chan *SSEEvent, 0)
+	}
+	sseSubscribers["all"] = append(sseSubscribers["all"], eventCh)
+	sseSubscribersMu.Unlock()
+
+	// Cleanup on disconnect
+	defer func() {
+		sseSubscribersMu.Lock()
+		subscribers := sseSubscribers["all"]
+		for i, ch := range subscribers {
+			if ch == eventCh {
+				sseSubscribers["all"] = append(subscribers[:i], subscribers[i+1:]...)
+				break
+			}
+		}
+		sseSubscribersMu.Unlock()
+		close(eventCh)
+	}()
+
+	// Send initial connection event
+	fmt.Fprintf(w, "event: connected\ndata: {\"subscriberId\":\"%s\"}\n\n", subscriberID)
+	flusher.Flush()
+
+	// Send current queue status
+	queuePausedMu.RLock()
+	paused := queuePaused
+	queuePausedMu.RUnlock()
+
+	buildQueueMu.RLock()
+	queuedCount := 0
+	runningCount := 0
+	for _, job := range buildQueue {
+		if job.Status == "queued" {
+			queuedCount++
+		} else if job.Status == "running" {
+			runningCount++
+		}
+	}
+	buildQueueMu.RUnlock()
+
+	statusData := map[string]interface{}{
+		"queuePaused":   paused,
+		"queuedBuilds":  queuedCount,
+		"runningBuilds": runningCount,
+	}
+	data, _ := json.Marshal(statusData)
+	fmt.Fprintf(w, "event: status\ndata: %s\n\n", data)
+	flusher.Flush()
+
+	// Stream events
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event := <-eventCh:
+			data, _ := json.Marshal(event)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprintf(w, "event: heartbeat\ndata: {\"time\":\"%s\"}\n\n", time.Now().Format(time.RFC3339))
+			flusher.Flush()
+		}
+	}
+}
+
+// handleSSEBuildEvents provides SSE stream filtered by build/pipeline
+func handleSSEBuildEvents(w http.ResponseWriter, r *http.Request) {
+	pipelineID := r.URL.Query().Get("pipelineId")
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	eventCh := make(chan *SSEEvent, 100)
+	subscriberID := generateID("sub")
+	key := "builds"
+	if pipelineID != "" {
+		key = "pipeline:" + pipelineID
+	}
+
+	sseSubscribersMu.Lock()
+	if sseSubscribers[key] == nil {
+		sseSubscribers[key] = make([]chan *SSEEvent, 0)
+	}
+	sseSubscribers[key] = append(sseSubscribers[key], eventCh)
+	// Also subscribe to all events
+	if sseSubscribers["all"] == nil {
+		sseSubscribers["all"] = make([]chan *SSEEvent, 0)
+	}
+	sseSubscribers["all"] = append(sseSubscribers["all"], eventCh)
+	sseSubscribersMu.Unlock()
+
+	defer func() {
+		sseSubscribersMu.Lock()
+		for k := range sseSubscribers {
+			subscribers := sseSubscribers[k]
+			for i, ch := range subscribers {
+				if ch == eventCh {
+					sseSubscribers[k] = append(subscribers[:i], subscribers[i+1:]...)
+					break
+				}
+			}
+		}
+		sseSubscribersMu.Unlock()
+		close(eventCh)
+	}()
+
+	fmt.Fprintf(w, "event: connected\ndata: {\"subscriberId\":\"%s\",\"filter\":\"%s\"}\n\n", subscriberID, key)
+	flusher.Flush()
+
+	// Send recent executions for this pipeline
+	executionsMu.RLock()
+	recentExecs := make([]*PipelineExecution, 0)
+	for _, exec := range executions {
+		if pipelineID == "" || exec.PipelineID == pipelineID {
+			recentExecs = append(recentExecs, exec)
+			if len(recentExecs) >= 5 {
+				break
+			}
+		}
+	}
+	executionsMu.RUnlock()
+
+	if len(recentExecs) > 0 {
+		data, _ := json.Marshal(recentExecs)
+		fmt.Fprintf(w, "event: recent_executions\ndata: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event := <-eventCh:
+			// Filter events if pipeline-specific
+			if pipelineID != "" {
+				if pid, ok := event.Data["pipelineId"].(string); ok && pid != pipelineID {
+					continue
+				}
+			}
+			data, _ := json.Marshal(event)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprintf(w, "event: heartbeat\ndata: {\"time\":\"%s\"}\n\n", time.Now().Format(time.RFC3339))
+			flusher.Flush()
+		}
+	}
+}
+
+// =============================================================================
+// ENHANCED EXECUTION HANDLERS - Better filtering and pagination
+// =============================================================================
+
+// handleReadiness provides kubernetes readiness probe
+func handleReadiness(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check if k8s client is working
+	ready := true
+	if clientset != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{Limit: 1})
+		if err != nil {
+			ready = false
+		}
+	}
+
+	if !ready {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ready":      ready,
+		"time":       time.Now().UTC().Format(time.RFC3339),
+		"k8sClient":  clientset != nil,
+		"uptime":     time.Since(serviceStartTime).Seconds(),
+	})
+}
+
+// Helper function for rounding
+func round(val float64, precision int) float64 {
+	ratio := math.Pow(10, float64(precision))
+	return math.Round(val*ratio) / ratio
+}

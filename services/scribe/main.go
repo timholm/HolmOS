@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -59,14 +60,14 @@ type LogStore struct {
 }
 
 type StatsResponse struct {
-	Agent           string            `json:"agent"`
-	Tagline         string            `json:"tagline"`
-	TotalEntries    int               `json:"total_entries"`
-	Namespaces      map[string]int    `json:"namespaces"`
-	Pods            map[string]int    `json:"pods"`
-	Levels          map[string]int    `json:"levels"`
-	VolumeStats     VolumeStats       `json:"volume_stats"`
-	RetentionConfig RetentionConfig   `json:"retention_config"`
+	Agent           string          `json:"agent"`
+	Tagline         string          `json:"tagline"`
+	TotalEntries    int             `json:"total_entries"`
+	Namespaces      map[string]int  `json:"namespaces"`
+	Pods            map[string]int  `json:"pods"`
+	Levels          map[string]int  `json:"levels"`
+	VolumeStats     VolumeStats     `json:"volume_stats"`
+	RetentionConfig RetentionConfig `json:"retention_config"`
 }
 
 type VolumeStats struct {
@@ -102,11 +103,182 @@ type RetentionRequest struct {
 	RetentionHours int `json:"retention_hours"`
 }
 
+// ==================== ALERTING TYPES ====================
+
+// Alert represents an alerting rule
+type Alert struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Pattern     string    `json:"pattern"`             // Regex pattern to match
+	Level       string    `json:"level,omitempty"`     // Optional: only match specific level
+	Namespace   string    `json:"namespace,omitempty"` // Optional: only match specific namespace
+	Pod         string    `json:"pod,omitempty"`       // Optional: only match specific pod pattern
+	Threshold   int       `json:"threshold"`           // Number of matches to trigger
+	WindowMins  int       `json:"window_mins"`         // Time window in minutes
+	Severity    string    `json:"severity"`            // critical, warning, info
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AlertMatch represents a single match for an alert
+type AlertMatch struct {
+	AlertID   string    `json:"alert_id"`
+	Timestamp time.Time `json:"timestamp"`
+	Entry     LogEntry  `json:"entry"`
+}
+
+// AlertState tracks the current state of an alert
+type AlertState struct {
+	Alert       Alert        `json:"alert"`
+	Matches     []AlertMatch `json:"matches"`
+	Triggered   bool         `json:"triggered"`
+	TriggeredAt time.Time    `json:"triggered_at,omitempty"`
+	LastChecked time.Time    `json:"last_checked"`
+	MatchCount  int          `json:"match_count"`
+}
+
+// AlertStore manages alerts
+type AlertStore struct {
+	mu     sync.RWMutex
+	alerts map[string]*Alert
+	states map[string]*AlertState
+}
+
+// AlertResponse for API responses
+type AlertResponse struct {
+	Alerts    []Alert      `json:"alerts,omitempty"`
+	Alert     *Alert       `json:"alert,omitempty"`
+	States    []AlertState `json:"states,omitempty"`
+	Triggered []AlertState `json:"triggered,omitempty"`
+	Message   string       `json:"message,omitempty"`
+}
+
+// ==================== SEARCH TYPES ====================
+
+// SearchRequest for advanced search
+type SearchRequest struct {
+	Query        string    `json:"query"`
+	Regex        bool      `json:"regex"`
+	Namespace    string    `json:"namespace,omitempty"`
+	Level        string    `json:"level,omitempty"`
+	Pod          string    `json:"pod,omitempty"`
+	Container    string    `json:"container,omitempty"`
+	StartTime    time.Time `json:"start_time,omitempty"`
+	EndTime      time.Time `json:"end_time,omitempty"`
+	Limit        int       `json:"limit,omitempty"`
+	Offset       int       `json:"offset,omitempty"`
+	SortOrder    string    `json:"sort_order,omitempty"` // asc or desc
+	Highlight    bool      `json:"highlight"`
+	ContextLines int       `json:"context_lines,omitempty"` // lines before/after match
+}
+
+// SearchResult with metadata
+type SearchResult struct {
+	Entry         LogEntry   `json:"entry"`
+	Score         float64    `json:"score,omitempty"`
+	Highlights    []string   `json:"highlights,omitempty"`
+	LineNumber    int        `json:"line_number,omitempty"`
+	ContextBefore []LogEntry `json:"context_before,omitempty"`
+	ContextAfter  []LogEntry `json:"context_after,omitempty"`
+}
+
+// SearchResponse for search results
+type SearchResponse struct {
+	Query         string         `json:"query"`
+	TotalMatches  int            `json:"total_matches"`
+	ReturnedCount int            `json:"returned_count"`
+	Results       []SearchResult `json:"results"`
+	Took          string         `json:"took"`
+	ScribeSays    string         `json:"scribe_says,omitempty"`
+	Facets        *SearchFacets  `json:"facets,omitempty"`
+}
+
+// SearchFacets for filtering options
+type SearchFacets struct {
+	Namespaces map[string]int `json:"namespaces"`
+	Levels     map[string]int `json:"levels"`
+	Pods       map[string]int `json:"pods"`
+	TimeRanges map[string]int `json:"time_ranges"`
+}
+
+// ==================== AGGREGATION TYPES ====================
+
+// AggregationRequest for log aggregation
+type AggregationRequest struct {
+	GroupBy   []string          `json:"group_by"` // level, namespace, pod, container, hour, day
+	Metrics   []string          `json:"metrics"`  // count, bytes, avg_size
+	Filters   map[string]string `json:"filters,omitempty"`
+	StartTime time.Time         `json:"start_time,omitempty"`
+	EndTime   time.Time         `json:"end_time,omitempty"`
+	TopN      int               `json:"top_n,omitempty"` // Return top N results
+}
+
+// AggregationBucket for grouped results
+type AggregationBucket struct {
+	Key        map[string]string   `json:"key"`
+	Count      int                 `json:"count"`
+	Bytes      int64               `json:"bytes"`
+	AvgSize    float64             `json:"avg_size"`
+	FirstSeen  time.Time           `json:"first_seen"`
+	LastSeen   time.Time           `json:"last_seen"`
+	ErrorRate  float64             `json:"error_rate,omitempty"`
+	SubBuckets []AggregationBucket `json:"sub_buckets,omitempty"`
+}
+
+// AggregationResponse for aggregation results
+type AggregationResponse struct {
+	GroupBy    []string            `json:"group_by"`
+	TotalCount int                 `json:"total_count"`
+	TotalBytes int64               `json:"total_bytes"`
+	Buckets    []AggregationBucket `json:"buckets"`
+	Took       string              `json:"took"`
+	ScribeSays string              `json:"scribe_says,omitempty"`
+}
+
+// ==================== RETENTION POLICY TYPES ====================
+
+// RetentionPolicy for advanced retention management
+type RetentionPolicy struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Namespace   string `json:"namespace,omitempty"` // Apply to specific namespace, empty = all
+	Level       string `json:"level,omitempty"`     // Apply to specific level, empty = all
+	MaxAge      int    `json:"max_age_hours"`       // Max age in hours
+	MaxEntries  int    `json:"max_entries"`         // Max entries to keep
+	Priority    int    `json:"priority"`            // Higher priority = applied first
+	Enabled     bool   `json:"enabled"`
+}
+
+// RetentionPolicyStore manages retention policies
+type RetentionPolicyStore struct {
+	mu       sync.RWMutex
+	policies map[string]*RetentionPolicy
+}
+
+// ExportRequest for enhanced export
+type ExportRequest struct {
+	Format          string    `json:"format"` // json, csv, txt, ndjson
+	Query           string    `json:"query,omitempty"`
+	Namespace       string    `json:"namespace,omitempty"`
+	Level           string    `json:"level,omitempty"`
+	Pod             string    `json:"pod,omitempty"`
+	StartTime       time.Time `json:"start_time,omitempty"`
+	EndTime         time.Time `json:"end_time,omitempty"`
+	Limit           int       `json:"limit,omitempty"`
+	IncludeMetadata bool      `json:"include_metadata"`
+	Compress        bool      `json:"compress"`
+}
+
 var (
-	store       *LogStore
-	clientset   *kubernetes.Clientset
-	podLastSeen map[string]time.Time
-	podMu       sync.RWMutex
+	store          *LogStore
+	alertStore     *AlertStore
+	retentionStore *RetentionPolicyStore
+	clientset      *kubernetes.Clientset
+	podLastSeen    map[string]time.Time
+	podMu          sync.RWMutex
 )
 
 func NewLogStore() *LogStore {
@@ -161,6 +333,11 @@ func (ls *LogStore) Add(entry LogEntry) {
 	hourKey := entry.Timestamp.Format("2006-01-02-15")
 	ls.entriesPerHour[hourKey]++
 	ls.statsMu.Unlock()
+
+	// Check alerts for this entry
+	if alertStore != nil {
+		alertStore.CheckEntry(entry)
+	}
 
 	// Notify subscribers
 	ls.subMu.RLock()
@@ -362,6 +539,508 @@ func (ls *LogStore) applyRetention() {
 			ls.entries = ls.entries[idx:]
 		}
 	}
+}
+
+// AdvancedSearch performs full-text search with advanced options
+func (ls *LogStore) AdvancedSearch(req SearchRequest) ([]SearchResult, int, *SearchFacets) {
+	ls.mu.RLock()
+	defer ls.mu.RUnlock()
+
+	var results []SearchResult
+	var regex *regexp.Regexp
+	var err error
+
+	if req.Regex && req.Query != "" {
+		regex, err = regexp.Compile("(?i)" + req.Query)
+		if err != nil {
+			regex = nil
+		}
+	}
+
+	queryLower := strings.ToLower(req.Query)
+
+	// Build facets
+	facets := &SearchFacets{
+		Namespaces: make(map[string]int),
+		Levels:     make(map[string]int),
+		Pods:       make(map[string]int),
+		TimeRanges: make(map[string]int),
+	}
+
+	totalMatches := 0
+	limit := req.Limit
+	if limit == 0 {
+		limit = 500
+	}
+	offset := req.Offset
+
+	// Determine iteration order
+	var indices []int
+	if req.SortOrder == "asc" {
+		for i := 0; i < len(ls.entries); i++ {
+			indices = append(indices, i)
+		}
+	} else {
+		for i := len(ls.entries) - 1; i >= 0; i-- {
+			indices = append(indices, i)
+		}
+	}
+
+	for _, i := range indices {
+		entry := ls.entries[i]
+
+		// Apply filters
+		if req.Namespace != "" && entry.Namespace != req.Namespace {
+			continue
+		}
+		if req.Level != "" && entry.Level != req.Level {
+			continue
+		}
+		if req.Pod != "" && !strings.Contains(entry.Pod, req.Pod) {
+			continue
+		}
+		if req.Container != "" && !strings.Contains(entry.Container, req.Container) {
+			continue
+		}
+		if !req.StartTime.IsZero() && entry.Timestamp.Before(req.StartTime) {
+			continue
+		}
+		if !req.EndTime.IsZero() && entry.Timestamp.After(req.EndTime) {
+			continue
+		}
+
+		// Apply query
+		matched := false
+		var highlights []string
+
+		if req.Query == "" {
+			matched = true
+		} else if regex != nil {
+			if regex.MatchString(entry.Message) {
+				matched = true
+				if req.Highlight {
+					matches := regex.FindAllString(entry.Message, -1)
+					highlights = append(highlights, matches...)
+				}
+			}
+		} else {
+			if strings.Contains(strings.ToLower(entry.Message), queryLower) {
+				matched = true
+				if req.Highlight {
+					highlights = append(highlights, req.Query)
+				}
+			}
+		}
+
+		if !matched {
+			continue
+		}
+
+		totalMatches++
+
+		// Update facets
+		facets.Namespaces[entry.Namespace]++
+		facets.Levels[entry.Level]++
+		facets.Pods[entry.Pod]++
+		hourKey := entry.Timestamp.Format("2006-01-02 15:00")
+		facets.TimeRanges[hourKey]++
+
+		// Apply pagination
+		if totalMatches <= offset {
+			continue
+		}
+		if len(results) >= limit {
+			continue
+		}
+
+		result := SearchResult{
+			Entry:      entry,
+			Highlights: highlights,
+			LineNumber: i + 1,
+		}
+
+		// Add context lines if requested
+		if req.ContextLines > 0 {
+			// Context before
+			start := i - req.ContextLines
+			if start < 0 {
+				start = 0
+			}
+			for j := start; j < i; j++ {
+				result.ContextBefore = append(result.ContextBefore, ls.entries[j])
+			}
+
+			// Context after
+			end := i + req.ContextLines + 1
+			if end > len(ls.entries) {
+				end = len(ls.entries)
+			}
+			for j := i + 1; j < end; j++ {
+				result.ContextAfter = append(result.ContextAfter, ls.entries[j])
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	return results, totalMatches, facets
+}
+
+// Aggregate performs log aggregation
+func (ls *LogStore) Aggregate(req AggregationRequest) []AggregationBucket {
+	ls.mu.RLock()
+	defer ls.mu.RUnlock()
+
+	buckets := make(map[string]*AggregationBucket)
+
+	for _, entry := range ls.entries {
+		// Apply time filters
+		if !req.StartTime.IsZero() && entry.Timestamp.Before(req.StartTime) {
+			continue
+		}
+		if !req.EndTime.IsZero() && entry.Timestamp.After(req.EndTime) {
+			continue
+		}
+
+		// Apply filters
+		if ns, ok := req.Filters["namespace"]; ok && entry.Namespace != ns {
+			continue
+		}
+		if lvl, ok := req.Filters["level"]; ok && entry.Level != lvl {
+			continue
+		}
+		if pod, ok := req.Filters["pod"]; ok && !strings.Contains(entry.Pod, pod) {
+			continue
+		}
+
+		// Build bucket key
+		keyParts := make(map[string]string)
+		for _, groupBy := range req.GroupBy {
+			switch groupBy {
+			case "level":
+				keyParts["level"] = entry.Level
+			case "namespace":
+				keyParts["namespace"] = entry.Namespace
+			case "pod":
+				keyParts["pod"] = entry.Pod
+			case "container":
+				keyParts["container"] = entry.Container
+			case "hour":
+				keyParts["hour"] = entry.Timestamp.Format("2006-01-02 15:00")
+			case "day":
+				keyParts["day"] = entry.Timestamp.Format("2006-01-02")
+			}
+		}
+
+		// Create bucket key string
+		var keyStr string
+		for _, k := range req.GroupBy {
+			keyStr += keyParts[k] + "|"
+		}
+
+		bucket, exists := buckets[keyStr]
+		if !exists {
+			bucket = &AggregationBucket{
+				Key:       keyParts,
+				FirstSeen: entry.Timestamp,
+				LastSeen:  entry.Timestamp,
+			}
+			buckets[keyStr] = bucket
+		}
+
+		bucket.Count++
+		bucket.Bytes += int64(entry.Size)
+		if entry.Timestamp.Before(bucket.FirstSeen) {
+			bucket.FirstSeen = entry.Timestamp
+		}
+		if entry.Timestamp.After(bucket.LastSeen) {
+			bucket.LastSeen = entry.Timestamp
+		}
+	}
+
+	// Calculate averages and error rates
+	var result []AggregationBucket
+	for _, bucket := range buckets {
+		if bucket.Count > 0 {
+			bucket.AvgSize = float64(bucket.Bytes) / float64(bucket.Count)
+		}
+		result = append(result, *bucket)
+	}
+
+	// Sort by count descending
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Count > result[j].Count
+	})
+
+	// Apply TopN if specified
+	if req.TopN > 0 && len(result) > req.TopN {
+		result = result[:req.TopN]
+	}
+
+	return result
+}
+
+// ==================== ALERT STORE METHODS ====================
+
+func NewAlertStore() *AlertStore {
+	return &AlertStore{
+		alerts: make(map[string]*Alert),
+		states: make(map[string]*AlertState),
+	}
+}
+
+func (as *AlertStore) Add(alert Alert) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+
+	if alert.ID == "" {
+		alert.ID = fmt.Sprintf("alert-%d", time.Now().UnixNano())
+	}
+	alert.CreatedAt = time.Now()
+	alert.UpdatedAt = time.Now()
+
+	as.alerts[alert.ID] = &alert
+	as.states[alert.ID] = &AlertState{
+		Alert:       alert,
+		Matches:     []AlertMatch{},
+		LastChecked: time.Now(),
+	}
+}
+
+func (as *AlertStore) Get(id string) (*Alert, bool) {
+	as.mu.RLock()
+	defer as.mu.RUnlock()
+	alert, ok := as.alerts[id]
+	return alert, ok
+}
+
+func (as *AlertStore) List() []Alert {
+	as.mu.RLock()
+	defer as.mu.RUnlock()
+
+	alerts := make([]Alert, 0, len(as.alerts))
+	for _, alert := range as.alerts {
+		alerts = append(alerts, *alert)
+	}
+	return alerts
+}
+
+func (as *AlertStore) Delete(id string) bool {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+
+	if _, exists := as.alerts[id]; exists {
+		delete(as.alerts, id)
+		delete(as.states, id)
+		return true
+	}
+	return false
+}
+
+func (as *AlertStore) Update(alert Alert) bool {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+
+	if _, exists := as.alerts[alert.ID]; exists {
+		alert.UpdatedAt = time.Now()
+		as.alerts[alert.ID] = &alert
+		return true
+	}
+	return false
+}
+
+func (as *AlertStore) GetStates() []AlertState {
+	as.mu.RLock()
+	defer as.mu.RUnlock()
+
+	states := make([]AlertState, 0, len(as.states))
+	for _, state := range as.states {
+		states = append(states, *state)
+	}
+	return states
+}
+
+func (as *AlertStore) GetTriggered() []AlertState {
+	as.mu.RLock()
+	defer as.mu.RUnlock()
+
+	var triggered []AlertState
+	for _, state := range as.states {
+		if state.Triggered {
+			triggered = append(triggered, *state)
+		}
+	}
+	return triggered
+}
+
+// CheckEntry checks if a log entry matches any alert patterns
+func (as *AlertStore) CheckEntry(entry LogEntry) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+
+	for id, alert := range as.alerts {
+		if !alert.Enabled {
+			continue
+		}
+
+		// Check filters
+		if alert.Level != "" && entry.Level != alert.Level {
+			continue
+		}
+		if alert.Namespace != "" && entry.Namespace != alert.Namespace {
+			continue
+		}
+		if alert.Pod != "" && !strings.Contains(entry.Pod, alert.Pod) {
+			continue
+		}
+
+		// Check pattern
+		regex, err := regexp.Compile("(?i)" + alert.Pattern)
+		if err != nil {
+			continue
+		}
+
+		if !regex.MatchString(entry.Message) {
+			continue
+		}
+
+		// Match found
+		state := as.states[id]
+		match := AlertMatch{
+			AlertID:   id,
+			Timestamp: entry.Timestamp,
+			Entry:     entry,
+		}
+		state.Matches = append(state.Matches, match)
+
+		// Prune old matches outside window
+		windowStart := time.Now().Add(-time.Duration(alert.WindowMins) * time.Minute)
+		var recentMatches []AlertMatch
+		for _, m := range state.Matches {
+			if m.Timestamp.After(windowStart) {
+				recentMatches = append(recentMatches, m)
+			}
+		}
+		state.Matches = recentMatches
+		state.MatchCount = len(recentMatches)
+		state.LastChecked = time.Now()
+
+		// Check if threshold exceeded
+		if state.MatchCount >= alert.Threshold && !state.Triggered {
+			state.Triggered = true
+			state.TriggeredAt = time.Now()
+			log.Printf("ALERT TRIGGERED: %s - %d matches in %d minutes",
+				alert.Name, state.MatchCount, alert.WindowMins)
+		} else if state.MatchCount < alert.Threshold && state.Triggered {
+			// Reset if below threshold
+			state.Triggered = false
+		}
+	}
+}
+
+// ==================== RETENTION POLICY STORE METHODS ====================
+
+func NewRetentionPolicyStore() *RetentionPolicyStore {
+	return &RetentionPolicyStore{
+		policies: make(map[string]*RetentionPolicy),
+	}
+}
+
+func (rps *RetentionPolicyStore) Add(policy RetentionPolicy) {
+	rps.mu.Lock()
+	defer rps.mu.Unlock()
+
+	if policy.ID == "" {
+		policy.ID = fmt.Sprintf("policy-%d", time.Now().UnixNano())
+	}
+	rps.policies[policy.ID] = &policy
+}
+
+func (rps *RetentionPolicyStore) Get(id string) (*RetentionPolicy, bool) {
+	rps.mu.RLock()
+	defer rps.mu.RUnlock()
+	policy, ok := rps.policies[id]
+	return policy, ok
+}
+
+func (rps *RetentionPolicyStore) List() []RetentionPolicy {
+	rps.mu.RLock()
+	defer rps.mu.RUnlock()
+
+	policies := make([]RetentionPolicy, 0, len(rps.policies))
+	for _, policy := range rps.policies {
+		policies = append(policies, *policy)
+	}
+
+	// Sort by priority
+	sort.Slice(policies, func(i, j int) bool {
+		return policies[i].Priority > policies[j].Priority
+	})
+
+	return policies
+}
+
+func (rps *RetentionPolicyStore) Delete(id string) bool {
+	rps.mu.Lock()
+	defer rps.mu.Unlock()
+
+	if _, exists := rps.policies[id]; exists {
+		delete(rps.policies, id)
+		return true
+	}
+	return false
+}
+
+func (rps *RetentionPolicyStore) Update(policy RetentionPolicy) bool {
+	rps.mu.Lock()
+	defer rps.mu.Unlock()
+
+	if _, exists := rps.policies[policy.ID]; exists {
+		rps.policies[policy.ID] = &policy
+		return true
+	}
+	return false
+}
+
+// ApplyPolicies applies retention policies to entries
+func (rps *RetentionPolicyStore) ApplyPolicies(entries []LogEntry) []LogEntry {
+	rps.mu.RLock()
+	policies := rps.List()
+	rps.mu.RUnlock()
+
+	now := time.Now()
+	var retained []LogEntry
+
+	for _, entry := range entries {
+		keep := true
+
+		for _, policy := range policies {
+			if !policy.Enabled {
+				continue
+			}
+
+			// Check if policy applies to this entry
+			if policy.Namespace != "" && entry.Namespace != policy.Namespace {
+				continue
+			}
+			if policy.Level != "" && entry.Level != policy.Level {
+				continue
+			}
+
+			// Check age
+			age := now.Sub(entry.Timestamp)
+			if policy.MaxAge > 0 && age > time.Duration(policy.MaxAge)*time.Hour {
+				keep = false
+				break
+			}
+		}
+
+		if keep {
+			retained = append(retained, entry)
+		}
+	}
+
+	return retained
 }
 
 func copyInt64Map(m map[string]int64) map[string]int64 {
@@ -865,6 +1544,508 @@ func handleVolumeStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
+// ==================== SEARCH HANDLER ====================
+
+func handleSearch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	startTime := time.Now()
+
+	var req SearchRequest
+
+	if r.Method == http.MethodPost {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// Parse from query params
+		req.Query = r.URL.Query().Get("q")
+		req.Regex = r.URL.Query().Get("regex") == "true"
+		req.Namespace = r.URL.Query().Get("namespace")
+		req.Level = r.URL.Query().Get("level")
+		req.Pod = r.URL.Query().Get("pod")
+		req.Container = r.URL.Query().Get("container")
+		req.Highlight = r.URL.Query().Get("highlight") == "true"
+		req.SortOrder = r.URL.Query().Get("sort")
+
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if n, err := strconv.Atoi(l); err == nil {
+				req.Limit = n
+			}
+		}
+		if o := r.URL.Query().Get("offset"); o != "" {
+			if n, err := strconv.Atoi(o); err == nil {
+				req.Offset = n
+			}
+		}
+		if c := r.URL.Query().Get("context"); c != "" {
+			if n, err := strconv.Atoi(c); err == nil {
+				req.ContextLines = n
+			}
+		}
+
+		// Parse time range
+		if st := r.URL.Query().Get("start_time"); st != "" {
+			if t, err := time.Parse(time.RFC3339, st); err == nil {
+				req.StartTime = t
+			}
+		}
+		if et := r.URL.Query().Get("end_time"); et != "" {
+			if t, err := time.Parse(time.RFC3339, et); err == nil {
+				req.EndTime = t
+			}
+		}
+	}
+
+	results, totalMatches, facets := store.AdvancedSearch(req)
+
+	took := time.Since(startTime)
+
+	// Generate Scribe commentary
+	var scribeSays string
+	if totalMatches == 0 {
+		scribeSays = "The chronicles hold no records matching your query. Perhaps refine your search terms?"
+	} else if req.Regex {
+		scribeSays = fmt.Sprintf("The regex pattern '%s' reveals %d entries in the annals. Searched in %s.", req.Query, totalMatches, took.Round(time.Millisecond))
+	} else if totalMatches > 1000 {
+		scribeSays = fmt.Sprintf("A vast trove of %d records discovered in %s. Consider narrowing your search.", totalMatches, took.Round(time.Millisecond))
+	} else {
+		scribeSays = fmt.Sprintf("Found %d records in %s. It's all in the records.", totalMatches, took.Round(time.Millisecond))
+	}
+
+	response := SearchResponse{
+		Query:         req.Query,
+		TotalMatches:  totalMatches,
+		ReturnedCount: len(results),
+		Results:       results,
+		Took:          took.String(),
+		ScribeSays:    scribeSays,
+		Facets:        facets,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// ==================== ALERTS HANDLER ====================
+
+func handleAlerts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check for specific alert ID in path
+	path := strings.TrimPrefix(r.URL.Path, "/api/alerts")
+	alertID := strings.TrimPrefix(path, "/")
+
+	switch r.Method {
+	case http.MethodGet:
+		if alertID == "" {
+			// List all alerts
+			alerts := alertStore.List()
+			json.NewEncoder(w).Encode(AlertResponse{
+				Alerts:  alerts,
+				Message: fmt.Sprintf("The chronicles track %d alerting rules", len(alerts)),
+			})
+		} else if alertID == "states" {
+			// Get all alert states
+			states := alertStore.GetStates()
+			json.NewEncoder(w).Encode(AlertResponse{
+				States:  states,
+				Message: fmt.Sprintf("%d alert states in the realm", len(states)),
+			})
+		} else if alertID == "triggered" {
+			// Get triggered alerts
+			triggered := alertStore.GetTriggered()
+			json.NewEncoder(w).Encode(AlertResponse{
+				Triggered: triggered,
+				Message:   fmt.Sprintf("%d alerts currently triggered", len(triggered)),
+			})
+		} else {
+			// Get specific alert
+			alert, exists := alertStore.Get(alertID)
+			if !exists {
+				http.Error(w, "Alert not found", http.StatusNotFound)
+				return
+			}
+			json.NewEncoder(w).Encode(AlertResponse{Alert: alert})
+		}
+
+	case http.MethodPost:
+		var alert Alert
+		if err := json.NewDecoder(r.Body).Decode(&alert); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if alert.Pattern == "" {
+			http.Error(w, "Pattern is required", http.StatusBadRequest)
+			return
+		}
+		if alert.Name == "" {
+			alert.Name = "Unnamed Alert"
+		}
+		if alert.Threshold == 0 {
+			alert.Threshold = 1
+		}
+		if alert.WindowMins == 0 {
+			alert.WindowMins = 5
+		}
+		if alert.Severity == "" {
+			alert.Severity = "warning"
+		}
+		alert.Enabled = true
+
+		alertStore.Add(alert)
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(AlertResponse{
+			Alert:   &alert,
+			Message: fmt.Sprintf("Alert '%s' inscribed in the chronicles", alert.Name),
+		})
+
+	case http.MethodPut:
+		if alertID == "" {
+			http.Error(w, "Alert ID required", http.StatusBadRequest)
+			return
+		}
+
+		var alert Alert
+		if err := json.NewDecoder(r.Body).Decode(&alert); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		alert.ID = alertID
+
+		if !alertStore.Update(alert) {
+			http.Error(w, "Alert not found", http.StatusNotFound)
+			return
+		}
+
+		json.NewEncoder(w).Encode(AlertResponse{
+			Alert:   &alert,
+			Message: "Alert updated in the chronicles",
+		})
+
+	case http.MethodDelete:
+		if alertID == "" {
+			http.Error(w, "Alert ID required", http.StatusBadRequest)
+			return
+		}
+
+		if !alertStore.Delete(alertID) {
+			http.Error(w, "Alert not found", http.StatusNotFound)
+			return
+		}
+
+		json.NewEncoder(w).Encode(AlertResponse{
+			Message: "Alert removed from the chronicles",
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ==================== AGGREGATIONS HANDLER ====================
+
+func handleAggregations(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	startTime := time.Now()
+
+	var req AggregationRequest
+
+	if r.Method == http.MethodPost {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// Parse from query params
+		if groupBy := r.URL.Query().Get("group_by"); groupBy != "" {
+			req.GroupBy = strings.Split(groupBy, ",")
+		}
+		if topN := r.URL.Query().Get("top_n"); topN != "" {
+			if n, err := strconv.Atoi(topN); err == nil {
+				req.TopN = n
+			}
+		}
+
+		// Parse filters
+		req.Filters = make(map[string]string)
+		if ns := r.URL.Query().Get("namespace"); ns != "" {
+			req.Filters["namespace"] = ns
+		}
+		if lvl := r.URL.Query().Get("level"); lvl != "" {
+			req.Filters["level"] = lvl
+		}
+		if pod := r.URL.Query().Get("pod"); pod != "" {
+			req.Filters["pod"] = pod
+		}
+
+		// Parse time range
+		if st := r.URL.Query().Get("start_time"); st != "" {
+			if t, err := time.Parse(time.RFC3339, st); err == nil {
+				req.StartTime = t
+			}
+		}
+		if et := r.URL.Query().Get("end_time"); et != "" {
+			if t, err := time.Parse(time.RFC3339, et); err == nil {
+				req.EndTime = t
+			}
+		}
+	}
+
+	// Default grouping
+	if len(req.GroupBy) == 0 {
+		req.GroupBy = []string{"level"}
+	}
+
+	buckets := store.Aggregate(req)
+
+	took := time.Since(startTime)
+
+	// Calculate totals
+	var totalCount int
+	var totalBytes int64
+	for _, b := range buckets {
+		totalCount += b.Count
+		totalBytes += b.Bytes
+	}
+
+	// Generate Scribe commentary
+	var scribeSays string
+	if len(buckets) == 0 {
+		scribeSays = "No data to aggregate within the specified parameters."
+	} else {
+		scribeSays = fmt.Sprintf("Aggregated %d entries into %d buckets by %s in %s.",
+			totalCount, len(buckets), strings.Join(req.GroupBy, ", "), took.Round(time.Millisecond))
+	}
+
+	response := AggregationResponse{
+		GroupBy:    req.GroupBy,
+		TotalCount: totalCount,
+		TotalBytes: totalBytes,
+		Buckets:    buckets,
+		Took:       took.String(),
+		ScribeSays: scribeSays,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// ==================== ENHANCED EXPORT HANDLER ====================
+
+func handleExport(w http.ResponseWriter, r *http.Request) {
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "json"
+	}
+
+	query := r.URL.Query().Get("q")
+	namespace := r.URL.Query().Get("namespace")
+	level := r.URL.Query().Get("level")
+	pod := r.URL.Query().Get("pod")
+	useRegex := r.URL.Query().Get("regex") == "true"
+
+	limit := 10000
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	// Parse time range
+	var startTime, endTime time.Time
+	if st := r.URL.Query().Get("start_time"); st != "" {
+		if t, err := time.Parse(time.RFC3339, st); err == nil {
+			startTime = t
+		}
+	}
+	if et := r.URL.Query().Get("end_time"); et != "" {
+		if t, err := time.Parse(time.RFC3339, et); err == nil {
+			endTime = t
+		}
+	}
+
+	// Use advanced search for filtering
+	searchReq := SearchRequest{
+		Query:     query,
+		Regex:     useRegex,
+		Namespace: namespace,
+		Level:     level,
+		Pod:       pod,
+		StartTime: startTime,
+		EndTime:   endTime,
+		Limit:     limit,
+	}
+
+	results, totalMatches, _ := store.AdvancedSearch(searchReq)
+
+	// Extract entries from results
+	entries := make([]LogEntry, len(results))
+	for i, r := range results {
+		entries[i] = r.Entry
+	}
+
+	filename := fmt.Sprintf("scribe-logs-%s", time.Now().Format("2006-01-02-150405"))
+
+	switch format {
+	case "csv":
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.csv", filename))
+
+		writer := csv.NewWriter(w)
+		// Write header
+		writer.Write([]string{"timestamp", "namespace", "pod", "container", "level", "message", "size"})
+
+		for _, e := range entries {
+			writer.Write([]string{
+				e.Timestamp.Format(time.RFC3339),
+				e.Namespace,
+				e.Pod,
+				e.Container,
+				e.Level,
+				e.Message,
+				strconv.Itoa(e.Size),
+			})
+		}
+		writer.Flush()
+
+	case "ndjson":
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.ndjson", filename))
+
+		encoder := json.NewEncoder(w)
+		for _, e := range entries {
+			encoder.Encode(e)
+		}
+
+	case "txt":
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.txt", filename))
+
+		for _, e := range entries {
+			line := fmt.Sprintf("[%s] [%s] %s/%s [%s] %s\n",
+				e.Timestamp.Format("2006-01-02 15:04:05"),
+				e.Level, e.Namespace, e.Pod, e.Container, e.Message)
+			w.Write([]byte(line))
+		}
+
+	default: // json
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.json", filename))
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"exported_at":   time.Now(),
+			"total_matches": totalMatches,
+			"count":         len(entries),
+			"filters": map[string]interface{}{
+				"query":      query,
+				"namespace":  namespace,
+				"level":      level,
+				"pod":        pod,
+				"start_time": startTime,
+				"end_time":   endTime,
+			},
+			"entries": entries,
+		})
+	}
+}
+
+// ==================== RETENTION POLICIES HANDLER ====================
+
+func handleRetentionPolicies(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check for specific policy ID in path
+	path := strings.TrimPrefix(r.URL.Path, "/api/retention/policies")
+	policyID := strings.TrimPrefix(path, "/")
+
+	switch r.Method {
+	case http.MethodGet:
+		if policyID == "" {
+			// List all policies
+			policies := retentionStore.List()
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"policies": policies,
+				"count":    len(policies),
+				"message":  fmt.Sprintf("%d retention policies configured", len(policies)),
+			})
+		} else {
+			// Get specific policy
+			policy, exists := retentionStore.Get(policyID)
+			if !exists {
+				http.Error(w, "Policy not found", http.StatusNotFound)
+				return
+			}
+			json.NewEncoder(w).Encode(policy)
+		}
+
+	case http.MethodPost:
+		var policy RetentionPolicy
+		if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if policy.Name == "" {
+			policy.Name = "Unnamed Policy"
+		}
+		if policy.MaxAge == 0 && policy.MaxEntries == 0 {
+			http.Error(w, "Either max_age_hours or max_entries is required", http.StatusBadRequest)
+			return
+		}
+		policy.Enabled = true
+
+		retentionStore.Add(policy)
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"policy":  policy,
+			"message": fmt.Sprintf("Retention policy '%s' created", policy.Name),
+		})
+
+	case http.MethodPut:
+		if policyID == "" {
+			http.Error(w, "Policy ID required", http.StatusBadRequest)
+			return
+		}
+
+		var policy RetentionPolicy
+		if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		policy.ID = policyID
+
+		if !retentionStore.Update(policy) {
+			http.Error(w, "Policy not found", http.StatusNotFound)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"policy":  policy,
+			"message": "Retention policy updated",
+		})
+
+	case http.MethodDelete:
+		if policyID == "" {
+			http.Error(w, "Policy ID required", http.StatusBadRequest)
+			return
+		}
+
+		if !retentionStore.Delete(policyID) {
+			http.Error(w, "Policy not found", http.StatusNotFound)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "Retention policy removed",
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -933,6 +2114,28 @@ func generateScribeResponse(message string) string {
 
 	if strings.Contains(msgLower, "stream") || strings.Contains(msgLower, "live") || strings.Contains(msgLower, "real-time") || strings.Contains(msgLower, "tail") {
 		return "Click the Live Tail button to witness events as they unfold. The chronicles update in real-time, capturing every moment. Stop the stream when you have seen enough."
+	}
+
+	if strings.Contains(msgLower, "alert") || strings.Contains(msgLower, "notify") || strings.Contains(msgLower, "trigger") {
+		triggered := alertStore.GetTriggered()
+		if len(triggered) > 0 {
+			return fmt.Sprintf("Warning! %d alerts are currently triggered. Check /api/alerts/triggered for details. The chronicles demand your attention.", len(triggered))
+		}
+		alerts := alertStore.List()
+		return fmt.Sprintf("I monitor %d alerting rules. Use /api/alerts to manage them. Currently, no alerts are triggered.", len(alerts))
+	}
+
+	if strings.Contains(msgLower, "aggregat") || strings.Contains(msgLower, "group") || strings.Contains(msgLower, "summarize") {
+		return "Use /api/aggregations to group logs by level, namespace, pod, hour, or day. Example: /api/aggregations?group_by=level,namespace to see counts by level within each namespace."
+	}
+
+	if strings.Contains(msgLower, "policy") || strings.Contains(msgLower, "policies") {
+		policies := retentionStore.List()
+		return fmt.Sprintf("I enforce %d retention policies. Use /api/retention/policies to view and manage them. Policies control how long different types of logs are preserved.", len(policies))
+	}
+
+	if strings.Contains(msgLower, "api") || strings.Contains(msgLower, "endpoint") {
+		return "Available endpoints: /api/search (advanced search), /api/alerts (alerting), /api/aggregations (log grouping), /api/export (enhanced export), /api/retention/policies (retention management). It's all in the records."
 	}
 
 	// Default responses
@@ -1516,6 +2719,38 @@ const uiTemplate = `<!DOCTYPE html>
                 </div>
             </div>
         </section>
+
+        <section class="alerts-section" style="background: var(--ctp-mantle); padding: 20px; border-radius: 12px; margin-bottom: 20px; border: 1px solid var(--ctp-surface0);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="color: var(--ctp-lavender);">&#128276; Alert Monitor</h3>
+                <div style="display: flex; gap: 10px;">
+                    <span id="alert-status" style="padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; background: var(--ctp-green); color: var(--ctp-crust);">All Clear</span>
+                    <button class="btn btn-secondary" onclick="loadAlerts()" style="padding: 8px 16px;">Refresh</button>
+                </div>
+            </div>
+            <div id="alerts-container" style="max-height: 200px; overflow-y: auto;">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+        </section>
+
+        <section class="aggregations-section" style="background: var(--ctp-mantle); padding: 20px; border-radius: 12px; margin-bottom: 20px; border: 1px solid var(--ctp-surface0);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="color: var(--ctp-lavender);">&#128202; Log Aggregations</h3>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <select id="agg-group-by" class="filter-select" style="min-width: 180px;">
+                        <option value="level">By Level</option>
+                        <option value="namespace">By Namespace</option>
+                        <option value="pod">By Pod</option>
+                        <option value="level,namespace">Level + Namespace</option>
+                        <option value="hour">By Hour</option>
+                        <option value="day">By Day</option>
+                    </select>
+                    <button class="btn" onclick="loadAggregations()">Aggregate</button>
+                </div>
+            </div>
+            <div id="agg-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+            </div>
+        </section>
     </div>
 
     <script>
@@ -1902,6 +3137,121 @@ const uiTemplate = `<!DOCTYPE html>
             container.appendChild(div);
             container.scrollTop = container.scrollHeight;
         }
+
+        // ==================== ALERTS ====================
+
+        async function loadAlerts() {
+            const container = document.getElementById('alerts-container');
+            const statusBadge = document.getElementById('alert-status');
+
+            try {
+                const [alertsRes, triggeredRes] = await Promise.all([
+                    fetchWithTimeout('/api/alerts'),
+                    fetchWithTimeout('/api/alerts/triggered')
+                ]);
+
+                const alertsData = await alertsRes.json();
+                const triggeredData = await triggeredRes.json();
+
+                const alerts = alertsData.alerts || [];
+                const triggered = triggeredData.triggered || [];
+
+                // Update status badge
+                if (triggered.length > 0) {
+                    statusBadge.textContent = triggered.length + ' Triggered';
+                    statusBadge.style.background = 'var(--ctp-red)';
+                } else {
+                    statusBadge.textContent = 'All Clear';
+                    statusBadge.style.background = 'var(--ctp-green)';
+                }
+
+                if (alerts.length === 0) {
+                    container.innerHTML = '<p style="color: var(--ctp-subtext0); text-align: center; padding: 20px;">No alerts configured</p>';
+                    return;
+                }
+
+                container.innerHTML = alerts.map(alert => {
+                    const isTriggered = triggered.some(t => t.alert.id === alert.id);
+                    const severityColor = alert.severity === 'critical' ? 'var(--ctp-red)' :
+                                         alert.severity === 'warning' ? 'var(--ctp-yellow)' : 'var(--ctp-blue)';
+                    return '<div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: var(--ctp-surface0); border-radius: 8px; margin-bottom: 8px; border-left: 3px solid ' + severityColor + ';">' +
+                        '<div>' +
+                            '<div style="font-weight: bold; color: ' + (isTriggered ? 'var(--ctp-red)' : 'var(--ctp-text)') + ';">' + escapeHtml(alert.name) + (isTriggered ? ' [TRIGGERED]' : '') + '</div>' +
+                            '<div style="font-size: 0.85rem; color: var(--ctp-subtext0);">Pattern: ' + escapeHtml(alert.pattern) + ' | Threshold: ' + alert.threshold + ' in ' + alert.window_mins + 'min</div>' +
+                        '</div>' +
+                        '<div style="display: flex; gap: 10px; align-items: center;">' +
+                            '<span style="padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; background: ' + severityColor + '; color: var(--ctp-crust);">' + alert.severity.toUpperCase() + '</span>' +
+                            '<span style="color: ' + (alert.enabled ? 'var(--ctp-green)' : 'var(--ctp-overlay0)') + ';">' + (alert.enabled ? 'ON' : 'OFF') + '</span>' +
+                        '</div>' +
+                    '</div>';
+                }).join('');
+
+            } catch (e) {
+                console.error('Alerts error:', e);
+                container.innerHTML = '<p style="color: var(--ctp-red); text-align: center; padding: 20px;">Failed to load alerts</p>';
+            }
+        }
+
+        // ==================== AGGREGATIONS ====================
+
+        async function loadAggregations() {
+            const container = document.getElementById('agg-container');
+            const groupBy = document.getElementById('agg-group-by').value;
+
+            container.innerHTML = '<div class="loading" style="grid-column: 1 / -1;"><div class="spinner"></div></div>';
+
+            try {
+                const res = await fetchWithTimeout('/api/aggregations?group_by=' + groupBy + '&top_n=10');
+                const data = await res.json();
+
+                if (!data.buckets || data.buckets.length === 0) {
+                    container.innerHTML = '<p style="color: var(--ctp-subtext0); text-align: center; padding: 20px; grid-column: 1 / -1;">No data to aggregate</p>';
+                    return;
+                }
+
+                const maxCount = Math.max(...data.buckets.map(b => b.count));
+
+                container.innerHTML = data.buckets.map(bucket => {
+                    const keyStr = Object.values(bucket.key).join(' / ');
+                    const pct = (bucket.count / maxCount) * 100;
+                    const levelColor = bucket.key.level === 'ERROR' ? 'var(--ctp-red)' :
+                                      bucket.key.level === 'WARN' ? 'var(--ctp-yellow)' :
+                                      bucket.key.level === 'DEBUG' ? 'var(--ctp-overlay0)' : 'var(--ctp-green)';
+                    return '<div style="background: var(--ctp-surface0); padding: 15px; border-radius: 8px;">' +
+                        '<div style="font-size: 0.85rem; color: var(--ctp-subtext0); margin-bottom: 5px;">' + escapeHtml(keyStr) + '</div>' +
+                        '<div style="font-size: 1.5rem; font-weight: bold; color: ' + levelColor + ';">' + formatNumber(bucket.count) + '</div>' +
+                        '<div style="height: 6px; background: var(--ctp-surface1); border-radius: 3px; margin-top: 8px; overflow: hidden;">' +
+                            '<div style="height: 100%; width: ' + pct + '%; background: ' + levelColor + '; border-radius: 3px;"></div>' +
+                        '</div>' +
+                        '<div style="font-size: 0.75rem; color: var(--ctp-overlay0); margin-top: 5px;">' + formatBytes(bucket.bytes) + '</div>' +
+                    '</div>';
+                }).join('');
+
+                if (data.scribe_says) {
+                    addChatMessage(data.scribe_says, 'agent');
+                }
+
+            } catch (e) {
+                console.error('Aggregations error:', e);
+                container.innerHTML = '<p style="color: var(--ctp-red); text-align: center; padding: 20px; grid-column: 1 / -1;">Failed to load aggregations</p>';
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+        }
+
+        // Load alerts and aggregations on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            // Existing loads are already in the initial DOMContentLoaded
+            setTimeout(() => {
+                loadAlerts();
+                loadAggregations();
+            }, 500);
+        });
     </script>
 </body>
 </html>`
@@ -1921,9 +3271,59 @@ func main() {
 		log.Fatalf("Failed to create Kubernetes client: %v", err)
 	}
 
-	// Initialize store and tracking
+	// Initialize stores and tracking
 	store = NewLogStore()
+	alertStore = NewAlertStore()
+	retentionStore = NewRetentionPolicyStore()
 	podLastSeen = make(map[string]time.Time)
+
+	// Add some default alerts
+	alertStore.Add(Alert{
+		Name:        "Error Rate Spike",
+		Description: "Triggers when error logs exceed threshold",
+		Pattern:     "(?i)(error|exception|fatal|panic)",
+		Level:       "ERROR",
+		Threshold:   10,
+		WindowMins:  5,
+		Severity:    "critical",
+		Enabled:     true,
+	})
+	alertStore.Add(Alert{
+		Name:        "OOM Detection",
+		Description: "Detects out of memory conditions",
+		Pattern:     "(?i)(out of memory|oom|memory limit)",
+		Threshold:   1,
+		WindowMins:  1,
+		Severity:    "critical",
+		Enabled:     true,
+	})
+	alertStore.Add(Alert{
+		Name:        "Connection Errors",
+		Description: "Detects connection failures",
+		Pattern:     "(?i)(connection refused|connection reset|timeout|ECONNREFUSED)",
+		Threshold:   5,
+		WindowMins:  5,
+		Severity:    "warning",
+		Enabled:     true,
+	})
+
+	// Add default retention policies
+	retentionStore.Add(RetentionPolicy{
+		Name:        "Debug Log Retention",
+		Description: "Shorter retention for debug logs",
+		Level:       "DEBUG",
+		MaxAge:      6,
+		Priority:    10,
+		Enabled:     true,
+	})
+	retentionStore.Add(RetentionPolicy{
+		Name:        "Error Log Retention",
+		Description: "Longer retention for error logs",
+		Level:       "ERROR",
+		MaxAge:      168, // 7 days
+		Priority:    20,
+		Enabled:     true,
+	})
 
 	// Start log collection
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1942,6 +3342,7 @@ func main() {
 	http.HandleFunc("/api/namespaces", handleNamespaces)
 	http.HandleFunc("/api/pods", handlePods)
 	http.HandleFunc("/api/logs", handleLogs)
+	http.HandleFunc("/api/documents", handleLogs) // Alias for document-style access
 	http.HandleFunc("/api/logs/search", handleLogsSearch)
 	http.HandleFunc("/api/logs/stream", handleLogsStream)
 	http.HandleFunc("/api/logs/export", handleLogsExport)
@@ -1949,8 +3350,14 @@ func main() {
 	http.HandleFunc("/api/volume", handleVolumeStats)
 	http.HandleFunc("/api/chat", handleChat)
 
-	// Register additional API routes from api.go
-	RegisterAPIRoutes()
+	// New observability endpoints
+	http.HandleFunc("/api/search", handleSearch)                         // Advanced full-text search
+	http.HandleFunc("/api/alerts", handleAlerts)                         // Alerting management
+	http.HandleFunc("/api/alerts/", handleAlerts)                        // Alerting with ID
+	http.HandleFunc("/api/aggregations", handleAggregations)             // Log aggregation
+	http.HandleFunc("/api/export", handleExport)                         // Enhanced export
+	http.HandleFunc("/api/retention/policies", handleRetentionPolicies)  // Retention policies
+	http.HandleFunc("/api/retention/policies/", handleRetentionPolicies) // Retention policies with ID
 
 	port := os.Getenv("PORT")
 	if port == "" {

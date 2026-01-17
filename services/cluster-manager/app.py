@@ -15,21 +15,20 @@ CORS(app)
 # Terminal service URL
 TERMINAL_URL = "http://terminal-web.holm:8080"
 
-# Known cluster nodes - statically configured for HolmOS cluster
-# This can be extended to read from a config file or Kubernetes
+# Known cluster nodes - actual IPs from network scan
 KNOWN_NODES = [
     {"hostname": "rpi-1", "ip": "192.168.8.197"},
-    {"hostname": "rpi-2", "ip": "192.168.8.201"},
-    {"hostname": "rpi-3", "ip": "192.168.8.202"},
-    {"hostname": "rpi-4", "ip": "192.168.8.203"},
-    {"hostname": "rpi-5", "ip": "192.168.8.204"},
-    {"hostname": "rpi-6", "ip": "192.168.8.205"},
-    {"hostname": "rpi-7", "ip": "192.168.8.206"},
-    {"hostname": "rpi-8", "ip": "192.168.8.207"},
-    {"hostname": "rpi-9", "ip": "192.168.8.208"},
-    {"hostname": "rpi-10", "ip": "192.168.8.209"},
-    {"hostname": "rpi-11", "ip": "192.168.8.210"},
-    {"hostname": "rpi-12", "ip": "192.168.8.211"},
+    {"hostname": "rpi-2", "ip": "192.168.8.196"},
+    {"hostname": "rpi-3", "ip": "192.168.8.195"},
+    {"hostname": "rpi-4", "ip": "192.168.8.194"},
+    {"hostname": "rpi-5", "ip": "192.168.8.108"},
+    {"hostname": "rpi-6", "ip": "192.168.8.235"},
+    {"hostname": "rpi-7", "ip": "192.168.8.209"},
+    {"hostname": "rpi-8", "ip": "192.168.8.202"},
+    {"hostname": "rpi-9", "ip": "192.168.8.187"},
+    {"hostname": "rpi-10", "ip": "192.168.8.210"},
+    {"hostname": "rpi-11", "ip": "192.168.8.231"},
+    {"hostname": "rpi-12", "ip": "192.168.8.105"},
     {"hostname": "openmediavault", "ip": "192.168.8.199"},
 ]
 
@@ -50,30 +49,19 @@ def get_node_list():
     return KNOWN_NODES.copy()
 
 def ping_node(ip):
-    """Ping a single node to check if online using ICMP ping"""
+    """Check if a node is online using fast TCP socket connect to SSH port"""
     try:
         start_time = time.time()
-        # Use subprocess to ping - works on Linux
-        result = subprocess.run(
-            ["ping", "-c", "1", "-W", "2", ip],
-            capture_output=True,
-            timeout=3
-        )
+        # Use TCP socket to port 22 (SSH) - much faster than ICMP ping
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.5)  # 500ms timeout - fast fail for offline nodes
+        result = sock.connect_ex((ip, 22))
         latency = round((time.time() - start_time) * 1000, 1)
-        if result.returncode == 0:
-            # Try to extract actual latency from ping output
-            output = result.stdout.decode()
-            if "time=" in output:
-                try:
-                    time_part = output.split("time=")[1].split()[0]
-                    latency = float(time_part.replace("ms", ""))
-                except:
-                    pass
+        sock.close()
+        if result == 0:
             return True, latency
-    except subprocess.TimeoutExpired:
-        pass
     except Exception as e:
-        print(f"Error pinging {ip}: {e}")
+        pass
     return False, 0
 
 def update_node_cache():

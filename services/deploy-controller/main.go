@@ -34,22 +34,26 @@ var (
 	rulesConfigMap = os.Getenv("RULES_CONFIGMAP")
 	clientset      *kubernetes.Clientset
 
-	deployments       = make(map[string]*DeploymentInfo)
-	deploymentsMu     sync.RWMutex
-	imageDigests      = make(map[string]string)
-	imageDigestsMu    sync.RWMutex
-	recentDeploys     []DeployEvent
-	recentDeploysMu   sync.RWMutex
-	webhookEvents     []WebhookEvent
-	webhookEventsMu   sync.RWMutex
-	autoDeployRules   = make(map[string]AutoDeployRule)
-	autoDeployMu      sync.RWMutex
-	deploymentHistory = make(map[string][]DeploymentVersion)
-	historyMu         sync.RWMutex
-	registryEvents    []RegistryEvent
-	registryEventsMu  sync.RWMutex
+	deployments         = make(map[string]*DeploymentInfo)
+	deploymentsMu       sync.RWMutex
+	imageDigests        = make(map[string]string)
+	imageDigestsMu      sync.RWMutex
+	recentDeploys       []DeployEvent
+	recentDeploysMu     sync.RWMutex
+	webhookEvents       []WebhookEvent
+	webhookEventsMu     sync.RWMutex
+	autoDeployRules     = make(map[string]AutoDeployRule)
+	autoDeployMu        sync.RWMutex
+	deploymentHistory   = make(map[string][]DeploymentVersion)
+	historyMu           sync.RWMutex
+	registryEvents      []RegistryEvent
+	registryEventsMu    sync.RWMutex
 	pendingHealthChecks = make(map[string]*HealthCheckStatus)
-	healthCheckMu     sync.RWMutex
+	healthCheckMu       sync.RWMutex
+
+	// Deployment metrics tracking
+	deployMetrics   = &DeploymentMetrics{}
+	deployMetricsMu sync.RWMutex
 )
 
 type DeploymentInfo struct {
@@ -111,42 +115,49 @@ type RegistryEvent struct {
 }
 
 type AutoDeployRule struct {
-	ImagePattern    string `json:"imagePattern"`
-	Deployment      string `json:"deployment"`
-	Namespace       string `json:"namespace"`
-	Enabled         bool   `json:"enabled"`
-	AutoCreate      bool   `json:"autoCreate"`
-	TagPattern      string `json:"tagPattern"`
-	LastTriggered   string `json:"lastTriggered"`
-	HealthCheckPath string `json:"healthCheckPath"`
-	HealthCheckPort int    `json:"healthCheckPort"`
-	ServicePort     int    `json:"servicePort"`
-	CreateService   bool   `json:"createService"`
+	ImagePattern       string `json:"imagePattern"`
+	Deployment         string `json:"deployment"`
+	Namespace          string `json:"namespace"`
+	Enabled            bool   `json:"enabled"`
+	AutoCreate         bool   `json:"autoCreate"`
+	TagPattern         string `json:"tagPattern"`
+	LastTriggered      string `json:"lastTriggered"`
+	HealthCheckPath    string `json:"healthCheckPath"`
+	HealthCheckPort    int    `json:"healthCheckPort"`
+	ServicePort        int    `json:"servicePort"`
+	CreateService      bool   `json:"createService"`
+	AutoRollback       bool   `json:"autoRollback"`       // Enable auto rollback on failure
+	RollbackTimeout    int    `json:"rollbackTimeout"`    // Timeout in seconds before auto rollback
+	MaxRollbackRetries int    `json:"maxRollbackRetries"` // Max consecutive rollbacks before stopping
 }
 
 type HealthCheckStatus struct {
-	Deployment        string      `json:"deployment"`
-	Namespace         string      `json:"namespace"`
-	Image             string      `json:"image"`
-	Status            string      `json:"status"`
-	StartTime         time.Time   `json:"startTime"`
-	LastCheck         time.Time   `json:"lastCheck"`
-	Attempts          int         `json:"attempts"`
-	MaxAttempts       int         `json:"maxAttempts"`
-	Message           string      `json:"message"`
-	PodStatuses       []PodStatus `json:"podStatuses"`
+	Deployment        string         `json:"deployment"`
+	Namespace         string         `json:"namespace"`
+	Image             string         `json:"image"`
+	PreviousImage     string         `json:"previousImage,omitempty"`
+	Status            string         `json:"status"`
+	StartTime         time.Time      `json:"startTime"`
+	LastCheck         time.Time      `json:"lastCheck"`
+	Attempts          int            `json:"attempts"`
+	MaxAttempts       int            `json:"maxAttempts"`
+	Message           string         `json:"message"`
+	PodStatuses       []PodStatus    `json:"podStatuses"`
 	RolloutStatus     *RolloutStatus `json:"rolloutStatus,omitempty"`
+	AutoRollback      bool           `json:"autoRollback"`
+	RollbackTriggered bool           `json:"rollbackTriggered"`
+	RollbackReason    string         `json:"rollbackReason,omitempty"`
 }
 
 type RolloutStatus struct {
-	Replicas            int32  `json:"replicas"`
-	UpdatedReplicas     int32  `json:"updatedReplicas"`
-	ReadyReplicas       int32  `json:"readyReplicas"`
-	AvailableReplicas   int32  `json:"availableReplicas"`
-	UnavailableReplicas int32  `json:"unavailableReplicas"`
-	ProgressDeadline    bool   `json:"progressDeadline"`
-	Stalled             bool   `json:"stalled"`
-	StalledReason       string `json:"stalledReason,omitempty"`
+	Replicas            int32              `json:"replicas"`
+	UpdatedReplicas     int32              `json:"updatedReplicas"`
+	ReadyReplicas       int32              `json:"readyReplicas"`
+	AvailableReplicas   int32              `json:"availableReplicas"`
+	UnavailableReplicas int32              `json:"unavailableReplicas"`
+	ProgressDeadline    bool               `json:"progressDeadline"`
+	Stalled             bool               `json:"stalled"`
+	StalledReason       string             `json:"stalledReason,omitempty"`
 	Conditions          []RolloutCondition `json:"conditions,omitempty"`
 }
 
@@ -165,8 +176,43 @@ type PodStatus struct {
 }
 
 type RegistryImage struct {
-	Name   string   `json:"name"`
-	Tags   []string `json:"tags"`
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+}
+
+// DeploymentMetrics tracks deployment statistics
+type DeploymentMetrics struct {
+	TotalDeploys      int64                      `json:"totalDeploys"`
+	SuccessfulDeploys int64                      `json:"successfulDeploys"`
+	FailedDeploys     int64                      `json:"failedDeploys"`
+	RollbackCount     int64                      `json:"rollbackCount"`
+	AutoRollbackCount int64                      `json:"autoRollbackCount"`
+	LastDeployTime    time.Time                  `json:"lastDeployTime"`
+	DeploysByHour     map[string]int             `json:"deploysByHour"`
+	DeploysByDay      map[string]int             `json:"deploysByDay"`
+	PerDeployment     map[string]*DeploymentStat `json:"perDeployment"`
+	AverageDeployTime float64                    `json:"averageDeployTime"`
+	TotalDeployTime   float64                    `json:"totalDeployTime"`
+}
+
+// DeploymentStat tracks per-deployment statistics
+type DeploymentStat struct {
+	Name              string    `json:"name"`
+	Namespace         string    `json:"namespace"`
+	TotalDeploys      int64     `json:"totalDeploys"`
+	SuccessfulDeploys int64     `json:"successfulDeploys"`
+	FailedDeploys     int64     `json:"failedDeploys"`
+	RollbackCount     int64     `json:"rollbackCount"`
+	AutoRollbackCount int64     `json:"autoRollbackCount"`
+	LastDeploy        time.Time `json:"lastDeploy"`
+	LastSuccess       time.Time `json:"lastSuccess"`
+	LastFailure       time.Time `json:"lastFailure"`
+	AverageDeployTime float64   `json:"averageDeployTime"`
+	TotalDeployTime   float64   `json:"totalDeployTime"`
+	CurrentImage      string    `json:"currentImage"`
+	PreviousImage     string    `json:"previousImage"`
+	SuccessRate       float64   `json:"successRate"`
+	MTTR              float64   `json:"mttr"` // Mean Time To Recovery
 }
 
 // Docker Registry notification event structure
@@ -227,6 +273,7 @@ func main() {
 	// Load existing deployment history and rules
 	loadDeploymentHistory()
 	loadAutoDeployRules()
+	initializeMetrics()
 
 	go watchRegistry()
 	go syncDeployments()
@@ -255,6 +302,8 @@ func main() {
 	http.HandleFunc("/api/apply", handleApplyManifest)
 	http.HandleFunc("/api/restart", handleRestart)
 	http.HandleFunc("/api/k8s-events", handleK8sEvents)
+	http.HandleFunc("/api/metrics", handleMetrics)
+	http.HandleFunc("/api/history/", handleHistoryByDeployment)
 
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
@@ -344,8 +393,8 @@ func handleRegistryWebhook(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":   "received",
-		"events":   len(notification.Events),
+		"status": "received",
+		"events": len(notification.Events),
 	})
 }
 
@@ -450,7 +499,7 @@ func ensureDeploymentExists(namespace, name, image string) {
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app":                             name,
+				"app":                            name,
 				"deploy-controller/auto-created": "true",
 			},
 		},
@@ -651,6 +700,15 @@ func syncDeployments() {
 			autoDeployMu.RLock()
 			_, hasAutoDeploy := autoDeployRules[dep.Name]
 			autoDeployMu.RUnlock()
+
+			// Get last deploy time from annotations
+			var lastDeploy time.Time
+			if dep.Spec.Template.Annotations != nil {
+				if ts, ok := dep.Spec.Template.Annotations["deploy-controller/deployed-at"]; ok {
+					lastDeploy, _ = time.Parse(time.RFC3339, ts)
+				}
+			}
+
 			deployments[dep.Name] = &DeploymentInfo{
 				Name:       dep.Name,
 				Namespace:  dep.Namespace,
@@ -659,6 +717,7 @@ func syncDeployments() {
 				AutoDeploy: hasAutoDeploy,
 				Replicas:   dep.Status.Replicas,
 				Ready:      dep.Status.ReadyReplicas,
+				LastDeploy: lastDeploy,
 			}
 		}
 		deploymentsMu.Unlock()
@@ -767,14 +826,81 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func handleDeployments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// Support query parameter for specific deployment
+	deploymentName := r.URL.Query().Get("name")
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "holm"
+	}
+
 	deploymentsMu.RLock()
 	defer deploymentsMu.RUnlock()
-	deps := make([]*DeploymentInfo, 0, len(deployments))
+
+	// If specific deployment requested
+	if deploymentName != "" {
+		if d, ok := deployments[deploymentName]; ok {
+			// Enrich with history and metrics
+			response := enrichDeploymentInfo(d)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		http.Error(w, "Deployment not found", http.StatusNotFound)
+		return
+	}
+
+	// Return all deployments
+	deps := make([]*DeploymentInfoEnriched, 0, len(deployments))
 	for _, d := range deployments {
-		deps = append(deps, d)
+		deps = append(deps, enrichDeploymentInfo(d))
 	}
 	sort.Slice(deps, func(i, j int) bool { return deps[i].Name < deps[j].Name })
 	json.NewEncoder(w).Encode(deps)
+}
+
+// DeploymentInfoEnriched includes additional deployment details
+type DeploymentInfoEnriched struct {
+	*DeploymentInfo
+	History       []DeploymentVersion `json:"history,omitempty"`
+	HealthCheck   *HealthCheckStatus  `json:"healthCheck,omitempty"`
+	Stats         *DeploymentStat     `json:"stats,omitempty"`
+	PendingImages []string            `json:"pendingImages,omitempty"`
+}
+
+func enrichDeploymentInfo(d *DeploymentInfo) *DeploymentInfoEnriched {
+	enriched := &DeploymentInfoEnriched{
+		DeploymentInfo: d,
+	}
+
+	// Add recent history (last 5 versions)
+	historyMu.RLock()
+	if hist, ok := deploymentHistory[d.Name]; ok {
+		limit := 5
+		if len(hist) < limit {
+			limit = len(hist)
+		}
+		enriched.History = hist[:limit]
+	}
+	historyMu.RUnlock()
+
+	// Add health check status if any
+	healthCheckMu.RLock()
+	key := fmt.Sprintf("%s/%s", d.Namespace, d.Name)
+	if hc, ok := pendingHealthChecks[key]; ok {
+		enriched.HealthCheck = hc
+	}
+	healthCheckMu.RUnlock()
+
+	// Add deployment stats
+	deployMetricsMu.RLock()
+	if deployMetrics.PerDeployment != nil {
+		if stat, ok := deployMetrics.PerDeployment[d.Name]; ok {
+			enriched.Stats = stat
+		}
+	}
+	deployMetricsMu.RUnlock()
+
+	return enriched
 }
 
 func handleDeploy(w http.ResponseWriter, r *http.Request) {
@@ -811,6 +937,7 @@ func handleRollback(w http.ResponseWriter, r *http.Request) {
 		Deployment string `json:"deployment"`
 		Namespace  string `json:"namespace"`
 		Version    int    `json:"version"`
+		ToImage    string `json:"toImage"` // Direct image specification
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -821,40 +948,123 @@ func handleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var targetImage string
+	var rollbackVersion int
 
-	// If version specified, rollback to that specific version
-	if req.Version > 0 {
+	// Priority: toImage > version > previous successful
+	if req.ToImage != "" {
+		targetImage = req.ToImage
+	} else if req.Version > 0 {
+		// Rollback to specific version
 		historyMu.RLock()
 		history := deploymentHistory[req.Deployment]
 		for _, ver := range history {
-			if ver.Version == req.Version && ver.Status == "success" {
+			if ver.Version == req.Version {
 				targetImage = ver.Image
+				rollbackVersion = ver.Version
 				break
 			}
 		}
 		historyMu.RUnlock()
 	} else {
-		// Otherwise, rollback to previous successful version
-		recentDeploysMu.RLock()
-		for _, event := range recentDeploys {
-			if event.Deployment == req.Deployment && event.Status == "success" && event.OldImage != "" {
-				targetImage = event.OldImage
+		// Find previous successful version
+		historyMu.RLock()
+		history := deploymentHistory[req.Deployment]
+		// Skip the first entry (current), find next successful
+		for i, ver := range history {
+			if i > 0 && ver.Status == "success" {
+				targetImage = ver.Image
+				rollbackVersion = ver.Version
 				break
 			}
 		}
-		recentDeploysMu.RUnlock()
+		historyMu.RUnlock()
+
+		// Fallback to recentDeploys
+		if targetImage == "" {
+			recentDeploysMu.RLock()
+			for _, event := range recentDeploys {
+				if event.Deployment == req.Deployment && event.Status == "success" && event.OldImage != "" {
+					targetImage = event.OldImage
+					break
+				}
+			}
+			recentDeploysMu.RUnlock()
+		}
 	}
 
 	if targetImage == "" {
-		http.Error(w, "No previous image found", http.StatusNotFound)
+		http.Error(w, "No previous image found for rollback", http.StatusNotFound)
 		return
 	}
-	if err := deployImage(req.Namespace, req.Deployment, targetImage, "rollback"); err != nil {
+
+	// Get current image for metrics
+	var currentImage string
+	deploymentsMu.RLock()
+	if d, ok := deployments[req.Deployment]; ok {
+		currentImage = d.Image
+	}
+	deploymentsMu.RUnlock()
+
+	if err := performRollback(req.Namespace, req.Deployment, targetImage, currentImage, "manual"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Update metrics
+	updateRollbackMetrics(req.Deployment, req.Namespace, false)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "rolled back", "image": targetImage})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":          "rolled back",
+		"deployment":      req.Deployment,
+		"namespace":       req.Namespace,
+		"fromImage":       currentImage,
+		"toImage":         targetImage,
+		"rollbackVersion": rollbackVersion,
+		"timestamp":       time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// performRollback executes the rollback operation
+func performRollback(namespace, deployment, targetImage, currentImage, trigger string) error {
+	if clientset == nil {
+		return fmt.Errorf("kubernetes client not initialized")
+	}
+
+	start := time.Now()
+	ctx := context.Background()
+	dep, err := clientset.AppsV1().Deployments(namespace).Get(ctx, deployment, metav1.GetOptions{})
+	if err != nil {
+		addDeployEvent(deployment, namespace, targetImage, currentImage, trigger+"-rollback", "failed", err.Error(), time.Since(start).Seconds())
+		return err
+	}
+
+	if len(dep.Spec.Template.Spec.Containers) > 0 {
+		dep.Spec.Template.Spec.Containers[0].Image = targetImage
+	}
+
+	if dep.Spec.Template.Annotations == nil {
+		dep.Spec.Template.Annotations = make(map[string]string)
+	}
+	dep.Spec.Template.Annotations["deploy-controller/rolled-back-at"] = time.Now().Format(time.RFC3339)
+	dep.Spec.Template.Annotations["deploy-controller/trigger"] = trigger + "-rollback"
+	dep.Spec.Template.Annotations["deploy-controller/rolled-back-from"] = currentImage
+
+	_, err = clientset.AppsV1().Deployments(namespace).Update(ctx, dep, metav1.UpdateOptions{})
+	if err != nil {
+		addDeployEvent(deployment, namespace, targetImage, currentImage, trigger+"-rollback", "failed", err.Error(), time.Since(start).Seconds())
+		return err
+	}
+
+	duration := time.Since(start).Seconds()
+	addDeployEvent(deployment, namespace, targetImage, currentImage, trigger+"-rollback", "deploying", "Rollback initiated", duration)
+	addToHistory(deployment, targetImage, currentImage, trigger+"-rollback", "deploying", duration, "")
+
+	// Start health check for rollback
+	startHealthCheckWithPrevious(deployment, namespace, targetImage, currentImage, false)
+
+	log.Printf("Rollback initiated: %s/%s from %s to %s (trigger: %s)", namespace, deployment, currentImage, targetImage, trigger)
+	return nil
 }
 
 func handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -1179,26 +1389,49 @@ func checkDeploymentHealth(key string, hc *HealthCheckStatus) {
 
 	// Check if rollout is stalled due to deployment conditions
 	if rolloutStatus.Stalled {
-		updateHealthCheckStatusFull(key, "failed", fmt.Sprintf("Rollout stalled: %s", rolloutStatus.StalledReason), podStatuses, rolloutStatus)
-		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, "", "health-check", "failed", fmt.Sprintf("Rollout stalled: %s", rolloutStatus.StalledReason), time.Since(hc.StartTime).Seconds())
+		reason := fmt.Sprintf("Rollout stalled: %s", rolloutStatus.StalledReason)
+		updateHealthCheckStatusFull(key, "failed", reason, podStatuses, rolloutStatus)
+		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, "health-check", "failed", reason, time.Since(hc.StartTime).Seconds())
+		updateDeployMetrics(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, "deploy", "failed", time.Since(hc.StartTime).Seconds())
 		log.Printf("Health check failed for %s/%s: rollout stalled - %s", hc.Namespace, hc.Deployment, rolloutStatus.StalledReason)
+
+		// Trigger auto-rollback if enabled
+		if hc.AutoRollback && hc.PreviousImage != "" && !hc.RollbackTriggered {
+			go triggerAutoRollback(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, reason)
+			healthCheckMu.Lock()
+			hc.RollbackTriggered = true
+			hc.RollbackReason = reason
+			healthCheckMu.Unlock()
+		}
 		return
 	}
 
 	// Check if deployment is ready
 	if dep.Status.ReadyReplicas >= *dep.Spec.Replicas && dep.Status.UpdatedReplicas >= *dep.Spec.Replicas && dep.Status.AvailableReplicas >= *dep.Spec.Replicas {
 		updateHealthCheckStatusFull(key, "healthy", "Deployment is healthy and ready", podStatuses, rolloutStatus)
-		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, "", "health-check", "success", "Rollout completed successfully", time.Since(hc.StartTime).Seconds())
-		addToHistory(hc.Deployment, hc.Image, "", "health-check", "success", time.Since(hc.StartTime).Seconds(), "")
+		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, "health-check", "success", "Rollout completed successfully", time.Since(hc.StartTime).Seconds())
+		addToHistory(hc.Deployment, hc.Image, hc.PreviousImage, "health-check", "success", time.Since(hc.StartTime).Seconds(), "")
+		updateDeployMetrics(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, "deploy", "success", time.Since(hc.StartTime).Seconds())
 		log.Printf("Health check passed for %s/%s", hc.Namespace, hc.Deployment)
 		return
 	}
 
 	// Check if max attempts reached
 	if hc.Attempts >= hc.MaxAttempts {
-		updateHealthCheckStatusFull(key, "failed", "Max health check attempts reached", podStatuses, rolloutStatus)
-		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, "", "health-check", "failed", "Health check timed out", time.Since(hc.StartTime).Seconds())
+		reason := "Max health check attempts reached - deployment timed out"
+		updateHealthCheckStatusFull(key, "failed", reason, podStatuses, rolloutStatus)
+		addDeployEvent(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, "health-check", "failed", "Health check timed out", time.Since(hc.StartTime).Seconds())
+		updateDeployMetrics(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, "deploy", "failed", time.Since(hc.StartTime).Seconds())
 		log.Printf("Health check failed for %s/%s: max attempts reached", hc.Namespace, hc.Deployment)
+
+		// Trigger auto-rollback if enabled
+		if hc.AutoRollback && hc.PreviousImage != "" && !hc.RollbackTriggered {
+			go triggerAutoRollback(hc.Deployment, hc.Namespace, hc.Image, hc.PreviousImage, reason)
+			healthCheckMu.Lock()
+			hc.RollbackTriggered = true
+			hc.RollbackReason = reason
+			healthCheckMu.Unlock()
+		}
 		return
 	}
 
@@ -1283,21 +1516,37 @@ func updateHealthCheckStatusFull(key, status, message string, podStatuses []PodS
 }
 
 func startHealthCheck(deployment, namespace, image string) {
+	// Check if auto-rollback is enabled for this deployment
+	autoDeployMu.RLock()
+	rule, hasRule := autoDeployRules[deployment]
+	autoRollback := hasRule && rule.AutoRollback
+	autoDeployMu.RUnlock()
+
+	// Get previous image from current deployment
+	var previousImage string
+	deploymentsMu.RLock()
+	if d, ok := deployments[deployment]; ok {
+		previousImage = d.Image
+	}
+	deploymentsMu.RUnlock()
+
 	key := fmt.Sprintf("%s/%s", namespace, deployment)
 	healthCheckMu.Lock()
 	pendingHealthChecks[key] = &HealthCheckStatus{
-		Deployment:  deployment,
-		Namespace:   namespace,
-		Image:       image,
-		Status:      "pending",
-		StartTime:   time.Now(),
-		LastCheck:   time.Now(),
-		Attempts:    0,
-		MaxAttempts: 60, // 5 minutes with 5-second intervals
-		Message:     "Waiting for deployment to start",
+		Deployment:    deployment,
+		Namespace:     namespace,
+		Image:         image,
+		PreviousImage: previousImage,
+		Status:        "pending",
+		StartTime:     time.Now(),
+		LastCheck:     time.Now(),
+		Attempts:      0,
+		MaxAttempts:   60, // 5 minutes with 5-second intervals
+		Message:       "Waiting for deployment to start",
+		AutoRollback:  autoRollback,
 	}
 	healthCheckMu.Unlock()
-	log.Printf("Started health check for %s/%s", namespace, deployment)
+	log.Printf("Started health check for %s/%s (autoRollback: %v)", namespace, deployment, autoRollback)
 }
 
 func handleHealthChecks(w http.ResponseWriter, r *http.Request) {
@@ -1439,7 +1688,7 @@ func ensureServiceExists(namespace, name string, port int) error {
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app":                             name,
+				"app":                            name,
 				"deploy-controller/auto-created": "true",
 			},
 		},
@@ -2079,4 +2328,360 @@ func handleK8sEvents(w http.ResponseWriter, r *http.Request) {
 		"events":     events,
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// handleHistoryByDeployment handles /api/history/{deployment} endpoint
+func handleHistoryByDeployment(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Extract deployment name from path
+	path := strings.TrimPrefix(r.URL.Path, "/api/history/")
+	deployment := strings.TrimSuffix(path, "/")
+
+	if deployment == "" {
+		http.Error(w, "Deployment name required", http.StatusBadRequest)
+		return
+	}
+
+	historyMu.RLock()
+	history := deploymentHistory[deployment]
+	historyMu.RUnlock()
+
+	if history == nil {
+		history = []DeploymentVersion{}
+	}
+
+	// Include summary stats
+	var successCount, failCount, rollbackCount int
+	var totalDuration float64
+	for _, v := range history {
+		if v.Status == "success" {
+			successCount++
+			totalDuration += v.Duration
+		} else if v.Status == "failed" {
+			failCount++
+		}
+		if strings.Contains(v.Trigger, "rollback") {
+			rollbackCount++
+		}
+	}
+
+	avgDuration := 0.0
+	if successCount > 0 {
+		avgDuration = totalDuration / float64(successCount)
+	}
+
+	successRate := 0.0
+	if len(history) > 0 {
+		successRate = float64(successCount) / float64(len(history)) * 100
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"deployment":    deployment,
+		"history":       history,
+		"totalVersions": len(history),
+		"successCount":  successCount,
+		"failCount":     failCount,
+		"rollbackCount": rollbackCount,
+		"successRate":   successRate,
+		"avgDeployTime": avgDuration,
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleMetrics returns deployment metrics and statistics
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	deployMetricsMu.RLock()
+	defer deployMetricsMu.RUnlock()
+
+	// Calculate derived metrics
+	successRate := 0.0
+	if deployMetrics.TotalDeploys > 0 {
+		successRate = float64(deployMetrics.SuccessfulDeploys) / float64(deployMetrics.TotalDeploys) * 100
+	}
+
+	rollbackRate := 0.0
+	if deployMetrics.TotalDeploys > 0 {
+		rollbackRate = float64(deployMetrics.RollbackCount) / float64(deployMetrics.TotalDeploys) * 100
+	}
+
+	// Calculate deploy frequency (deploys per hour over last 24 hours)
+	deployFrequency := 0.0
+	hourCount := len(deployMetrics.DeploysByHour)
+	if hourCount > 0 {
+		total := 0
+		for _, count := range deployMetrics.DeploysByHour {
+			total += count
+		}
+		deployFrequency = float64(total) / float64(hourCount)
+	}
+
+	response := map[string]interface{}{
+		"summary": map[string]interface{}{
+			"totalDeploys":      deployMetrics.TotalDeploys,
+			"successfulDeploys": deployMetrics.SuccessfulDeploys,
+			"failedDeploys":     deployMetrics.FailedDeploys,
+			"rollbackCount":     deployMetrics.RollbackCount,
+			"autoRollbackCount": deployMetrics.AutoRollbackCount,
+			"successRate":       successRate,
+			"rollbackRate":      rollbackRate,
+			"deployFrequency":   deployFrequency,
+			"avgDeployTime":     deployMetrics.AverageDeployTime,
+			"lastDeployTime":    deployMetrics.LastDeployTime,
+		},
+		"deploysByHour": deployMetrics.DeploysByHour,
+		"deploysByDay":  deployMetrics.DeploysByDay,
+		"perDeployment": deployMetrics.PerDeployment,
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// initializeMetrics sets up initial metrics structure
+func initializeMetrics() {
+	deployMetricsMu.Lock()
+	defer deployMetricsMu.Unlock()
+
+	deployMetrics = &DeploymentMetrics{
+		DeploysByHour: make(map[string]int),
+		DeploysByDay:  make(map[string]int),
+		PerDeployment: make(map[string]*DeploymentStat),
+	}
+
+	// Initialize from existing history
+	historyMu.RLock()
+	for depName, history := range deploymentHistory {
+		stat := &DeploymentStat{
+			Name: depName,
+		}
+		for _, ver := range history {
+			stat.TotalDeploys++
+			deployMetrics.TotalDeploys++
+			stat.TotalDeployTime += ver.Duration
+
+			if ver.Status == "success" {
+				stat.SuccessfulDeploys++
+				deployMetrics.SuccessfulDeploys++
+				if stat.LastSuccess.IsZero() || ver.Timestamp.After(stat.LastSuccess) {
+					stat.LastSuccess = ver.Timestamp
+				}
+			} else if ver.Status == "failed" {
+				stat.FailedDeploys++
+				deployMetrics.FailedDeploys++
+				if stat.LastFailure.IsZero() || ver.Timestamp.After(stat.LastFailure) {
+					stat.LastFailure = ver.Timestamp
+				}
+			}
+
+			if strings.Contains(ver.Trigger, "rollback") {
+				stat.RollbackCount++
+				deployMetrics.RollbackCount++
+				if strings.Contains(ver.Trigger, "auto") {
+					stat.AutoRollbackCount++
+					deployMetrics.AutoRollbackCount++
+				}
+			}
+
+			if stat.LastDeploy.IsZero() || ver.Timestamp.After(stat.LastDeploy) {
+				stat.LastDeploy = ver.Timestamp
+				stat.CurrentImage = ver.Image
+			}
+
+			// Track by hour and day
+			hourKey := ver.Timestamp.Format("2006-01-02-15")
+			dayKey := ver.Timestamp.Format("2006-01-02")
+			deployMetrics.DeploysByHour[hourKey]++
+			deployMetrics.DeploysByDay[dayKey]++
+		}
+
+		if stat.TotalDeploys > 0 {
+			stat.AverageDeployTime = stat.TotalDeployTime / float64(stat.TotalDeploys)
+			stat.SuccessRate = float64(stat.SuccessfulDeploys) / float64(stat.TotalDeploys) * 100
+		}
+
+		deployMetrics.PerDeployment[depName] = stat
+	}
+	historyMu.RUnlock()
+
+	if deployMetrics.TotalDeploys > 0 {
+		deployMetrics.AverageDeployTime = deployMetrics.TotalDeployTime / float64(deployMetrics.TotalDeploys)
+	}
+
+	log.Printf("Metrics initialized: %d total deploys, %.1f%% success rate",
+		deployMetrics.TotalDeploys,
+		float64(deployMetrics.SuccessfulDeploys)/float64(max(1, deployMetrics.TotalDeploys))*100)
+}
+
+// updateDeployMetrics updates metrics after a deployment
+func updateDeployMetrics(deployment, namespace, image, oldImage, trigger, status string, duration float64) {
+	deployMetricsMu.Lock()
+	defer deployMetricsMu.Unlock()
+
+	now := time.Now()
+	deployMetrics.TotalDeploys++
+	deployMetrics.LastDeployTime = now
+	deployMetrics.TotalDeployTime += duration
+
+	hourKey := now.Format("2006-01-02-15")
+	dayKey := now.Format("2006-01-02")
+	deployMetrics.DeploysByHour[hourKey]++
+	deployMetrics.DeploysByDay[dayKey]++
+
+	// Cleanup old hour entries (keep last 24 hours)
+	cutoff := now.Add(-24 * time.Hour)
+	for key := range deployMetrics.DeploysByHour {
+		t, err := time.Parse("2006-01-02-15", key)
+		if err == nil && t.Before(cutoff) {
+			delete(deployMetrics.DeploysByHour, key)
+		}
+	}
+
+	// Cleanup old day entries (keep last 30 days)
+	cutoffDay := now.Add(-30 * 24 * time.Hour)
+	for key := range deployMetrics.DeploysByDay {
+		t, err := time.Parse("2006-01-02", key)
+		if err == nil && t.Before(cutoffDay) {
+			delete(deployMetrics.DeploysByDay, key)
+		}
+	}
+
+	// Update per-deployment stats
+	stat, ok := deployMetrics.PerDeployment[deployment]
+	if !ok {
+		stat = &DeploymentStat{
+			Name:      deployment,
+			Namespace: namespace,
+		}
+		deployMetrics.PerDeployment[deployment] = stat
+	}
+
+	stat.TotalDeploys++
+	stat.LastDeploy = now
+	stat.TotalDeployTime += duration
+	stat.PreviousImage = oldImage
+	stat.CurrentImage = image
+
+	if status == "success" {
+		stat.SuccessfulDeploys++
+		deployMetrics.SuccessfulDeploys++
+		stat.LastSuccess = now
+	} else if status == "failed" {
+		stat.FailedDeploys++
+		deployMetrics.FailedDeploys++
+		stat.LastFailure = now
+	}
+
+	if stat.TotalDeploys > 0 {
+		stat.AverageDeployTime = stat.TotalDeployTime / float64(stat.TotalDeploys)
+		stat.SuccessRate = float64(stat.SuccessfulDeploys) / float64(stat.TotalDeploys) * 100
+	}
+
+	if deployMetrics.TotalDeploys > 0 {
+		deployMetrics.AverageDeployTime = deployMetrics.TotalDeployTime / float64(deployMetrics.TotalDeploys)
+	}
+}
+
+// updateRollbackMetrics updates metrics after a rollback
+func updateRollbackMetrics(deployment, namespace string, isAuto bool) {
+	deployMetricsMu.Lock()
+	defer deployMetricsMu.Unlock()
+
+	deployMetrics.RollbackCount++
+	if isAuto {
+		deployMetrics.AutoRollbackCount++
+	}
+
+	if stat, ok := deployMetrics.PerDeployment[deployment]; ok {
+		stat.RollbackCount++
+		if isAuto {
+			stat.AutoRollbackCount++
+		}
+	}
+}
+
+// startHealthCheckWithPrevious starts a health check with previous image info for auto-rollback
+func startHealthCheckWithPrevious(deployment, namespace, image, previousImage string, autoRollback bool) {
+	key := fmt.Sprintf("%s/%s", namespace, deployment)
+	healthCheckMu.Lock()
+	pendingHealthChecks[key] = &HealthCheckStatus{
+		Deployment:    deployment,
+		Namespace:     namespace,
+		Image:         image,
+		PreviousImage: previousImage,
+		Status:        "pending",
+		StartTime:     time.Now(),
+		LastCheck:     time.Now(),
+		Attempts:      0,
+		MaxAttempts:   60, // 5 minutes with 5-second intervals
+		Message:       "Waiting for deployment to start",
+		AutoRollback:  autoRollback,
+	}
+	healthCheckMu.Unlock()
+	log.Printf("Started health check for %s/%s (autoRollback: %v)", namespace, deployment, autoRollback)
+}
+
+func max(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// triggerAutoRollback initiates an automatic rollback after deployment failure
+func triggerAutoRollback(deployment, namespace, failedImage, previousImage, reason string) {
+	log.Printf("Auto-rollback triggered for %s/%s: %s -> %s (reason: %s)",
+		namespace, deployment, failedImage, previousImage, reason)
+
+	// Add event for auto-rollback initiation
+	addDeployEvent(deployment, namespace, previousImage, failedImage, "auto-rollback", "deploying",
+		fmt.Sprintf("Auto-rollback initiated: %s", reason), 0)
+
+	// Perform the rollback
+	if err := performRollback(namespace, deployment, previousImage, failedImage, "auto"); err != nil {
+		log.Printf("Auto-rollback failed for %s/%s: %v", namespace, deployment, err)
+		addDeployEvent(deployment, namespace, previousImage, failedImage, "auto-rollback", "failed",
+			fmt.Sprintf("Auto-rollback failed: %v", err), 0)
+		return
+	}
+
+	// Update rollback metrics
+	updateRollbackMetrics(deployment, namespace, true)
+
+	log.Printf("Auto-rollback completed for %s/%s", namespace, deployment)
+}
+
+// getDeploymentVersions returns all versions for a deployment
+func getDeploymentVersions(deployment string) []DeploymentVersion {
+	historyMu.RLock()
+	defer historyMu.RUnlock()
+
+	if history, ok := deploymentHistory[deployment]; ok {
+		result := make([]DeploymentVersion, len(history))
+		copy(result, history)
+		return result
+	}
+	return []DeploymentVersion{}
+}
+
+// findPreviousSuccessfulVersion finds the last successful deployment version
+func findPreviousSuccessfulVersion(deployment string, skipCurrent bool) *DeploymentVersion {
+	historyMu.RLock()
+	defer historyMu.RUnlock()
+
+	history := deploymentHistory[deployment]
+	startIdx := 0
+	if skipCurrent && len(history) > 0 {
+		startIdx = 1
+	}
+
+	for i := startIdx; i < len(history); i++ {
+		if history[i].Status == "success" {
+			ver := history[i]
+			return &ver
+		}
+	}
+	return nil
 }

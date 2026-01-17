@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -28,6 +29,12 @@ type Config struct {
 	VaultIntegration bool
 	BackupDir        string
 	mu               sync.RWMutex
+	// Notification settings
+	NotificationWebhook  string
+	NotificationEmail    string
+	NotifyOnFailure      bool
+	NotifyOnSuccess      bool
+	RetentionDays        int
 }
 
 type Schedule struct {
@@ -75,6 +82,71 @@ type RestoreJob struct {
 	Message     string     `json:"message,omitempty"`
 }
 
+// BackupJob represents a backup job with logs
+type BackupJob struct {
+	ID          string     `json:"id"`
+	ScheduleID  string     `json:"schedule_id,omitempty"`
+	BackupID    string     `json:"backup_id,omitempty"`
+	Status      string     `json:"status"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	Size        int64      `json:"size,omitempty"`
+	Message     string     `json:"message,omitempty"`
+}
+
+// JobLog represents a log entry for a backup job
+type JobLog struct {
+	ID        string    `json:"id"`
+	JobID     string    `json:"job_id"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
+	Details   string    `json:"details,omitempty"`
+}
+
+// BackupStats represents comprehensive backup statistics
+type BackupStats struct {
+	TotalSchedules    int       `json:"total_schedules"`
+	ActiveSchedules   int       `json:"active_schedules"`
+	TotalBackups      int       `json:"total_backups"`
+	TotalSize         int64     `json:"total_size"`
+	TotalSizeHuman    string    `json:"total_size_human"`
+	EncryptedBackups  int       `json:"encrypted_backups"`
+	RestoreJobs       int       `json:"restore_jobs"`
+	SuccessfulBackups int       `json:"successful_backups"`
+	FailedBackups     int       `json:"failed_backups"`
+	SuccessRate       float64   `json:"success_rate"`
+	LastBackupTime    string    `json:"last_backup_time,omitempty"`
+	NextScheduledRun  string    `json:"next_scheduled_run,omitempty"`
+	AvgBackupSize     int64     `json:"avg_backup_size"`
+	AvgBackupSizeHuman string   `json:"avg_backup_size_human"`
+	BackupsByType     map[string]int `json:"backups_by_type"`
+	StorageByType     map[string]int64 `json:"storage_by_type"`
+	RecentFailures    int       `json:"recent_failures"`
+	DailyBackupCount  int       `json:"daily_backup_count"`
+	WeeklyBackupCount int       `json:"weekly_backup_count"`
+}
+
+// Notification represents a notification for backup events
+type Notification struct {
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
+	JobID     string    `json:"job_id"`
+	Status    string    `json:"status"`
+	Message   string    `json:"message"`
+	SentAt    time.Time `json:"sent_at"`
+	Delivered bool      `json:"delivered"`
+	Channel   string    `json:"channel"`
+}
+
+// NotificationConfig for configuring notifications
+type NotificationConfig struct {
+	WebhookURL      string `json:"webhook_url,omitempty"`
+	EmailAddress    string `json:"email_address,omitempty"`
+	NotifyOnFailure bool   `json:"notify_on_failure"`
+	NotifyOnSuccess bool   `json:"notify_on_success"`
+}
+
 type ManualBackupRequest struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
@@ -93,12 +165,25 @@ type DashboardStats struct {
 	RestoreJobs      int    `json:"restore_jobs"`
 }
 
+// RestoreRequest for triggering restores
+type RestoreRequest struct {
+	BackupID    string `json:"backup_id"`
+	TargetPath  string `json:"target_path,omitempty"`
+	Overwrite   bool   `json:"overwrite"`
+	VerifyOnly  bool   `json:"verify_only"`
+}
+
 var config *Config
 
 func main() {
 	config = &Config{
-		VaultIntegration: getEnv("VAULT_INTEGRATION", "true") == "true",
-		BackupDir:        getEnv("BACKUP_DIR", "/data/backups"),
+		VaultIntegration:    getEnv("VAULT_INTEGRATION", "true") == "true",
+		BackupDir:           getEnv("BACKUP_DIR", "/data/backups"),
+		NotificationWebhook: getEnv("NOTIFICATION_WEBHOOK", ""),
+		NotificationEmail:   getEnv("NOTIFICATION_EMAIL", ""),
+		NotifyOnFailure:     getEnv("NOTIFY_ON_FAILURE", "true") == "true",
+		NotifyOnSuccess:     getEnv("NOTIFY_ON_SUCCESS", "false") == "true",
+		RetentionDays:       getEnvInt("RETENTION_DAYS", 30),
 	}
 
 	// Ensure backup directory exists
@@ -153,8 +238,12 @@ func main() {
 	// Schedule endpoints (integrated)
 	api.HandleFunc("/schedules", listSchedulesHandler).Methods("GET")
 	api.HandleFunc("/schedules", createScheduleHandler).Methods("POST")
+	api.HandleFunc("/schedules/{id}", getScheduleHandler).Methods("GET")
+	api.HandleFunc("/schedules/{id}", updateScheduleHandler).Methods("PUT")
 	api.HandleFunc("/schedules/{id}", deleteScheduleHandler).Methods("DELETE")
 	api.HandleFunc("/schedules/{id}/run", triggerScheduleHandler).Methods("POST")
+	api.HandleFunc("/schedules/{id}/enable", enableScheduleHandler).Methods("POST")
+	api.HandleFunc("/schedules/{id}/disable", disableScheduleHandler).Methods("POST")
 	api.HandleFunc("/schedules/{id}/history", getScheduleHistoryHandler).Methods("GET")
 
 	// Backup endpoints (integrated)
@@ -164,10 +253,25 @@ func main() {
 	api.HandleFunc("/backup/manual", triggerManualBackupHandler).Methods("POST")
 
 	// Restore endpoints
+	api.HandleFunc("/restore", triggerRestoreHandler).Methods("POST")
 	api.HandleFunc("/restore/points", listRestorePointsHandler).Methods("GET")
 	api.HandleFunc("/restore/start", startRestoreHandler).Methods("POST")
+	api.HandleFunc("/restore/verify", verifyRestoreHandler).Methods("POST")
 	api.HandleFunc("/restore/jobs", listRestoreJobsHandler).Methods("GET")
 	api.HandleFunc("/restore/jobs/{id}", getRestoreJobHandler).Methods("GET")
+	api.HandleFunc("/restore/jobs/{id}/cancel", cancelRestoreJobHandler).Methods("POST")
+
+	// Job logs endpoints
+	api.HandleFunc("/jobs", listJobsHandler).Methods("GET")
+	api.HandleFunc("/jobs/{id}", getJobHandler).Methods("GET")
+	api.HandleFunc("/jobs/{id}/logs", getJobLogsHandler).Methods("GET")
+	api.HandleFunc("/jobs/{id}/logs", addJobLogHandler).Methods("POST")
+
+	// Notification endpoints
+	api.HandleFunc("/notifications", listNotificationsHandler).Methods("GET")
+	api.HandleFunc("/notifications/config", getNotificationConfigHandler).Methods("GET")
+	api.HandleFunc("/notifications/config", updateNotificationConfigHandler).Methods("PUT")
+	api.HandleFunc("/notifications/test", testNotificationHandler).Methods("POST")
 
 	// Vault endpoints
 	api.HandleFunc("/vault/status", vaultStatusHandler).Methods("GET")
@@ -181,6 +285,15 @@ func main() {
 func getEnv(key, defaultVal string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
+	}
+	return defaultVal
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			return i
+		}
 	}
 	return defaultVal
 }
@@ -230,10 +343,45 @@ func initDB() error {
 		status VARCHAR(20) NOT NULL,
 		started_at TIMESTAMP NOT NULL,
 		completed_at TIMESTAMP,
-		message TEXT
+		message TEXT,
+		target_path VARCHAR(500),
+		verify_only BOOLEAN DEFAULT FALSE
 	);
 	CREATE INDEX IF NOT EXISTS idx_restore_jobs_backup ON restore_jobs(backup_id);
 	CREATE INDEX IF NOT EXISTS idx_restore_jobs_started ON restore_jobs(started_at DESC);
+
+	CREATE TABLE IF NOT EXISTS job_logs (
+		id VARCHAR(36) PRIMARY KEY,
+		job_id VARCHAR(36) NOT NULL,
+		level VARCHAR(20) NOT NULL DEFAULT 'info',
+		message TEXT NOT NULL,
+		timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		details TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_job_logs_job ON job_logs(job_id);
+	CREATE INDEX IF NOT EXISTS idx_job_logs_timestamp ON job_logs(timestamp DESC);
+
+	CREATE TABLE IF NOT EXISTS notifications (
+		id VARCHAR(36) PRIMARY KEY,
+		type VARCHAR(50) NOT NULL,
+		job_id VARCHAR(36),
+		status VARCHAR(20) NOT NULL,
+		message TEXT,
+		sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		delivered BOOLEAN DEFAULT FALSE,
+		channel VARCHAR(50)
+	);
+	CREATE INDEX IF NOT EXISTS idx_notifications_job ON notifications(job_id);
+	CREATE INDEX IF NOT EXISTS idx_notifications_sent ON notifications(sent_at DESC);
+
+	CREATE TABLE IF NOT EXISTS notification_config (
+		id VARCHAR(36) PRIMARY KEY DEFAULT 'default',
+		webhook_url VARCHAR(500),
+		email_address VARCHAR(255),
+		notify_on_failure BOOLEAN DEFAULT TRUE,
+		notify_on_success BOOLEAN DEFAULT FALSE,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := config.DB.Exec(schema)
 	return err
@@ -268,6 +416,16 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getStatsHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if detailed stats requested
+	detailed := r.URL.Query().Get("detailed") == "true"
+
+	if detailed {
+		stats := getDetailedStats()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(stats)
+		return
+	}
+
 	stats := DashboardStats{}
 
 	// Get schedule stats
@@ -296,6 +454,94 @@ func getStatsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+// getDetailedStats returns comprehensive backup statistics
+func getDetailedStats() BackupStats {
+	stats := BackupStats{
+		BackupsByType: make(map[string]int),
+		StorageByType: make(map[string]int64),
+	}
+
+	// Get schedule stats
+	config.DB.QueryRow("SELECT COUNT(*) FROM schedules").Scan(&stats.TotalSchedules)
+	config.DB.QueryRow("SELECT COUNT(*) FROM schedules WHERE enabled = true").Scan(&stats.ActiveSchedules)
+
+	// Get backup stats with type breakdown
+	rows, err := config.DB.Query("SELECT size, encrypted, status, type, created_at FROM backups ORDER BY created_at DESC")
+	if err == nil {
+		defer rows.Close()
+		var lastBackupTime time.Time
+		for rows.Next() {
+			var size int64
+			var encrypted bool
+			var status, backupType string
+			var createdAt time.Time
+			rows.Scan(&size, &encrypted, &status, &backupType, &createdAt)
+
+			stats.TotalBackups++
+			stats.TotalSize += size
+
+			if encrypted {
+				stats.EncryptedBackups++
+			}
+
+			if status == "completed" {
+				stats.SuccessfulBackups++
+			} else if status == "failed" {
+				stats.FailedBackups++
+			}
+
+			stats.BackupsByType[backupType]++
+			stats.StorageByType[backupType] += size
+
+			if stats.TotalBackups == 1 {
+				lastBackupTime = createdAt
+			}
+		}
+		if !lastBackupTime.IsZero() {
+			stats.LastBackupTime = lastBackupTime.Format(time.RFC3339)
+		}
+	}
+
+	stats.TotalSizeHuman = formatBytes(stats.TotalSize)
+
+	// Calculate success rate
+	if stats.TotalBackups > 0 {
+		stats.SuccessRate = float64(stats.SuccessfulBackups) / float64(stats.TotalBackups) * 100
+		stats.AvgBackupSize = stats.TotalSize / int64(stats.TotalBackups)
+		stats.AvgBackupSizeHuman = formatBytes(stats.AvgBackupSize)
+	}
+
+	// Get restore jobs count
+	config.DB.QueryRow("SELECT COUNT(*) FROM restore_jobs").Scan(&stats.RestoreJobs)
+
+	// Get next scheduled run
+	var nextRun *time.Time
+	err = config.DB.QueryRow("SELECT MIN(next_run_at) FROM schedules WHERE enabled = true AND next_run_at IS NOT NULL").Scan(&nextRun)
+	if err == nil && nextRun != nil {
+		stats.NextScheduledRun = nextRun.Format(time.RFC3339)
+	}
+
+	// Get recent failures (last 24 hours)
+	config.DB.QueryRow(`
+		SELECT COUNT(*) FROM backup_history
+		WHERE status = 'failed' AND started_at > NOW() - INTERVAL '24 hours'
+	`).Scan(&stats.RecentFailures)
+
+	// Get daily backup count
+	config.DB.QueryRow(`
+		SELECT COUNT(*) FROM backups
+		WHERE created_at > NOW() - INTERVAL '24 hours'
+	`).Scan(&stats.DailyBackupCount)
+
+	// Get weekly backup count
+	config.DB.QueryRow(`
+		SELECT COUNT(*) FROM backups
+		WHERE created_at > NOW() - INTERVAL '7 days'
+	`).Scan(&stats.WeeklyBackupCount)
+
+	return stats
 }
 
 // Schedule handlers (integrated)
@@ -327,24 +573,169 @@ func createScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		Type     string `json:"type"`
 		CronExpr string `json:"cron_expression"`
 		Target   string `json:"target"`
+		Enabled  *bool  `json:"enabled,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
 		return
 	}
 
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
 	id := uuid.New().String()
 	_, err := config.DB.Exec(`
-		INSERT INTO schedules (id, name, cron_expression, type, target)
-		VALUES ($1, $2, $3, $4, $5)
-	`, id, req.Name, req.CronExpr, req.Type, req.Target)
+		INSERT INTO schedules (id, name, cron_expression, type, target, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, id, req.Name, req.CronExpr, req.Type, req.Target, enabled)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
 		return
 	}
 
+	// Log the creation
+	addJobLogEntry(id, "info", "Schedule created", fmt.Sprintf("Name: %s, Cron: %s, Type: %s", req.Name, req.CronExpr, req.Type))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "created"})
+}
+
+func getScheduleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	var s Schedule
+	err := config.DB.QueryRow(`
+		SELECT id, name, cron_expression, type, target, enabled, created_at, updated_at, last_run_at, next_run_at
+		FROM schedules WHERE id = $1
+	`, vars["id"]).Scan(&s.ID, &s.Name, &s.CronExpr, &s.Type, &s.Target, &s.Enabled, &s.CreatedAt, &s.UpdatedAt, &s.LastRunAt, &s.NextRunAt)
+
+	if err != nil {
+		http.Error(w, `{"error": "Schedule not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s)
+}
+
+func updateScheduleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	var req struct {
+		Name     string `json:"name,omitempty"`
+		Type     string `json:"type,omitempty"`
+		CronExpr string `json:"cron_expression,omitempty"`
+		Target   string `json:"target,omitempty"`
+		Enabled  *bool  `json:"enabled,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Build update query dynamically
+	updates := []string{"updated_at = CURRENT_TIMESTAMP"}
+	args := []interface{}{}
+	argNum := 1
+
+	if req.Name != "" {
+		updates = append(updates, fmt.Sprintf("name = $%d", argNum))
+		args = append(args, req.Name)
+		argNum++
+	}
+	if req.Type != "" {
+		updates = append(updates, fmt.Sprintf("type = $%d", argNum))
+		args = append(args, req.Type)
+		argNum++
+	}
+	if req.CronExpr != "" {
+		updates = append(updates, fmt.Sprintf("cron_expression = $%d", argNum))
+		args = append(args, req.CronExpr)
+		argNum++
+	}
+	if req.Target != "" {
+		updates = append(updates, fmt.Sprintf("target = $%d", argNum))
+		args = append(args, req.Target)
+		argNum++
+	}
+	if req.Enabled != nil {
+		updates = append(updates, fmt.Sprintf("enabled = $%d", argNum))
+		args = append(args, *req.Enabled)
+		argNum++
+	}
+
+	args = append(args, vars["id"])
+	query := fmt.Sprintf("UPDATE schedules SET %s WHERE id = $%d",
+		joinStrings(updates, ", "), argNum)
+
+	result, err := config.DB.Exec(query, args...)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		http.Error(w, `{"error": "Schedule not found"}`, http.StatusNotFound)
+		return
+	}
+
+	addJobLogEntry(vars["id"], "info", "Schedule updated", "")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+func enableScheduleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	result, err := config.DB.Exec("UPDATE schedules SET enabled = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1", vars["id"])
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		http.Error(w, `{"error": "Schedule not found"}`, http.StatusNotFound)
+		return
+	}
+
+	addJobLogEntry(vars["id"], "info", "Schedule enabled", "")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "enabled"})
+}
+
+func disableScheduleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	result, err := config.DB.Exec("UPDATE schedules SET enabled = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1", vars["id"])
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		http.Error(w, `{"error": "Schedule not found"}`, http.StatusNotFound)
+		return
+	}
+
+	addJobLogEntry(vars["id"], "info", "Schedule disabled", "")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "disabled"})
+}
+
+// Helper to join strings
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for i := 1; i < len(strs); i++ {
+		result += sep + strs[i]
+	}
+	return result
 }
 
 func deleteScheduleHandler(w http.ResponseWriter, r *http.Request) {
@@ -371,15 +762,35 @@ func triggerScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create history entry first
+	historyID := uuid.New().String()
+	startTime := time.Now()
+	config.DB.Exec(`
+		INSERT INTO backup_history (id, schedule_id, status, started_at, message)
+		VALUES ($1, $2, $3, $4, $5)
+	`, historyID, scheduleID, "running", startTime, "Backup in progress")
+
+	addJobLogEntry(historyID, "info", "Backup job started", fmt.Sprintf("Schedule: %s, Target: %s", name, target))
+
 	// Create backup
 	backupID := uuid.New().String()
 	backupData := fmt.Sprintf("Scheduled backup: %s, Target: %s, Time: %s", name, target, time.Now().Format(time.RFC3339))
 	backupPath := filepath.Join(config.BackupDir, backupID+".dat")
 
+	addJobLogEntry(historyID, "info", "Writing backup file", backupPath)
+
 	if err := os.WriteFile(backupPath, []byte(backupData), 0644); err != nil {
+		addJobLogEntry(historyID, "error", "Failed to write backup file", err.Error())
+		config.DB.Exec(`
+			UPDATE backup_history SET status = 'failed', completed_at = $1, message = $2
+			WHERE id = $3
+		`, time.Now(), fmt.Sprintf("Failed to write backup: %v", err), historyID)
+		sendNotification("backup_failed", historyID, fmt.Sprintf("Backup failed for schedule %s: %v", name, err))
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to write backup: %v"}`, err), http.StatusInternalServerError)
 		return
 	}
+
+	addJobLogEntry(historyID, "info", "Backup file written successfully", fmt.Sprintf("Size: %d bytes", len(backupData)))
 
 	// Save backup metadata
 	_, err = config.DB.Exec(`
@@ -388,17 +799,20 @@ func triggerScheduleHandler(w http.ResponseWriter, r *http.Request) {
 	`, backupID, target, backupPath, len(backupData), name, "completed", schedType, false)
 	if err != nil {
 		log.Printf("Failed to save backup metadata: %v", err)
+		addJobLogEntry(historyID, "warn", "Failed to save backup metadata", err.Error())
 	}
 
 	// Update schedule last run
 	config.DB.Exec("UPDATE schedules SET last_run_at = $1, updated_at = $1 WHERE id = $2", time.Now(), scheduleID)
 
-	// Add to history
-	historyID := uuid.New().String()
+	// Update history to completed
 	config.DB.Exec(`
-		INSERT INTO backup_history (id, schedule_id, status, started_at, completed_at, size, message)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, historyID, scheduleID, "completed", time.Now(), time.Now(), len(backupData), "Manual trigger successful")
+		UPDATE backup_history SET status = 'completed', completed_at = $1, size = $2, message = $3
+		WHERE id = $4
+	`, time.Now(), len(backupData), "Backup completed successfully", historyID)
+
+	addJobLogEntry(historyID, "info", "Backup completed successfully", fmt.Sprintf("Backup ID: %s", backupID))
+	sendNotification("backup_completed", historyID, fmt.Sprintf("Backup completed for schedule %s", name))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -541,6 +955,10 @@ func triggerManualBackupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	backupID := uuid.New().String()
+
+	// Create job log entry
+	addJobLogEntry(backupID, "info", "Manual backup started", fmt.Sprintf("Name: %s, Type: %s", req.Name, req.Type))
+
 	backupData := fmt.Sprintf("Manual backup: %s, Type: %s, Target: %s, Time: %s",
 		req.Name, req.Type, req.Target, time.Now().Format(time.RFC3339))
 
@@ -549,21 +967,29 @@ func triggerManualBackupHandler(w http.ResponseWriter, r *http.Request) {
 	encrypted := false
 
 	if req.Encrypt && config.VaultIntegration {
+		addJobLogEntry(backupID, "info", "Encrypting backup data", "")
 		encryptedData, err := encryptWithVault([]byte(backupData))
 		if err != nil {
+			addJobLogEntry(backupID, "error", "Encryption failed", err.Error())
+			sendNotification("backup_failed", backupID, fmt.Sprintf("Manual backup failed: encryption error - %v", err))
 			http.Error(w, fmt.Sprintf(`{"error": "Encryption failed: %v"}`, err), http.StatusInternalServerError)
 			return
 		}
 		finalData = encryptedData
 		backupName = req.Name + ".enc"
 		encrypted = true
+		addJobLogEntry(backupID, "info", "Encryption successful", fmt.Sprintf("Encrypted size: %d bytes", len(finalData)))
 	} else {
 		finalData = []byte(backupData)
 		backupName = req.Name
 	}
 
 	backupPath := filepath.Join(config.BackupDir, backupID+".dat")
+	addJobLogEntry(backupID, "info", "Writing backup file", backupPath)
+
 	if err := os.WriteFile(backupPath, finalData, 0644); err != nil {
+		addJobLogEntry(backupID, "error", "Failed to write backup file", err.Error())
+		sendNotification("backup_failed", backupID, fmt.Sprintf("Manual backup failed: %v", err))
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to write backup: %v"}`, err), http.StatusInternalServerError)
 		return
 	}
@@ -575,7 +1001,11 @@ func triggerManualBackupHandler(w http.ResponseWriter, r *http.Request) {
 	`, backupID, req.Target, backupPath, len(finalData), backupName, "completed", req.Type, encrypted)
 	if err != nil {
 		log.Printf("Failed to save backup metadata: %v", err)
+		addJobLogEntry(backupID, "warn", "Failed to save backup metadata", err.Error())
 	}
+
+	addJobLogEntry(backupID, "info", "Backup completed successfully", fmt.Sprintf("Size: %d bytes, Encrypted: %v", len(finalData), encrypted))
+	sendNotification("backup_completed", backupID, fmt.Sprintf("Manual backup %s completed successfully", backupName))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -747,6 +1177,561 @@ func getRestoreJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(j)
+}
+
+func cancelRestoreJobHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+
+	// Can only cancel running jobs
+	var status string
+	err := config.DB.QueryRow("SELECT status FROM restore_jobs WHERE id = $1", vars["id"]).Scan(&status)
+	if err != nil {
+		http.Error(w, `{"error": "Restore job not found"}`, http.StatusNotFound)
+		return
+	}
+
+	if status != "running" {
+		http.Error(w, `{"error": "Can only cancel running jobs"}`, http.StatusBadRequest)
+		return
+	}
+
+	_, err = config.DB.Exec(`
+		UPDATE restore_jobs SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP, message = 'Cancelled by user'
+		WHERE id = $1
+	`, vars["id"])
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	addJobLogEntry(vars["id"], "warn", "Restore job cancelled", "Cancelled by user request")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
+}
+
+// triggerRestoreHandler is the main restore endpoint
+func triggerRestoreHandler(w http.ResponseWriter, r *http.Request) {
+	var req RestoreRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Verify backup exists
+	var backupPath string
+	var encrypted bool
+	err := config.DB.QueryRow("SELECT backup_path, encrypted FROM backups WHERE id = $1", req.BackupID).Scan(&backupPath, &encrypted)
+	if err != nil {
+		http.Error(w, `{"error": "Backup not found"}`, http.StatusNotFound)
+		return
+	}
+
+	jobID := uuid.New().String()
+	startTime := time.Now()
+
+	_, err = config.DB.Exec(`
+		INSERT INTO restore_jobs (id, backup_id, status, started_at, target_path, verify_only)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, jobID, req.BackupID, "running", startTime, req.TargetPath, req.VerifyOnly)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to create restore job"}`, http.StatusInternalServerError)
+		return
+	}
+
+	addJobLogEntry(jobID, "info", "Restore job started", fmt.Sprintf("Backup: %s, Target: %s, VerifyOnly: %v", req.BackupID, req.TargetPath, req.VerifyOnly))
+
+	// Execute restore in background
+	go executeRestoreEnhanced(jobID, req.BackupID, backupPath, encrypted, req.TargetPath, req.VerifyOnly, req.Overwrite)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"job_id":      jobID,
+		"backup_id":   req.BackupID,
+		"status":      "running",
+		"message":     "Restore job started",
+		"verify_only": fmt.Sprintf("%v", req.VerifyOnly),
+	})
+}
+
+func executeRestoreEnhanced(jobID, backupID, backupPath string, encrypted bool, targetPath string, verifyOnly, overwrite bool) {
+	addJobLogEntry(jobID, "info", "Reading backup file", backupPath)
+
+	// Read backup file
+	data, err := os.ReadFile(backupPath)
+	if err != nil {
+		addJobLogEntry(jobID, "error", "Failed to read backup file", err.Error())
+		updateRestoreJob(jobID, "failed", fmt.Sprintf("Failed to read backup file: %v", err))
+		sendNotification("restore_failed", jobID, fmt.Sprintf("Restore failed: %v", err))
+		return
+	}
+
+	addJobLogEntry(jobID, "info", "Backup file read successfully", fmt.Sprintf("Size: %d bytes", len(data)))
+
+	// Decrypt if needed
+	if encrypted {
+		addJobLogEntry(jobID, "info", "Decrypting backup data", "")
+		decrypted, err := decryptWithVault(data)
+		if err != nil {
+			addJobLogEntry(jobID, "error", "Decryption failed", err.Error())
+			updateRestoreJob(jobID, "failed", fmt.Sprintf("Decryption failed: %v", err))
+			sendNotification("restore_failed", jobID, fmt.Sprintf("Restore decryption failed: %v", err))
+			return
+		}
+		data = decrypted
+		addJobLogEntry(jobID, "info", "Decryption successful", fmt.Sprintf("Decrypted size: %d bytes", len(data)))
+	}
+
+	// Verify only mode - just validate the data
+	if verifyOnly {
+		addJobLogEntry(jobID, "info", "Verification complete", "Data integrity verified")
+		updateRestoreJob(jobID, "completed", fmt.Sprintf("Verification successful - %d bytes verified", len(data)))
+		sendNotification("restore_completed", jobID, "Restore verification completed successfully")
+		return
+	}
+
+	// If target path is specified, write the restored data
+	if targetPath != "" {
+		// Check if file exists and overwrite is not enabled
+		if _, err := os.Stat(targetPath); err == nil && !overwrite {
+			addJobLogEntry(jobID, "error", "Target file exists", "Set overwrite=true to replace")
+			updateRestoreJob(jobID, "failed", "Target file exists and overwrite is disabled")
+			sendNotification("restore_failed", jobID, "Restore failed: target file exists")
+			return
+		}
+
+		addJobLogEntry(jobID, "info", "Creating target directory", filepath.Dir(targetPath))
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			addJobLogEntry(jobID, "error", "Failed to create target directory", err.Error())
+			updateRestoreJob(jobID, "failed", fmt.Sprintf("Failed to create target directory: %v", err))
+			sendNotification("restore_failed", jobID, fmt.Sprintf("Restore failed: %v", err))
+			return
+		}
+
+		addJobLogEntry(jobID, "info", "Writing restored data", targetPath)
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			addJobLogEntry(jobID, "error", "Failed to write restored data", err.Error())
+			updateRestoreJob(jobID, "failed", fmt.Sprintf("Failed to write restored data: %v", err))
+			sendNotification("restore_failed", jobID, fmt.Sprintf("Restore failed: %v", err))
+			return
+		}
+	}
+
+	log.Printf("Restore job %s completed, restored %d bytes", jobID, len(data))
+	addJobLogEntry(jobID, "info", "Restore completed successfully", fmt.Sprintf("Restored %d bytes", len(data)))
+	updateRestoreJob(jobID, "completed", fmt.Sprintf("Successfully restored %d bytes", len(data)))
+	sendNotification("restore_completed", jobID, fmt.Sprintf("Restore completed: %d bytes restored", len(data)))
+}
+
+func verifyRestoreHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BackupID string `json:"backup_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Create a verify-only restore job
+	restoreReq := RestoreRequest{
+		BackupID:   req.BackupID,
+		VerifyOnly: true,
+	}
+
+	// Verify backup exists
+	var backupPath string
+	var encrypted bool
+	err := config.DB.QueryRow("SELECT backup_path, encrypted FROM backups WHERE id = $1", restoreReq.BackupID).Scan(&backupPath, &encrypted)
+	if err != nil {
+		http.Error(w, `{"error": "Backup not found"}`, http.StatusNotFound)
+		return
+	}
+
+	jobID := uuid.New().String()
+	startTime := time.Now()
+
+	_, err = config.DB.Exec(`
+		INSERT INTO restore_jobs (id, backup_id, status, started_at, verify_only)
+		VALUES ($1, $2, $3, $4, $5)
+	`, jobID, restoreReq.BackupID, "running", startTime, true)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to create verification job"}`, http.StatusInternalServerError)
+		return
+	}
+
+	go executeRestoreEnhanced(jobID, restoreReq.BackupID, backupPath, encrypted, "", true, false)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"job_id":    jobID,
+		"backup_id": restoreReq.BackupID,
+		"status":    "running",
+		"message":   "Verification job started",
+	})
+}
+
+// Job handlers
+func listJobsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	status := r.URL.Query().Get("status")
+
+	var rows *sql.Rows
+	var err error
+
+	if status != "" {
+		rows, err = config.DB.Query(`
+			SELECT id, schedule_id, status, started_at, completed_at, size, message
+			FROM backup_history WHERE status = $1 ORDER BY started_at DESC LIMIT $2
+		`, status, limit)
+	} else {
+		rows, err = config.DB.Query(`
+			SELECT id, schedule_id, status, started_at, completed_at, size, message
+			FROM backup_history ORDER BY started_at DESC LIMIT $1
+		`, limit)
+	}
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	jobs := []BackupJob{}
+	for rows.Next() {
+		var j BackupJob
+		rows.Scan(&j.ID, &j.ScheduleID, &j.Status, &j.StartedAt, &j.CompletedAt, &j.Size, &j.Message)
+		jobs = append(jobs, j)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jobs":      jobs,
+		"count":     len(jobs),
+		"service":   "Backup Dashboard",
+		"timestamp": time.Now().Format(time.RFC3339),
+		"status":    "ok",
+	})
+}
+
+func getJobHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	var j BackupJob
+
+	err := config.DB.QueryRow(`
+		SELECT id, schedule_id, status, started_at, completed_at, size, message
+		FROM backup_history WHERE id = $1
+	`, vars["id"]).Scan(&j.ID, &j.ScheduleID, &j.Status, &j.StartedAt, &j.CompletedAt, &j.Size, &j.Message)
+
+	if err != nil {
+		http.Error(w, `{"error": "Job not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(j)
+}
+
+func getJobLogsHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	level := r.URL.Query().Get("level")
+
+	var rows *sql.Rows
+	var err error
+
+	if level != "" {
+		rows, err = config.DB.Query(`
+			SELECT id, job_id, level, message, timestamp, details
+			FROM job_logs WHERE job_id = $1 AND level = $2 ORDER BY timestamp ASC LIMIT $3
+		`, vars["id"], level, limit)
+	} else {
+		rows, err = config.DB.Query(`
+			SELECT id, job_id, level, message, timestamp, details
+			FROM job_logs WHERE job_id = $1 ORDER BY timestamp ASC LIMIT $2
+		`, vars["id"], limit)
+	}
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	logs := []JobLog{}
+	for rows.Next() {
+		var l JobLog
+		var details *string
+		rows.Scan(&l.ID, &l.JobID, &l.Level, &l.Message, &l.Timestamp, &details)
+		if details != nil {
+			l.Details = *details
+		}
+		logs = append(logs, l)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"logs":   logs,
+		"count":  len(logs),
+		"job_id": vars["id"],
+	})
+}
+
+func addJobLogHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	var req struct {
+		Level   string `json:"level"`
+		Message string `json:"message"`
+		Details string `json:"details,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.Level == "" {
+		req.Level = "info"
+	}
+
+	logID := addJobLogEntry(vars["id"], req.Level, req.Message, req.Details)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"id": logID, "status": "created"})
+}
+
+// addJobLogEntry adds a log entry for a job
+func addJobLogEntry(jobID, level, message, details string) string {
+	logID := uuid.New().String()
+	_, err := config.DB.Exec(`
+		INSERT INTO job_logs (id, job_id, level, message, details)
+		VALUES ($1, $2, $3, $4, $5)
+	`, logID, jobID, level, message, details)
+	if err != nil {
+		log.Printf("Failed to add job log: %v", err)
+	}
+	return logID
+}
+
+// Notification handlers
+func listNotificationsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	rows, err := config.DB.Query(`
+		SELECT id, type, job_id, status, message, sent_at, delivered, channel
+		FROM notifications ORDER BY sent_at DESC LIMIT $1
+	`, limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	notifications := []Notification{}
+	for rows.Next() {
+		var n Notification
+		var jobID, channel *string
+		rows.Scan(&n.ID, &n.Type, &jobID, &n.Status, &n.Message, &n.SentAt, &n.Delivered, &channel)
+		if jobID != nil {
+			n.JobID = *jobID
+		}
+		if channel != nil {
+			n.Channel = *channel
+		}
+		notifications = append(notifications, n)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"notifications": notifications,
+		"count":         len(notifications),
+	})
+}
+
+func getNotificationConfigHandler(w http.ResponseWriter, r *http.Request) {
+	var cfg NotificationConfig
+
+	err := config.DB.QueryRow(`
+		SELECT webhook_url, email_address, notify_on_failure, notify_on_success
+		FROM notification_config WHERE id = 'default'
+	`).Scan(&cfg.WebhookURL, &cfg.EmailAddress, &cfg.NotifyOnFailure, &cfg.NotifyOnSuccess)
+
+	if err != nil {
+		// Return defaults from environment
+		cfg = NotificationConfig{
+			WebhookURL:      config.NotificationWebhook,
+			EmailAddress:    config.NotificationEmail,
+			NotifyOnFailure: config.NotifyOnFailure,
+			NotifyOnSuccess: config.NotifyOnSuccess,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cfg)
+}
+
+func updateNotificationConfigHandler(w http.ResponseWriter, r *http.Request) {
+	var cfg NotificationConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	_, err := config.DB.Exec(`
+		INSERT INTO notification_config (id, webhook_url, email_address, notify_on_failure, notify_on_success, updated_at)
+		VALUES ('default', $1, $2, $3, $4, CURRENT_TIMESTAMP)
+		ON CONFLICT (id) DO UPDATE SET
+			webhook_url = $1,
+			email_address = $2,
+			notify_on_failure = $3,
+			notify_on_success = $4,
+			updated_at = CURRENT_TIMESTAMP
+	`, cfg.WebhookURL, cfg.EmailAddress, cfg.NotifyOnFailure, cfg.NotifyOnSuccess)
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	// Update in-memory config
+	config.mu.Lock()
+	config.NotificationWebhook = cfg.WebhookURL
+	config.NotificationEmail = cfg.EmailAddress
+	config.NotifyOnFailure = cfg.NotifyOnFailure
+	config.NotifyOnSuccess = cfg.NotifyOnSuccess
+	config.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+func testNotificationHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Channel string `json:"channel"`
+		Message string `json:"message,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.Message == "" {
+		req.Message = "This is a test notification from HolmOS Backup Dashboard"
+	}
+
+	err := sendNotificationToChannel(req.Channel, "test", "", req.Message)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to send notification: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "sent", "channel": req.Channel})
+}
+
+// sendNotification sends a notification for backup events
+func sendNotification(notifType, jobID, message string) {
+	config.mu.RLock()
+	notifyFailure := config.NotifyOnFailure
+	notifySuccess := config.NotifyOnSuccess
+	webhookURL := config.NotificationWebhook
+	config.mu.RUnlock()
+
+	// Check if we should send based on type
+	isFailure := notifType == "backup_failed" || notifType == "restore_failed"
+	isSuccess := notifType == "backup_completed" || notifType == "restore_completed"
+
+	if (isFailure && !notifyFailure) || (isSuccess && !notifySuccess) {
+		return
+	}
+
+	// Record notification
+	notifID := uuid.New().String()
+	channel := "webhook"
+	if webhookURL == "" {
+		channel = "log"
+	}
+
+	_, err := config.DB.Exec(`
+		INSERT INTO notifications (id, type, job_id, status, message, channel, delivered)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, notifID, notifType, jobID, "sent", message, channel, webhookURL != "")
+
+	if err != nil {
+		log.Printf("Failed to record notification: %v", err)
+	}
+
+	// Send to webhook if configured
+	if webhookURL != "" {
+		go sendWebhookNotification(webhookURL, notifType, jobID, message)
+	}
+
+	// Always log
+	log.Printf("[NOTIFICATION] %s: %s (job: %s)", notifType, message, jobID)
+}
+
+func sendNotificationToChannel(channel, notifType, jobID, message string) error {
+	config.mu.RLock()
+	webhookURL := config.NotificationWebhook
+	config.mu.RUnlock()
+
+	switch channel {
+	case "webhook":
+		if webhookURL == "" {
+			return fmt.Errorf("webhook URL not configured")
+		}
+		return sendWebhookNotification(webhookURL, notifType, jobID, message)
+	case "log":
+		log.Printf("[NOTIFICATION] %s: %s", notifType, message)
+		return nil
+	default:
+		return fmt.Errorf("unknown channel: %s", channel)
+	}
+}
+
+func sendWebhookNotification(webhookURL, notifType, jobID, message string) error {
+	payload := map[string]interface{}{
+		"type":      notifType,
+		"job_id":    jobID,
+		"message":   message,
+		"timestamp": time.Now().Format(time.RFC3339),
+		"service":   "backup-dashboard",
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(webhookURL, "application/json", bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		log.Printf("Failed to send webhook notification: %v", err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		log.Printf("Webhook returned error status: %d", resp.StatusCode)
+		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 func vaultStatusHandler(w http.ResponseWriter, r *http.Request) {

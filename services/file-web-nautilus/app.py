@@ -274,7 +274,11 @@ def list_directory():
         items.sort(key=lambda x: (not x['isDir'], x['extension'] or ''), reverse=reverse)
 
     parent = os.path.dirname(abs_path)
-    parent_path = parent.replace(BASE_PATH, '') or '/' if parent.startswith(BASE_PATH) else None
+    # Return '/' for root (no parent), never null
+    if parent.startswith(BASE_PATH):
+        parent_path = parent.replace(BASE_PATH, '') or '/'
+    else:
+        parent_path = '/'  # At root level, parent is self
 
     breadcrumbs = [{'name': 'Home', 'path': '/'}]
     current = ''

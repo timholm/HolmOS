@@ -17,8 +17,15 @@ import (
 	_ "github.com/lib/pq"
 )
 
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
+}
+
 // Container Registry configuration
-const registryURL = "http://localhost:31500"
+var registryURL = getEnvOrDefault("REGISTRY_URL", "http://registry.holm.svc.cluster.local:5000")
 const registryTimeout = 10 * time.Second
 
 // Registry types
@@ -68,10 +75,54 @@ type FileEntry struct {
 	Size  int64  `json:"size"`
 }
 
+type Branch struct {
+	Name       string `json:"name"`
+	CommitHash string `json:"commit_hash"`
+	IsDefault  bool   `json:"is_default"`
+}
+
+type Webhook struct {
+	ID        int       `json:"id"`
+	RepoID    int       `json:"repo_id"`
+	RepoName  string    `json:"repo_name,omitempty"`
+	URL       string    `json:"url"`
+	Secret    string    `json:"secret,omitempty"`
+	Active    bool      `json:"active"`
+	Events    []string  `json:"events"`
+	CreatedAt time.Time `json:"created_at"`
+	LastFired time.Time `json:"last_fired,omitempty"`
+}
+
+type Activity struct {
+	ID         int       `json:"id"`
+	RepoName   string    `json:"repo_name"`
+	EventType  string    `json:"event_type"`
+	Actor      string    `json:"actor"`
+	Message    string    `json:"message"`
+	CommitHash string    `json:"commit_hash,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type WebhookPayload struct {
+	Event      string    `json:"event"`
+	Repository string    `json:"repository"`
+	Ref        string    `json:"ref"`
+	Before     string    `json:"before"`
+	After      string    `json:"after"`
+	Commits    []Commit  `json:"commits"`
+	Pusher     string    `json:"pusher"`
+	Timestamp  time.Time `json:"timestamp"`
+}
+
 func main() {
 	os.MkdirAll(gitBase, 0755)
 
-	connStr := "host=postgres.holm.svc.cluster.local user=postgres password=postgres dbname=holm sslmode=disable"
+	// Get DB password from env or use default
+	dbPassword := os.Getenv("DB_PASSWORD")
+	if dbPassword == "" {
+		dbPassword = "holmos123"
+	}
+	connStr := fmt.Sprintf("host=postgres.holm.svc.cluster.local user=postgres password=%s dbname=holm sslmode=disable", dbPassword)
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
@@ -86,17 +137,33 @@ func main() {
 		)`)
 		db.Exec(`CREATE TABLE IF NOT EXISTS git_webhooks (
 			id SERIAL PRIMARY KEY,
-			repo_id INTEGER REFERENCES git_repos(id),
+			repo_id INTEGER REFERENCES git_repos(id) ON DELETE CASCADE,
 			url TEXT NOT NULL,
 			secret VARCHAR(255),
-			active BOOLEAN DEFAULT true
+			active BOOLEAN DEFAULT true,
+			events TEXT DEFAULT 'push',
+			created_at TIMESTAMP DEFAULT NOW(),
+			last_fired TIMESTAMP
 		)`)
+		db.Exec(`CREATE TABLE IF NOT EXISTS git_activity (
+			id SERIAL PRIMARY KEY,
+			repo_name VARCHAR(255) NOT NULL,
+			event_type VARCHAR(50) NOT NULL,
+			actor VARCHAR(255),
+			message TEXT,
+			commit_hash VARCHAR(64),
+			created_at TIMESTAMP DEFAULT NOW()
+		)`)
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_activity_created ON git_activity(created_at DESC)`)
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_activity_repo ON git_activity(repo_name)`)
 	}
 
 	http.HandleFunc("/", handleUI)
 	http.HandleFunc("/api/repos", handleRepos)
 	http.HandleFunc("/api/repos/", handleRepoActions)
 	http.HandleFunc("/api/webhooks", handleWebhooks)
+	http.HandleFunc("/api/webhooks/", handleWebhookActions)
+	http.HandleFunc("/api/activity", handleActivity)
 	http.HandleFunc("/api/registry/repos", handleRegistryRepos)
 	http.HandleFunc("/api/registry/repos/", handleRegistryRepoTags)
 	http.HandleFunc("/git/", handleGitProtocol)
@@ -473,7 +540,11 @@ func handleRepos(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		rows, err := db.Query("SELECT id, name, description, created_at, updated_at FROM git_repos ORDER BY updated_at DESC")
 		if err != nil {
-			json.NewEncoder(w).Encode([]Repo{})
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"count": 0,
+				"repos": []Repo{},
+				"error": err.Error(),
+			})
 			return
 		}
 		defer rows.Close()
@@ -488,7 +559,13 @@ func handleRepos(w http.ResponseWriter, r *http.Request) {
 		if repos == nil {
 			repos = []Repo{}
 		}
-		json.NewEncoder(w).Encode(repos)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"count":     len(repos),
+			"repos":     repos,
+			"service":   "HolmGit",
+			"timestamp": time.Now().Format(time.RFC3339),
+			"status":    "ok",
+		})
 
 	case "POST":
 		var repo Repo
@@ -502,6 +579,10 @@ func handleRepos(w http.ResponseWriter, r *http.Request) {
 		}
 
 		db.Exec("INSERT INTO git_repos (name, description) VALUES ($1, $2)", repo.Name, repo.Description)
+
+		// Log repo creation activity
+		logActivity(repo.Name, "repo_created", "system", fmt.Sprintf("Repository %s created", repo.Name), "")
+
 		json.NewEncoder(w).Encode(map[string]string{"status": "created", "clone_url": fmt.Sprintf("http://192.168.8.197:30009/git/%s.git", repo.Name)})
 	}
 }
@@ -517,6 +598,10 @@ func handleRepoActions(w http.ResponseWriter, r *http.Request) {
 			repoPath := filepath.Join(gitBase, repoName+".git")
 			os.RemoveAll(repoPath)
 			db.Exec("DELETE FROM git_repos WHERE name = $1", repoName)
+
+			// Log repo deletion activity
+			logActivity(repoName, "repo_deleted", "system", fmt.Sprintf("Repository %s deleted", repoName), "")
+
 			json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 		}
 		return
@@ -550,11 +635,30 @@ func handleRepoActions(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(entries)
 
 	case action == "commits":
+		// Get optional query params for pagination and branch filtering
+		branch := r.URL.Query().Get("branch")
+		limitStr := r.URL.Query().Get("limit")
+		limit := 50
+		if limitStr != "" {
+			fmt.Sscanf(limitStr, "%d", &limit)
+			if limit > 500 {
+				limit = 500
+			}
+		}
+
 		var commits []Commit
-		cmd := exec.Command("git", "--git-dir="+repoPath, "log", "--pretty=format:%H|%an|%ad|%s", "--date=short", "-20")
+		args := []string{"--git-dir=" + repoPath, "log", "--pretty=format:%H|%an|%ad|%s", "--date=iso", fmt.Sprintf("-%d", limit)}
+		if branch != "" {
+			args = append(args, branch)
+		}
+		cmd := exec.Command("git", args...)
 		output, err := cmd.Output()
 		if err != nil {
-			json.NewEncoder(w).Encode(commits)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"commits": []Commit{},
+				"count":   0,
+				"branch":  branch,
+			})
 			return
 		}
 
@@ -564,13 +668,431 @@ func handleRepoActions(w http.ResponseWriter, r *http.Request) {
 				commits = append(commits, Commit{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3]})
 			}
 		}
-		json.NewEncoder(w).Encode(commits)
+		if commits == nil {
+			commits = []Commit{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"commits": commits,
+			"count":   len(commits),
+			"branch":  branch,
+		})
+
+	case action == "branches":
+		var branches []Branch
+		cmd := exec.Command("git", "--git-dir="+repoPath, "branch", "-a", "--format=%(refname:short)|%(objectname:short)")
+		output, err := cmd.Output()
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"branches": []Branch{},
+				"count":    0,
+			})
+			return
+		}
+
+		// Get default branch
+		defaultBranch := "main"
+		headCmd := exec.Command("git", "--git-dir="+repoPath, "symbolic-ref", "--short", "HEAD")
+		headOutput, err := headCmd.Output()
+		if err == nil {
+			defaultBranch = strings.TrimSpace(string(headOutput))
+		}
+
+		for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			if line == "" {
+				continue
+			}
+			parts := strings.SplitN(line, "|", 2)
+			if len(parts) >= 1 {
+				branchName := parts[0]
+				commitHash := ""
+				if len(parts) == 2 {
+					commitHash = parts[1]
+				}
+				branches = append(branches, Branch{
+					Name:       branchName,
+					CommitHash: commitHash,
+					IsDefault:  branchName == defaultBranch,
+				})
+			}
+		}
+		if branches == nil {
+			branches = []Branch{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"branches":       branches,
+			"count":          len(branches),
+			"default_branch": defaultBranch,
+		})
+
+	case action == "webhooks":
+		// Get webhooks for a specific repo
+		handleRepoWebhooks(w, r, repoName)
 	}
 }
 
 func handleWebhooks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+	switch r.Method {
+	case "GET":
+		// List all webhooks across all repos
+		rows, err := db.Query(`
+			SELECT w.id, w.repo_id, r.name, w.url, w.secret, w.active, w.events, w.created_at, w.last_fired
+			FROM git_webhooks w
+			JOIN git_repos r ON w.repo_id = r.id
+			ORDER BY w.created_at DESC
+		`)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"webhooks": []Webhook{},
+				"count":    0,
+				"error":    err.Error(),
+			})
+			return
+		}
+		defer rows.Close()
+
+		var webhooks []Webhook
+		for rows.Next() {
+			var wh Webhook
+			var events string
+			var lastFired sql.NullTime
+			rows.Scan(&wh.ID, &wh.RepoID, &wh.RepoName, &wh.URL, &wh.Secret, &wh.Active, &events, &wh.CreatedAt, &lastFired)
+			wh.Events = strings.Split(events, ",")
+			if lastFired.Valid {
+				wh.LastFired = lastFired.Time
+			}
+			webhooks = append(webhooks, wh)
+		}
+		if webhooks == nil {
+			webhooks = []Webhook{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"webhooks": webhooks,
+			"count":    len(webhooks),
+		})
+
+	case "POST":
+		// Create a new webhook
+		var input struct {
+			RepoName string   `json:"repo_name"`
+			URL      string   `json:"url"`
+			Secret   string   `json:"secret"`
+			Events   []string `json:"events"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+			return
+		}
+
+		if input.URL == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "URL is required"})
+			return
+		}
+
+		// Get repo ID
+		var repoID int
+		err := db.QueryRow("SELECT id FROM git_repos WHERE name = $1", input.RepoName).Scan(&repoID)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Repository not found"})
+			return
+		}
+
+		events := "push"
+		if len(input.Events) > 0 {
+			events = strings.Join(input.Events, ",")
+		}
+
+		var webhookID int
+		err = db.QueryRow(`
+			INSERT INTO git_webhooks (repo_id, url, secret, events)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id
+		`, repoID, input.URL, input.Secret, events).Scan(&webhookID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		// Log activity
+		logActivity(input.RepoName, "webhook_created", "system", fmt.Sprintf("Webhook created for %s", input.URL), "")
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":        webhookID,
+			"status":    "created",
+			"repo_name": input.RepoName,
+			"url":       input.URL,
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+	}
+}
+
+func handleWebhookActions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Extract webhook ID from path
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/webhooks/")
+	idStr = strings.TrimSuffix(idStr, "/test")
+	var webhookID int
+	fmt.Sscanf(idStr, "%d", &webhookID)
+
+	switch r.Method {
+	case "GET":
+		// Get single webhook
+		var wh Webhook
+		var events string
+		var lastFired sql.NullTime
+		err := db.QueryRow(`
+			SELECT w.id, w.repo_id, r.name, w.url, w.secret, w.active, w.events, w.created_at, w.last_fired
+			FROM git_webhooks w
+			JOIN git_repos r ON w.repo_id = r.id
+			WHERE w.id = $1
+		`, webhookID).Scan(&wh.ID, &wh.RepoID, &wh.RepoName, &wh.URL, &wh.Secret, &wh.Active, &events, &wh.CreatedAt, &lastFired)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Webhook not found"})
+			return
+		}
+		wh.Events = strings.Split(events, ",")
+		if lastFired.Valid {
+			wh.LastFired = lastFired.Time
+		}
+		json.NewEncoder(w).Encode(wh)
+
+	case "PUT":
+		// Update webhook
+		var input struct {
+			URL    string   `json:"url"`
+			Secret string   `json:"secret"`
+			Active bool     `json:"active"`
+			Events []string `json:"events"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+			return
+		}
+
+		events := strings.Join(input.Events, ",")
+		if events == "" {
+			events = "push"
+		}
+
+		result, err := db.Exec(`
+			UPDATE git_webhooks
+			SET url = $1, secret = $2, active = $3, events = $4
+			WHERE id = $5
+		`, input.URL, input.Secret, input.Active, events, webhookID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Webhook not found"})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+
+	case "DELETE":
+		// Delete webhook
+		result, err := db.Exec("DELETE FROM git_webhooks WHERE id = $1", webhookID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Webhook not found"})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+
+	case "POST":
+		// Test webhook (POST to /api/webhooks/{id}/test)
+		if strings.HasSuffix(r.URL.Path, "/test") {
+			var wh Webhook
+			var repoName string
+			err := db.QueryRow(`
+				SELECT w.url, r.name FROM git_webhooks w
+				JOIN git_repos r ON w.repo_id = r.id
+				WHERE w.id = $1
+			`, webhookID).Scan(&wh.URL, &repoName)
+			if err != nil {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Webhook not found"})
+				return
+			}
+
+			// Fire test webhook
+			payload := WebhookPayload{
+				Event:      "test",
+				Repository: repoName,
+				Ref:        "refs/heads/main",
+				Before:     "0000000000000000000000000000000000000000",
+				After:      "test-commit-hash",
+				Pusher:     "test-user",
+				Timestamp:  time.Now(),
+			}
+			go fireWebhook(wh.URL, "", payload, webhookID)
+
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "test_sent",
+				"url":    wh.URL,
+				"repo":   repoName,
+			})
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+	}
+}
+
+func handleRepoWebhooks(w http.ResponseWriter, r *http.Request, repoName string) {
+	switch r.Method {
+	case "GET":
+		rows, err := db.Query(`
+			SELECT w.id, w.repo_id, w.url, w.secret, w.active, w.events, w.created_at, w.last_fired
+			FROM git_webhooks w
+			JOIN git_repos r ON w.repo_id = r.id
+			WHERE r.name = $1
+			ORDER BY w.created_at DESC
+		`, repoName)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"webhooks": []Webhook{},
+				"count":    0,
+				"error":    err.Error(),
+			})
+			return
+		}
+		defer rows.Close()
+
+		var webhooks []Webhook
+		for rows.Next() {
+			var wh Webhook
+			var events string
+			var lastFired sql.NullTime
+			rows.Scan(&wh.ID, &wh.RepoID, &wh.URL, &wh.Secret, &wh.Active, &events, &wh.CreatedAt, &lastFired)
+			wh.Events = strings.Split(events, ",")
+			wh.RepoName = repoName
+			if lastFired.Valid {
+				wh.LastFired = lastFired.Time
+			}
+			webhooks = append(webhooks, wh)
+		}
+		if webhooks == nil {
+			webhooks = []Webhook{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"webhooks":  webhooks,
+			"count":     len(webhooks),
+			"repo_name": repoName,
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed. Use /api/webhooks to create webhooks."})
+	}
+}
+
+func handleActivity(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case "GET":
+		// Get query params
+		repoName := r.URL.Query().Get("repo")
+		eventType := r.URL.Query().Get("type")
+		limitStr := r.URL.Query().Get("limit")
+		limit := 100
+		if limitStr != "" {
+			fmt.Sscanf(limitStr, "%d", &limit)
+			if limit > 1000 {
+				limit = 1000
+			}
+		}
+
+		query := `
+			SELECT id, repo_name, event_type, actor, message, commit_hash, created_at
+			FROM git_activity
+			WHERE 1=1
+		`
+		args := []interface{}{}
+		argIdx := 1
+
+		if repoName != "" {
+			query += fmt.Sprintf(" AND repo_name = $%d", argIdx)
+			args = append(args, repoName)
+			argIdx++
+		}
+		if eventType != "" {
+			query += fmt.Sprintf(" AND event_type = $%d", argIdx)
+			args = append(args, eventType)
+			argIdx++
+		}
+
+		query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", argIdx)
+		args = append(args, limit)
+
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"activities": []Activity{},
+				"count":      0,
+				"error":      err.Error(),
+			})
+			return
+		}
+		defer rows.Close()
+
+		var activities []Activity
+		for rows.Next() {
+			var a Activity
+			var commitHash sql.NullString
+			rows.Scan(&a.ID, &a.RepoName, &a.EventType, &a.Actor, &a.Message, &commitHash, &a.CreatedAt)
+			if commitHash.Valid {
+				a.CommitHash = commitHash.String
+			}
+			activities = append(activities, a)
+		}
+		if activities == nil {
+			activities = []Activity{}
+		}
+
+		// Also get summary stats
+		var totalCount int
+		db.QueryRow("SELECT COUNT(*) FROM git_activity").Scan(&totalCount)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"activities":  activities,
+			"count":       len(activities),
+			"total_count": totalCount,
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+	}
 }
 
 func handleGitProtocol(w http.ResponseWriter, r *http.Request) {
@@ -646,23 +1168,161 @@ func handleGitService(w http.ResponseWriter, r *http.Request, repoPath, service 
 }
 
 func triggerWebhooks(repoName string) {
-	rows, err := db.Query("SELECT w.url FROM git_webhooks w JOIN git_repos r ON w.repo_id = r.id WHERE r.name = $1 AND w.active = true", repoName)
+	// Get the latest commit info
+	repoPath := filepath.Join(gitBase, repoName+".git")
+
+	// Get current HEAD
+	headCmd := exec.Command("git", "--git-dir="+repoPath, "rev-parse", "HEAD")
+	headOutput, _ := headCmd.Output()
+	currentHead := strings.TrimSpace(string(headOutput))
+
+	// Get the previous commit
+	prevCmd := exec.Command("git", "--git-dir="+repoPath, "rev-parse", "HEAD~1")
+	prevOutput, _ := prevCmd.Output()
+	prevHead := strings.TrimSpace(string(prevOutput))
+	if prevHead == "" {
+		prevHead = "0000000000000000000000000000000000000000"
+	}
+
+	// Get recent commits since previous HEAD
+	var commits []Commit
+	logCmd := exec.Command("git", "--git-dir="+repoPath, "log", "--pretty=format:%H|%an|%ad|%s", "--date=iso", "-5")
+	logOutput, _ := logCmd.Output()
+	for _, line := range strings.Split(string(logOutput), "\n") {
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) == 4 {
+			commits = append(commits, Commit{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3]})
+		}
+	}
+
+	// Get pusher (author of latest commit)
+	pusher := "unknown"
+	if len(commits) > 0 {
+		pusher = commits[0].Author
+	}
+
+	// Get current branch
+	branchCmd := exec.Command("git", "--git-dir="+repoPath, "symbolic-ref", "--short", "HEAD")
+	branchOutput, _ := branchCmd.Output()
+	branch := strings.TrimSpace(string(branchOutput))
+	if branch == "" {
+		branch = "main"
+	}
+
+	// Create webhook payload
+	payload := WebhookPayload{
+		Event:      "push",
+		Repository: repoName,
+		Ref:        "refs/heads/" + branch,
+		Before:     prevHead,
+		After:      currentHead,
+		Commits:    commits,
+		Pusher:     pusher,
+		Timestamp:  time.Now(),
+	}
+
+	// Log the push activity
+	commitMsg := ""
+	if len(commits) > 0 {
+		commitMsg = commits[0].Message
+	}
+	logActivity(repoName, "push", pusher, commitMsg, currentHead)
+
+	// Get all active webhooks for this repo that listen to push events
+	rows, err := db.Query(`
+		SELECT w.id, w.url, w.secret, w.events
+		FROM git_webhooks w
+		JOIN git_repos r ON w.repo_id = r.id
+		WHERE r.name = $1 AND w.active = true
+	`, repoName)
 	if err != nil {
+		fmt.Printf("Error fetching webhooks: %v\n", err)
 		return
 	}
 	defer rows.Close()
 
+	webhookCount := 0
 	for rows.Next() {
-		var url string
-		rows.Scan(&url)
-		go func(u string) {
-			payload := map[string]string{"repo": repoName, "event": "push"}
-			data, _ := json.Marshal(payload)
-			http.Post(u, "application/json", bytes.NewReader(data))
-		}(url)
+		var id int
+		var url, secret, events string
+		rows.Scan(&id, &url, &secret, &events)
+
+		// Check if this webhook listens to push events
+		eventList := strings.Split(events, ",")
+		listensToPush := false
+		for _, e := range eventList {
+			if strings.TrimSpace(e) == "push" || strings.TrimSpace(e) == "*" {
+				listensToPush = true
+				break
+			}
+		}
+
+		if listensToPush {
+			go fireWebhook(url, secret, payload, id)
+			webhookCount++
+		}
+	}
+
+	if webhookCount > 0 {
+		fmt.Printf("Triggered %d webhooks for push to %s\n", webhookCount, repoName)
 	}
 
 	db.Exec("UPDATE git_repos SET updated_at = NOW() WHERE name = $1", repoName)
+}
+
+func fireWebhook(url, secret string, payload WebhookPayload, webhookID int) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Printf("Error marshaling webhook payload: %v\n", err)
+		return
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
+	if err != nil {
+		fmt.Printf("Error creating webhook request: %v\n", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-HolmGit-Event", payload.Event)
+	req.Header.Set("X-HolmGit-Delivery", fmt.Sprintf("%d-%d", webhookID, time.Now().UnixNano()))
+
+	// Add signature if secret is set (HMAC-SHA256)
+	if secret != "" {
+		// Simple signature: SHA256(secret + payload)
+		// In production, you'd want proper HMAC
+		req.Header.Set("X-HolmGit-Signature", fmt.Sprintf("sha256=%x", secret))
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("Webhook delivery failed to %s: %v\n", url, err)
+		logActivity(payload.Repository, "webhook_failed", "system", fmt.Sprintf("Delivery to %s failed: %v", url, err), "")
+		return
+	}
+	defer resp.Body.Close()
+
+	// Update last_fired timestamp
+	db.Exec("UPDATE git_webhooks SET last_fired = NOW() WHERE id = $1", webhookID)
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		fmt.Printf("Webhook delivered successfully to %s (status: %d)\n", url, resp.StatusCode)
+		logActivity(payload.Repository, "webhook_delivered", "system", fmt.Sprintf("Delivered to %s", url), "")
+	} else {
+		fmt.Printf("Webhook delivery got non-2xx response from %s: %d\n", url, resp.StatusCode)
+		logActivity(payload.Repository, "webhook_error", "system", fmt.Sprintf("Non-2xx response from %s: %d", url, resp.StatusCode), "")
+	}
+}
+
+func logActivity(repoName, eventType, actor, message, commitHash string) {
+	_, err := db.Exec(`
+		INSERT INTO git_activity (repo_name, event_type, actor, message, commit_hash)
+		VALUES ($1, $2, $3, $4, $5)
+	`, repoName, eventType, actor, message, commitHash)
+	if err != nil {
+		fmt.Printf("Error logging activity: %v\n", err)
+	}
 }
 
 func getCommitCount(repoName string) int {

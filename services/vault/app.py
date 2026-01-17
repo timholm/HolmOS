@@ -241,13 +241,132 @@ def list_secrets():
             'current_version': data['current_version'],
             'version_count': len(data['versions']),
             'created_at': data['created_at'],
-            'updated_at': data['updated_at']
+            'updated_at': data['updated_at'],
+            'rotation_policy': data.get('rotation_policy'),
+            'last_rotated': data.get('last_rotated'),
+            'next_rotation': data.get('next_rotation')
         })
     log_audit('LIST', '*', details=f"Listed {len(result)} secrets")
     return result
 
-def list_secret_versions(name: str):
-    """List all versions of a secret"""
+def set_rotation_policy(name: str, policy: dict):
+    """Set rotation policy for a secret
+
+    policy = {
+        'enabled': True,
+        'interval_days': 30,
+        'auto_rotate': False,  # If True, auto-generate new value on rotation
+        'notify_before_days': 7  # Days before expiry to flag for rotation
+    }
+    """
+    with file_lock:
+        secrets_data = load_secrets()
+        if name not in secrets_data:
+            raise KeyError(f"Secret '{name}' not found")
+
+        secret = secrets_data[name]
+        secret['rotation_policy'] = policy
+
+        if policy.get('enabled') and policy.get('interval_days'):
+            from datetime import timedelta
+            last_rotated = secret.get('last_rotated') or secret['updated_at']
+            last_dt = datetime.fromisoformat(last_rotated.replace('Z', '+00:00')) if isinstance(last_rotated, str) else last_rotated
+            next_dt = last_dt + timedelta(days=policy['interval_days'])
+            secret['next_rotation'] = next_dt.isoformat()
+
+        save_secrets(secrets_data)
+        log_audit('SET_ROTATION_POLICY', name, details=f"Policy: {policy}")
+        return secret['rotation_policy']
+
+def rotate_secret(name: str, new_value: str = None):
+    """Rotate a secret - creates a new version and updates rotation timestamps"""
+    with file_lock:
+        secrets_data = load_secrets()
+        if name not in secrets_data:
+            raise KeyError(f"Secret '{name}' not found")
+
+        secret = secrets_data[name]
+
+        # If no new value provided and auto_rotate is enabled, generate a random value
+        if new_value is None:
+            policy = secret.get('rotation_policy', {})
+            if policy.get('auto_rotate'):
+                new_value = secrets.token_urlsafe(32)  # Generate secure random value
+            else:
+                raise ValueError("No new value provided and auto_rotate is not enabled")
+
+        # Create new version
+        new_version = secret['current_version'] + 1
+        encrypted = encrypt_value(new_value)
+        version_entry = {
+            'version': new_version,
+            'encrypted': encrypted,
+            'created_at': datetime.now().isoformat(),
+            'metadata': {'rotated': True}
+        }
+
+        secret['versions'].append(version_entry)
+        secret['current_version'] = new_version
+        secret['updated_at'] = datetime.now().isoformat()
+        secret['last_rotated'] = datetime.now().isoformat()
+
+        # Calculate next rotation if policy exists
+        policy = secret.get('rotation_policy', {})
+        if policy.get('enabled') and policy.get('interval_days'):
+            from datetime import timedelta
+            next_dt = datetime.now() + timedelta(days=policy['interval_days'])
+            secret['next_rotation'] = next_dt.isoformat()
+
+        save_secrets(secrets_data)
+        log_audit('ROTATE', name, details=f"Rotated to version {new_version}")
+
+        return {
+            'version': new_version,
+            'rotated_at': secret['last_rotated'],
+            'next_rotation': secret.get('next_rotation'),
+            'auto_generated': new_value is None
+        }
+
+def get_secrets_needing_rotation():
+    """Get list of secrets that need rotation based on their policies"""
+    secrets_data = load_secrets()
+    needs_rotation = []
+    now = datetime.now()
+
+    for name, data in secrets_data.items():
+        policy = data.get('rotation_policy', {})
+        if not policy.get('enabled'):
+            continue
+
+        next_rotation = data.get('next_rotation')
+        if next_rotation:
+            next_dt = datetime.fromisoformat(next_rotation.replace('Z', '+00:00'))
+            if isinstance(next_dt, datetime):
+                # Check if overdue or within notify window
+                notify_days = policy.get('notify_before_days', 7)
+                from datetime import timedelta
+                notify_threshold = next_dt - timedelta(days=notify_days)
+
+                if now >= next_dt:
+                    status = 'overdue'
+                elif now >= notify_threshold:
+                    status = 'due_soon'
+                else:
+                    status = 'ok'
+
+                if status in ('overdue', 'due_soon'):
+                    needs_rotation.append({
+                        'name': name,
+                        'status': status,
+                        'next_rotation': next_rotation,
+                        'days_until': (next_dt - now).days,
+                        'auto_rotate': policy.get('auto_rotate', False)
+                    })
+
+    return needs_rotation
+
+def get_secret_versions(name: str):
+    """Get all versions of a secret (metadata only, no values)"""
     secrets_data = load_secrets()
     if name not in secrets_data:
         raise KeyError(f"Secret '{name}' not found")
@@ -260,326 +379,13 @@ def list_secret_versions(name: str):
             'created_at': v['created_at'],
             'metadata': v.get('metadata', {})
         })
+
     log_audit('LIST_VERSIONS', name, details=f"Listed {len(versions)} versions")
     return {
         'name': name,
         'current_version': secret['current_version'],
         'versions': versions
     }
-
-def rollback_secret(name: str, version: int):
-    """Rollback a secret to a previous version"""
-    with file_lock:
-        secrets_data = load_secrets()
-        if name not in secrets_data:
-            raise KeyError(f"Secret '{name}' not found")
-
-        secret = secrets_data[name]
-        target_version = None
-        for v in secret['versions']:
-            if v['version'] == version:
-                target_version = v
-                break
-
-        if not target_version:
-            raise KeyError(f"Version {version} not found for secret '{name}'")
-
-        # Create a new version with the old value
-        new_version = secret['current_version'] + 1
-        version_entry = {
-            'version': new_version,
-            'encrypted': target_version['encrypted'],
-            'created_at': datetime.now().isoformat(),
-            'metadata': {**target_version.get('metadata', {}), 'rollback_from': version}
-        }
-
-        secret['versions'].append(version_entry)
-        secret['current_version'] = new_version
-        secret['updated_at'] = datetime.now().isoformat()
-
-        save_secrets(secrets_data)
-        log_audit('ROLLBACK', name, details=f"Rolled back to version {version}, created version {new_version}")
-        return version_entry
-
-def update_secret_metadata(name: str, metadata: dict, version: int = None):
-    """Update metadata for a secret without changing the value"""
-    with file_lock:
-        secrets_data = load_secrets()
-        if name not in secrets_data:
-            raise KeyError(f"Secret '{name}' not found")
-
-        secret = secrets_data[name]
-        target_version = version or secret['current_version']
-
-        for v in secret['versions']:
-            if v['version'] == target_version:
-                v['metadata'] = {**v.get('metadata', {}), **metadata}
-                save_secrets(secrets_data)
-                log_audit('UPDATE_METADATA', name, details=f"Updated metadata for version {target_version}")
-                return {'version': target_version, 'metadata': v['metadata']}
-
-        raise KeyError(f"Version {target_version} not found for secret '{name}'")
-
-def bulk_create_secrets(secrets_list: list):
-    """Create multiple secrets at once"""
-    results = {'created': [], 'errors': []}
-    for item in secrets_list:
-        try:
-            name = item.get('name')
-            value = item.get('value')
-            metadata = item.get('metadata', {})
-            if not name or not value:
-                results['errors'].append({'name': name, 'error': 'Name and value are required'})
-                continue
-            create_secret(name, value, metadata)
-            results['created'].append(name)
-        except Exception as e:
-            results['errors'].append({'name': item.get('name'), 'error': str(e)})
-    return results
-
-def bulk_delete_secrets(names: list):
-    """Delete multiple secrets at once"""
-    results = {'deleted': [], 'errors': []}
-    for name in names:
-        try:
-            delete_secret(name)
-            results['deleted'].append(name)
-        except Exception as e:
-            results['errors'].append({'name': name, 'error': str(e)})
-    return results
-
-def rotate_master_key():
-    """Rotate the master encryption key and re-encrypt all secrets"""
-    with file_lock:
-        secrets_data = load_secrets()
-
-        # Decrypt all values with old key
-        decrypted_secrets = {}
-        for name, secret in secrets_data.items():
-            decrypted_secrets[name] = {
-                'secret': secret,
-                'decrypted_versions': []
-            }
-            for v in secret['versions']:
-                try:
-                    decrypted_value = decrypt_value(v['encrypted'])
-                    decrypted_secrets[name]['decrypted_versions'].append({
-                        'version': v['version'],
-                        'value': decrypted_value,
-                        'created_at': v['created_at'],
-                        'metadata': v.get('metadata', {})
-                    })
-                except Exception:
-                    # If decryption fails, skip this version
-                    pass
-
-        # Generate new key
-        new_key = secrets.token_bytes(32)
-
-        # Backup old key
-        if os.path.exists(KEY_FILE):
-            backup_file = KEY_FILE + '.backup.' + datetime.now().strftime('%Y%m%d%H%M%S')
-            with open(KEY_FILE, 'rb') as f:
-                old_key = f.read()
-            with open(backup_file, 'wb') as f:
-                f.write(old_key)
-            os.chmod(backup_file, 0o600)
-
-        # Write new key
-        with open(KEY_FILE, 'wb') as f:
-            f.write(new_key)
-        os.chmod(KEY_FILE, 0o600)
-
-        # Re-encrypt all secrets with new key
-        for name, data in decrypted_secrets.items():
-            secret = data['secret']
-            new_versions = []
-            for dv in data['decrypted_versions']:
-                encrypted = encrypt_value(dv['value'])
-                new_versions.append({
-                    'version': dv['version'],
-                    'encrypted': encrypted,
-                    'created_at': dv['created_at'],
-                    'metadata': dv['metadata']
-                })
-            secret['versions'] = new_versions
-            secrets_data[name] = secret
-
-        save_secrets(secrets_data)
-        log_audit('KEY_ROTATE', '*', details='Master key rotated, all secrets re-encrypted')
-        return {'success': True, 'secrets_reencrypted': len(secrets_data)}
-
-def get_vault_stats():
-    """Get vault statistics"""
-    secrets_data = load_secrets()
-    total_secrets = len(secrets_data)
-    total_versions = sum(len(s['versions']) for s in secrets_data.values())
-
-    # Get audit log stats
-    audit_logs = get_audit_logs(1000)
-    action_counts = {}
-    for log in audit_logs:
-        action = log.get('action', 'UNKNOWN')
-        action_counts[action] = action_counts.get(action, 0) + 1
-
-    # Key info
-    key_exists = os.path.exists(KEY_FILE)
-    key_created = None
-    if key_exists:
-        key_created = datetime.fromtimestamp(os.path.getctime(KEY_FILE)).isoformat()
-
-    return {
-        'total_secrets': total_secrets,
-        'total_versions': total_versions,
-        'encryption': 'AES-256-GCM',
-        'key_exists': key_exists,
-        'key_created': key_created,
-        'audit_action_counts': action_counts,
-        'total_audit_entries': len(audit_logs)
-    }
-
-def search_secrets(query: str, search_metadata: bool = True):
-    """Search secrets by name or metadata"""
-    secrets_data = load_secrets()
-    results = []
-    query_lower = query.lower()
-
-    for name, data in secrets_data.items():
-        matched = False
-        match_reason = []
-
-        # Search in name
-        if query_lower in name.lower():
-            matched = True
-            match_reason.append('name')
-
-        # Search in metadata
-        if search_metadata:
-            for v in data['versions']:
-                metadata = v.get('metadata', {})
-                for key, value in metadata.items():
-                    if query_lower in str(key).lower() or query_lower in str(value).lower():
-                        matched = True
-                        match_reason.append(f'metadata.{key}')
-                        break
-
-        if matched:
-            results.append({
-                'name': name,
-                'current_version': data['current_version'],
-                'version_count': len(data['versions']),
-                'created_at': data['created_at'],
-                'updated_at': data['updated_at'],
-                'match_reason': list(set(match_reason))
-            })
-
-    log_audit('SEARCH', '*', details=f"Searched for '{query}', found {len(results)} results")
-    return results
-
-def secret_exists(name: str):
-    """Check if a secret exists"""
-    secrets_data = load_secrets()
-    return name in secrets_data
-
-def export_secrets_metadata():
-    """Export secrets metadata (without values) for backup purposes"""
-    secrets_data = load_secrets()
-    export_data = {
-        'exported_at': datetime.now().isoformat(),
-        'total_secrets': len(secrets_data),
-        'secrets': []
-    }
-
-    for name, data in secrets_data.items():
-        secret_meta = {
-            'name': name,
-            'current_version': data['current_version'],
-            'created_at': data['created_at'],
-            'updated_at': data['updated_at'],
-            'versions': []
-        }
-        for v in data['versions']:
-            secret_meta['versions'].append({
-                'version': v['version'],
-                'created_at': v['created_at'],
-                'metadata': v.get('metadata', {})
-            })
-        export_data['secrets'].append(secret_meta)
-
-    log_audit('EXPORT', '*', details=f"Exported metadata for {len(secrets_data)} secrets")
-    return export_data
-
-def get_key_info():
-    """Get information about the master encryption key"""
-    key_exists = os.path.exists(KEY_FILE)
-    if not key_exists:
-        return {
-            'exists': False,
-            'created_at': None,
-            'algorithm': 'AES-256-GCM',
-            'key_size': 256
-        }
-
-    key_stat = os.stat(KEY_FILE)
-    return {
-        'exists': True,
-        'created_at': datetime.fromtimestamp(key_stat.st_ctime).isoformat(),
-        'modified_at': datetime.fromtimestamp(key_stat.st_mtime).isoformat(),
-        'algorithm': 'AES-256-GCM',
-        'key_size': 256,
-        'key_file_permissions': oct(key_stat.st_mode)[-3:]
-    }
-
-def copy_secret(source_name: str, dest_name: str, include_all_versions: bool = False):
-    """Copy a secret to a new name"""
-    with file_lock:
-        secrets_data = load_secrets()
-        if source_name not in secrets_data:
-            raise KeyError(f"Secret '{source_name}' not found")
-        if dest_name in secrets_data:
-            raise ValueError(f"Secret '{dest_name}' already exists")
-
-        source = secrets_data[source_name]
-
-        if include_all_versions:
-            # Copy all versions
-            new_secret = {
-                'current_version': source['current_version'],
-                'versions': [],
-                'created_at': datetime.now().isoformat(),
-                'updated_at': datetime.now().isoformat()
-            }
-            for v in source['versions']:
-                new_secret['versions'].append({
-                    'version': v['version'],
-                    'encrypted': v['encrypted'],
-                    'created_at': datetime.now().isoformat(),
-                    'metadata': {**v.get('metadata', {}), 'copied_from': source_name}
-                })
-        else:
-            # Copy only current version as version 1
-            current_version = None
-            for v in source['versions']:
-                if v['version'] == source['current_version']:
-                    current_version = v
-                    break
-
-            new_secret = {
-                'current_version': 1,
-                'versions': [{
-                    'version': 1,
-                    'encrypted': current_version['encrypted'],
-                    'created_at': datetime.now().isoformat(),
-                    'metadata': {**current_version.get('metadata', {}), 'copied_from': source_name}
-                }],
-                'created_at': datetime.now().isoformat(),
-                'updated_at': datetime.now().isoformat()
-            }
-
-        secrets_data[dest_name] = new_secret
-        save_secrets(secrets_data)
-        log_audit('COPY', source_name, details=f"Copied to '{dest_name}'")
-        return {'source': source_name, 'destination': dest_name, 'versions_copied': len(new_secret['versions'])}
 
 # ============ HTML Template ============
 
@@ -847,6 +653,84 @@ VAULT_HTML = '''
         .audit-entry .action.UPDATE { background: var(--yellow); color: var(--crust); }
         .audit-entry .action.DELETE { background: var(--red); color: var(--crust); }
         .audit-entry .action.LIST { background: var(--teal); color: var(--crust); }
+        .audit-entry .action.ROTATE { background: var(--peach); color: var(--crust); }
+        .audit-entry .action.SET_ROTATION_POLICY { background: var(--lavender); color: var(--crust); }
+        .audit-entry .action.LIST_VERSIONS { background: var(--sapphire); color: var(--crust); }
+
+        .rotation-status {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .rotation-status.overdue { background: var(--red); color: var(--crust); }
+        .rotation-status.due-soon { background: var(--yellow); color: var(--crust); }
+        .rotation-status.ok { background: var(--green); color: var(--crust); }
+        .rotation-status.none { background: var(--surface1); color: var(--subtext0); }
+
+        .rotation-card {
+            background: var(--surface0);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .rotation-card h4 {
+            margin-bottom: 0.75rem;
+            color: var(--lavender);
+            font-size: 0.9rem;
+        }
+
+        .rotation-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        .rotation-info dt {
+            color: var(--subtext0);
+        }
+
+        .rotation-info dd {
+            color: var(--text);
+            font-family: "JetBrains Mono", monospace;
+        }
+
+        .pending-rotations {
+            margin-bottom: 1rem;
+        }
+
+        .pending-item {
+            background: var(--surface0);
+            padding: 0.75rem;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pending-item.overdue {
+            border-left: 3px solid var(--red);
+        }
+
+        .pending-item.due-soon {
+            border-left: 3px solid var(--yellow);
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
 
         .audit-time {
             color: var(--subtext0);
@@ -983,6 +867,10 @@ VAULT_HTML = '''
                 <div class="stat-label">Versions</div>
             </div>
             <div class="stat">
+                <div class="stat-value" id="pendingRotations">0</div>
+                <div class="stat-label">Need Rotation</div>
+            </div>
+            <div class="stat">
                 <div class="stat-value" id="encryption">AES-256</div>
                 <div class="stat-label">Encryption</div>
             </div>
@@ -995,6 +883,7 @@ VAULT_HTML = '''
                 <div class="tabs">
                     <button class="tab active" onclick="showTab('secrets')">Secrets</button>
                     <button class="tab" onclick="showTab('create')">Create New</button>
+                    <button class="tab" onclick="showTab('rotation')">Rotation</button>
                     <button class="tab" onclick="showTab('audit')">Audit Log</button>
                 </div>
 
@@ -1029,6 +918,15 @@ VAULT_HTML = '''
                             <button type="submit" class="btn btn-success">Create Secret</button>
                         </div>
                     </form>
+                </div>
+
+                <div id="rotationTab" class="panel-content" style="display: none;">
+                    <h3 style="margin-bottom: 1rem; color: var(--lavender);">Pending Rotations</h3>
+                    <div class="pending-rotations" id="pendingRotationsList">
+                        <div class="empty-state">
+                            <p>No secrets need rotation</p>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="auditTab" class="panel-content" style="display: none;">
@@ -1078,6 +976,7 @@ VAULT_HTML = '''
             document.getElementById(tabName + 'Tab').style.display = 'block';
 
             if (tabName === 'audit') loadAuditLog();
+            if (tabName === 'rotation') loadPendingRotations();
         }
 
         async function loadSecrets() {
@@ -1097,16 +996,21 @@ VAULT_HTML = '''
                     return;
                 }
 
-                list.innerHTML = data.map(s => `
+                list.innerHTML = data.map(s => {
+                    let rotationBadge = '';
+                    if (s.rotation_policy && s.rotation_policy.enabled) {
+                        rotationBadge = '<span class="rotation-status ok">auto-rotate</span>';
+                    }
+                    return `
                     <div class="secret-item" onclick="selectSecret('${s.name}')">
-                        <div class="secret-name">${s.name}</div>
+                        <div class="secret-name">${s.name} ${rotationBadge}</div>
                         <div class="secret-meta">
                             <span>v${s.current_version}</span>
                             <span>${s.version_count} version(s)</span>
                             <span>${new Date(s.updated_at).toLocaleDateString()}</span>
                         </div>
                     </div>
-                `).join('');
+                `}).join('');
             } catch (err) {
                 showToast('Failed to load secrets', 'error');
             }
@@ -1118,8 +1022,35 @@ VAULT_HTML = '''
             document.getElementById('selectedSecretName').textContent = name;
 
             try {
-                const res = await fetch('/api/secrets/' + encodeURIComponent(name));
-                const data = await res.json();
+                const [secretRes, policyRes] = await Promise.all([
+                    fetch('/api/secrets/' + encodeURIComponent(name)),
+                    fetch('/api/secrets/' + encodeURIComponent(name) + '/rotation-policy')
+                ]);
+                const data = await secretRes.json();
+                const policyData = await policyRes.json();
+
+                const policy = policyData.rotation_policy || {};
+                const rotationHtml = `
+                    <div class="rotation-card">
+                        <h4>Rotation Policy</h4>
+                        <div class="rotation-info">
+                            <dt>Status:</dt>
+                            <dd>${policy.enabled ? '<span class="rotation-status ok">Enabled</span>' : '<span class="rotation-status none">Disabled</span>'}</dd>
+                            <dt>Interval:</dt>
+                            <dd>${policy.interval_days || '-'} days</dd>
+                            <dt>Auto-rotate:</dt>
+                            <dd>${policy.auto_rotate ? 'Yes' : 'No'}</dd>
+                            <dt>Last rotated:</dt>
+                            <dd>${policyData.last_rotated ? new Date(policyData.last_rotated).toLocaleDateString() : 'Never'}</dd>
+                            <dt>Next rotation:</dt>
+                            <dd>${policyData.next_rotation ? new Date(policyData.next_rotation).toLocaleDateString() : '-'}</dd>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="showRotationSettings('${name}')">Configure</button>
+                            <button class="btn btn-secondary" onclick="rotateNow('${name}', ${policy.auto_rotate || false})">Rotate Now</button>
+                        </div>
+                    </div>
+                `;
 
                 const details = document.getElementById('secretDetails');
                 details.innerHTML = `
@@ -1149,6 +1080,30 @@ VAULT_HTML = '''
                         <div class="btn-group">
                             <button class="btn btn-success" onclick="updateSecret('${name}')">Save Update</button>
                             <button class="btn btn-secondary" onclick="hideUpdateForm()">Cancel</button>
+                        </div>
+                    </div>
+                    ${rotationHtml}
+                    <div id="rotationSettings" style="display: none; margin-top: 1rem;" class="rotation-card">
+                        <h4>Configure Rotation</h4>
+                        <div class="form-group checkbox-group">
+                            <input type="checkbox" id="rotationEnabled" ${policy.enabled ? 'checked' : ''}>
+                            <label style="margin-bottom: 0;">Enable rotation policy</label>
+                        </div>
+                        <div class="form-group">
+                            <label>Rotation interval (days)</label>
+                            <input type="number" id="rotationInterval" value="${policy.interval_days || 30}" min="1">
+                        </div>
+                        <div class="form-group checkbox-group">
+                            <input type="checkbox" id="autoRotate" ${policy.auto_rotate ? 'checked' : ''}>
+                            <label style="margin-bottom: 0;">Auto-generate new value on rotation</label>
+                        </div>
+                        <div class="form-group">
+                            <label>Notify before expiry (days)</label>
+                            <input type="number" id="notifyBefore" value="${policy.notify_before_days || 7}" min="1">
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-success" onclick="saveRotationPolicy('${name}')">Save Policy</button>
+                            <button class="btn btn-secondary" onclick="hideRotationSettings()">Cancel</button>
                         </div>
                     </div>
                 `;
@@ -1272,8 +1227,105 @@ VAULT_HTML = '''
             }
         }
 
+        // Rotation functions
+        function showRotationSettings(name) {
+            document.getElementById('rotationSettings').style.display = 'block';
+        }
+
+        function hideRotationSettings() {
+            document.getElementById('rotationSettings').style.display = 'none';
+        }
+
+        async function saveRotationPolicy(name) {
+            const policy = {
+                enabled: document.getElementById('rotationEnabled').checked,
+                interval_days: parseInt(document.getElementById('rotationInterval').value) || 30,
+                auto_rotate: document.getElementById('autoRotate').checked,
+                notify_before_days: parseInt(document.getElementById('notifyBefore').value) || 7
+            };
+
+            try {
+                const res = await fetch('/api/secrets/' + encodeURIComponent(name) + '/rotation-policy', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(policy)
+                });
+
+                if (!res.ok) throw new Error('Failed to save policy');
+
+                showToast('Rotation policy saved');
+                hideRotationSettings();
+                selectSecret(name);
+                loadPendingRotations();
+            } catch (err) {
+                showToast('Failed to save rotation policy', 'error');
+            }
+        }
+
+        async function rotateNow(name, autoGenerate) {
+            let newValue = null;
+            if (!autoGenerate) {
+                newValue = prompt('Enter new secret value (or leave empty to auto-generate):');
+                if (newValue === null) return; // Cancelled
+            }
+
+            try {
+                const body = newValue ? { value: newValue } : {};
+                const res = await fetch('/api/secrets/' + encodeURIComponent(name) + '/rotate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.error);
+                }
+
+                const data = await res.json();
+                showToast('Secret rotated to version ' + data.version);
+                loadSecrets();
+                selectSecret(name);
+                loadPendingRotations();
+            } catch (err) {
+                showToast(err.message || 'Failed to rotate secret', 'error');
+            }
+        }
+
+        async function loadPendingRotations() {
+            try {
+                const res = await fetch('/api/rotation/pending');
+                const data = await res.json();
+
+                document.getElementById('pendingRotations').textContent = data.count;
+
+                const list = document.getElementById('pendingRotationsList');
+                if (data.count === 0) {
+                    list.innerHTML = '<div class="empty-state"><p>No secrets need rotation</p></div>';
+                    return;
+                }
+
+                list.innerHTML = data.secrets.map(s => `
+                    <div class="pending-item ${s.status}">
+                        <div>
+                            <strong>${s.name}</strong>
+                            <span class="rotation-status ${s.status === 'overdue' ? 'overdue' : 'due-soon'}">
+                                ${s.status === 'overdue' ? 'Overdue' : 'Due in ' + s.days_until + ' days'}
+                            </span>
+                        </div>
+                        <button class="btn btn-primary" onclick="rotateNow('${s.name}', ${s.auto_rotate})">
+                            Rotate
+                        </button>
+                    </div>
+                `).join('');
+            } catch (err) {
+                showToast('Failed to load pending rotations', 'error');
+            }
+        }
+
         // Initial load
         loadSecrets();
+        loadPendingRotations();
     </script>
 </body>
 </html>
@@ -1359,6 +1411,83 @@ def api_audit_log():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/secrets/<name>/versions', methods=['GET'])
+def api_secret_versions(name):
+    """Get all versions of a secret (metadata only)"""
+    try:
+        versions = get_secret_versions(name)
+        return jsonify(versions)
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/<name>/rotate', methods=['POST'])
+def api_rotate_secret(name):
+    """Rotate a secret to a new value"""
+    try:
+        data = request.get_json() or {}
+        new_value = data.get('value')  # Optional - if not provided, auto-generate if policy allows
+        result = rotate_secret(name, new_value)
+        return jsonify({'success': True, **result})
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/<name>/rotation-policy', methods=['GET'])
+def api_get_rotation_policy(name):
+    """Get the rotation policy for a secret"""
+    try:
+        secrets_data = load_secrets()
+        if name not in secrets_data:
+            return jsonify({'error': f"Secret '{name}' not found"}), 404
+        secret = secrets_data[name]
+        return jsonify({
+            'name': name,
+            'rotation_policy': secret.get('rotation_policy'),
+            'last_rotated': secret.get('last_rotated'),
+            'next_rotation': secret.get('next_rotation')
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/<name>/rotation-policy', methods=['PUT'])
+def api_set_rotation_policy(name):
+    """Set rotation policy for a secret"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Policy data required'}), 400
+
+        policy = {
+            'enabled': data.get('enabled', True),
+            'interval_days': data.get('interval_days', 30),
+            'auto_rotate': data.get('auto_rotate', False),
+            'notify_before_days': data.get('notify_before_days', 7)
+        }
+
+        result = set_rotation_policy(name, policy)
+        return jsonify({'success': True, 'policy': result})
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/rotation/pending', methods=['GET'])
+def api_pending_rotations():
+    """Get list of secrets needing rotation"""
+    try:
+        pending = get_secrets_needing_rotation()
+        return jsonify({
+            'count': len(pending),
+            'secrets': pending
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({
@@ -1367,152 +1496,6 @@ def health():
         'motto': VAULT_MOTTO,
         'encryption': 'AES-256-GCM'
     })
-
-# ============ New API Endpoints ============
-
-@app.route('/api/secrets/<name>/versions', methods=['GET'])
-def api_list_secret_versions(name):
-    """List all versions of a secret"""
-    try:
-        result = list_secret_versions(name)
-        return jsonify(result)
-    except KeyError as e:
-        return jsonify({'error': str(e)}), 404
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/secrets/<name>/rollback', methods=['POST'])
-def api_rollback_secret(name):
-    """Rollback a secret to a previous version"""
-    try:
-        data = request.get_json()
-        version = data.get('version')
-        if not version:
-            return jsonify({'error': 'Version is required'}), 400
-        result = rollback_secret(name, version)
-        return jsonify({'success': True, 'new_version': result['version']})
-    except KeyError as e:
-        return jsonify({'error': str(e)}), 404
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/secrets/<name>/metadata', methods=['PATCH'])
-def api_update_secret_metadata(name):
-    """Update metadata for a secret without changing the value"""
-    try:
-        data = request.get_json()
-        metadata = data.get('metadata', {})
-        version = data.get('version')
-        if not metadata:
-            return jsonify({'error': 'Metadata is required'}), 400
-        result = update_secret_metadata(name, metadata, version)
-        return jsonify({'success': True, 'result': result})
-    except KeyError as e:
-        return jsonify({'error': str(e)}), 404
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/secrets/bulk', methods=['POST'])
-def api_bulk_create_secrets():
-    """Create multiple secrets at once"""
-    try:
-        data = request.get_json()
-        secrets_list = data.get('secrets', [])
-        if not secrets_list:
-            return jsonify({'error': 'Secrets list is required'}), 400
-        result = bulk_create_secrets(secrets_list)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/secrets/bulk', methods=['DELETE'])
-def api_bulk_delete_secrets():
-    """Delete multiple secrets at once"""
-    try:
-        data = request.get_json()
-        names = data.get('names', [])
-        if not names:
-            return jsonify({'error': 'Names list is required'}), 400
-        result = bulk_delete_secrets(names)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/key/rotate', methods=['POST'])
-def api_rotate_master_key():
-    """Rotate the master encryption key and re-encrypt all secrets"""
-    try:
-        result = rotate_master_key()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/key/info', methods=['GET'])
-def api_get_key_info():
-    """Get information about the master encryption key"""
-    try:
-        result = get_key_info()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/stats', methods=['GET'])
-def api_get_vault_stats():
-    """Get vault statistics"""
-    try:
-        result = get_vault_stats()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/search', methods=['GET'])
-def api_search_secrets():
-    """Search secrets by name or metadata"""
-    try:
-        query = request.args.get('q', '')
-        if not query:
-            return jsonify({'error': 'Query parameter q is required'}), 400
-        search_metadata = request.args.get('metadata', 'true').lower() == 'true'
-        result = search_secrets(query, search_metadata)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/secrets/<name>/exists', methods=['GET'])
-def api_secret_exists(name):
-    """Check if a secret exists"""
-    try:
-        exists = secret_exists(name)
-        return jsonify({'name': name, 'exists': exists})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/export', methods=['GET'])
-def api_export_secrets_metadata():
-    """Export secrets metadata (without values) for backup purposes"""
-    try:
-        result = export_secrets_metadata()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/secrets/<name>/copy', methods=['POST'])
-def api_copy_secret(name):
-    """Copy a secret to a new name"""
-    try:
-        data = request.get_json()
-        dest_name = data.get('destination')
-        if not dest_name:
-            return jsonify({'error': 'Destination name is required'}), 400
-        include_all_versions = data.get('include_all_versions', False)
-        result = copy_secret(name, dest_name, include_all_versions)
-        return jsonify({'success': True, 'result': result})
-    except KeyError as e:
-        return jsonify({'error': str(e)}), 404
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Ensure data directory exists

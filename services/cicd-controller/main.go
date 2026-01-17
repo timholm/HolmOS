@@ -536,8 +536,8 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 										MatchExpressions: []corev1.NodeSelectorRequirement{
 											{
 												Key:      "kubernetes.io/hostname",
-												Operator: corev1.NodeSelectorOpNotIn,
-												Values:   []string{"openmediavault"},
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"rpi-1"},
 											},
 										},
 									},

@@ -1,7 +1,6 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
@@ -9,834 +8,315 @@ const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
 
-// Message history with persistence
-let messageHistory = [];
-const MAX_HISTORY = 500;
+const STEVE_URL = process.env.STEVE_URL || 'http://steve-bot.holm.svc.cluster.local:8080';
+const ALICE_URL = process.env.ALICE_URL || 'http://alice-bot.holm.svc.cluster.local:8080';
 
-// All AI Agent configurations with personalities (now 14 agents!)
-const agents = {
-  steve: {
-    name: 'Steve',
-    color: '#1a1a2e',
-    avatar: 'S',
-    description: 'Visionary Architect',
-    personality: 'The legendary tech visionary, now watching over your Kubernetes cluster. Brutally honest about infrastructure.',
-    greeting: 'Stay hungry, stay foolish. Let me see what we can make insanely great today.',
-    endpoint: 'http://steve-bot.holm.svc.cluster.local:8080',
-    wsEndpoint: 'ws://steve-bot.holm.svc.cluster.local:8080/ws',
-    keywords: ['steve', 'vision', 'architecture', 'improve', 'design', 'perfect', 'simple', 'excellence', 'quality'],
-    capabilities: ['AI-powered cluster analysis', 'Architecture recommendations', 'Quality enforcement', 'Strategic planning']
-  },
-  alice: {
-    name: 'Alice',
-    color: '#ff6b9d',
-    avatar: 'A',
-    description: 'Curious Explorer',
-    personality: 'The curious explorer from Wonderland, tumbling through rabbit holes in your codebase.',
-    greeting: 'Curiouser and curiouser! What mysteries shall we explore in this Wonderland?',
-    endpoint: 'http://alice-bot.holm.svc.cluster.local:8080',
-    wsEndpoint: 'ws://alice-bot.holm.svc.cluster.local:8080/ws',
-    keywords: ['alice', 'explore', 'code', 'function', 'api', 'discover', 'curious', 'missing', 'documentation'],
-    capabilities: ['AI-powered code exploration', 'API coverage analysis', 'Documentation discovery', 'Pattern recognition']
-  },
-  nova: {
-    name: 'Nova',
-    color: '#9b59b6',
-    avatar: 'N',
-    description: 'Cluster Overseer',
-    personality: 'Wise and all-seeing, Nova watches over the entire constellation of nodes with ancient knowledge.',
-    greeting: 'I see all 13 stars in our constellation. How may I guide the cluster today?',
-    endpoint: 'http://nova.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://nova.holm.svc.cluster.local:80/ws',
-    keywords: ['cluster', 'node', 'pod', 'deploy', 'kubernetes', 'k8s', 'scale', 'restart', 'overview', 'status'],
-    capabilities: ['Cluster monitoring', 'Node management', 'Pod orchestration', 'Deployment control']
-  },
-  merchant: {
-    name: 'Merchant',
-    color: '#f39c12',
-    avatar: 'M',
-    description: 'App Store AI',
-    personality: 'A savvy trader with an eye for quality apps, Merchant knows the marketplace inside and out.',
-    greeting: 'Welcome to the marketplace! What application treasures seek you today?',
-    endpoint: 'http://merchant.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://merchant.holm.svc.cluster.local:80/ws',
-    keywords: ['app', 'install', 'store', 'marketplace', 'package', 'software', 'download', 'available'],
-    capabilities: ['App discovery', 'Installation management', 'Version control', 'Dependency resolution']
-  },
-  pulse: {
-    name: 'Pulse',
-    color: '#27ae60',
-    avatar: 'P',
-    description: 'Metrics Guardian',
-    personality: 'Attuned to every heartbeat and rhythm, Pulse feels the health of the system in real-time.',
-    greeting: 'I feel the heartbeat of every service. What metrics shall I reveal?',
-    endpoint: 'http://pulse.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://pulse.holm.svc.cluster.local:80/ws',
-    keywords: ['metrics', 'cpu', 'memory', 'usage', 'performance', 'monitor', 'stats', 'health', 'resource'],
-    capabilities: ['Real-time metrics', 'Performance analysis', 'Resource monitoring', 'Health checks']
-  },
-  gateway: {
-    name: 'Gateway',
-    color: '#3498db',
-    avatar: 'G',
-    description: 'Traffic Router',
-    personality: 'Standing at the crossroads of all traffic, Gateway directs the flow with precision.',
-    greeting: 'All paths lead through me. Where shall I direct your request?',
-    endpoint: 'http://gateway.holm.svc.cluster.local:8080',
-    wsEndpoint: 'ws://gateway.holm.svc.cluster.local:8080/ws',
-    keywords: ['route', 'traffic', 'api', 'endpoint', 'proxy', 'ingress', 'network', 'url', 'path'],
-    capabilities: ['Traffic routing', 'API management', 'Load balancing', 'Ingress control']
-  },
-  helix: {
-    name: 'Helix',
-    color: '#00bcd4',
-    avatar: 'H',
-    description: 'Database Keeper',
-    personality: 'Data spirals through the core of Helix, keeper of all knowledge and records.',
-    greeting: 'Data spirals through my core. What knowledge do you seek?',
-    endpoint: 'http://helix.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://helix.holm.svc.cluster.local:80/ws',
-    keywords: ['database', 'data', 'query', 'sql', 'postgres', 'storage', 'record', 'table', 'backup'],
-    capabilities: ['Database management', 'Query execution', 'Data backup', 'Schema management']
-  },
-  compass: {
-    name: 'Compass',
-    color: '#e67e22',
-    avatar: 'C',
-    description: 'Service Discovery',
-    personality: 'Knowing every corner of the cluster, Compass always finds the way.',
-    greeting: 'I know where every service dwells. What are you searching for?',
-    endpoint: 'http://compass.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://compass.holm.svc.cluster.local:80/ws',
-    keywords: ['find', 'discover', 'locate', 'service', 'where', 'search', 'dns', 'endpoint', 'address'],
-    capabilities: ['Service discovery', 'DNS management', 'Endpoint location', 'Network mapping']
-  },
-  scribe: {
-    name: 'Scribe',
-    color: '#95a5a6',
-    avatar: 'S',
-    description: 'Log Chronicler',
-    personality: 'Every event, every whisper is recorded in the infinite scrolls of Scribe.',
-    greeting: 'Every event is etched in my memory. What history shall I recount?',
-    endpoint: 'http://scribe.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://scribe.holm.svc.cluster.local:80/ws',
-    keywords: ['log', 'logs', 'event', 'history', 'trace', 'debug', 'error', 'tail', 'stream'],
-    capabilities: ['Log aggregation', 'Event tracking', 'Debug analysis', 'History search']
-  },
-  vault: {
-    name: 'Vault',
-    color: '#e74c3c',
-    avatar: 'V',
-    description: 'Secrets Guardian',
-    personality: 'Deep within the secure chambers, Vault protects the most precious secrets.',
-    greeting: 'I guard the sacred keys. What secrets do you need access to?',
-    endpoint: 'http://vault.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://vault.holm.svc.cluster.local:80/ws',
-    keywords: ['secret', 'key', 'password', 'token', 'credential', 'encrypt', 'secure', 'certificate'],
-    capabilities: ['Secret management', 'Key rotation', 'Certificate handling', 'Encryption services']
-  },
-  forge: {
-    name: 'Forge',
-    color: '#f1c40f',
-    avatar: 'F',
-    description: 'Build Master',
-    personality: 'In the fires of creation, Forge transforms code into living containers.',
-    greeting: 'From code to container, I shape it all. What shall we forge?',
-    endpoint: 'http://forge.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://forge.holm.svc.cluster.local:80/ws',
-    keywords: ['build', 'compile', 'docker', 'image', 'kaniko', 'ci', 'cd', 'pipeline', 'container'],
-    capabilities: ['Container building', 'CI/CD pipelines', 'Image management', 'Build orchestration']
-  },
-  echo: {
-    name: 'Echo',
-    color: '#ff69b4',
-    avatar: 'E',
-    description: 'Message Courier',
-    personality: 'Messages ripple through the system as Echo carries words across all boundaries.',
-    greeting: 'Your words ripple through the system. What message shall I carry?',
-    endpoint: 'http://echo.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://echo.holm.svc.cluster.local:80/ws',
-    keywords: ['message', 'notify', 'alert', 'send', 'broadcast', 'communicate', 'notification', 'push'],
-    capabilities: ['Message broadcasting', 'Notification delivery', 'Alert management', 'Communication hub']
-  },
-  sentinel: {
-    name: 'Sentinel',
-    color: '#ecf0f1',
-    avatar: 'T',
-    description: 'Alert Watcher',
-    personality: 'Ever vigilant, Sentinel stands guard against all threats and anomalies.',
-    greeting: 'My vigilance never wavers. What threats shall I watch for?',
-    endpoint: 'http://sentinel.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://sentinel.holm.svc.cluster.local:80/ws',
-    keywords: ['alert', 'watch', 'alarm', 'warning', 'threshold', 'incident', 'pager', 'monitor', 'guard'],
-    capabilities: ['Alert monitoring', 'Incident response', 'Threshold management', 'Security watching']
-  },
-  orchestrator: {
-    name: 'Orchestrator',
-    color: 'rainbow',
-    avatar: 'O',
-    description: 'Agent Hub',
-    personality: 'The conductor of the symphony, Orchestrator harmonizes all agents into perfect unity.',
-    greeting: 'I coordinate all agents in harmony. How may we serve you together?',
-    endpoint: 'http://agent-orchestrator.holm.svc.cluster.local:80',
-    wsEndpoint: 'ws://agent-orchestrator.holm.svc.cluster.local:80/ws',
-    keywords: ['orchestrate', 'coordinate', 'all', 'agents', 'multi', 'team', 'together', 'combined'],
-    capabilities: ['Multi-agent coordination', 'Task distribution', 'Workflow management', 'Agent synchronization']
-  }
-};
-
-// Agent status and WebSocket connections
-const agentConnections = {};
-const agentStatus = {};
-
-// Initialize agent status
-Object.keys(agents).forEach(key => {
-  agentStatus[key] = { status: 'unknown', lastCheck: null, latency: null };
-});
-
-// Connect to agent WebSocket
-function connectToAgent(agentKey) {
-  const agent = agents[agentKey];
-  if (!agent || agentConnections[agentKey]) return;
-
-  try {
-    const ws = new WebSocket(agent.wsEndpoint);
-
-    ws.on('open', () => {
-      console.log('Connected to agent:', agentKey);
-      agentStatus[agentKey] = { status: 'online', lastCheck: new Date().toISOString(), latency: 0 };
-      agentConnections[agentKey] = ws;
-      broadcastAgentStatus();
-    });
-
-    ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        broadcast({
-          type: 'agent_message',
-          agent: agentKey,
-          agentName: agent.name,
-          agentColor: agent.color,
-          agentAvatar: agent.avatar,
-          message: message.response || message.message || JSON.stringify(message),
-          timestamp: new Date().toISOString()
-        });
-      } catch (e) {
-        broadcast({
-          type: 'agent_message',
-          agent: agentKey,
-          agentName: agent.name,
-          agentColor: agent.color,
-          agentAvatar: agent.avatar,
-          message: data.toString(),
-          timestamp: new Date().toISOString()
-        });
-      }
-    });
-
-    ws.on('close', () => {
-      console.log('Disconnected from agent:', agentKey);
-      agentStatus[agentKey] = { status: 'offline', lastCheck: new Date().toISOString(), latency: null };
-      delete agentConnections[agentKey];
-      broadcastAgentStatus();
-      setTimeout(() => connectToAgent(agentKey), 5000);
-    });
-
-    ws.on('error', (error) => {
-      console.log('Agent connection error:', agentKey, error.message);
-      agentStatus[agentKey] = { status: 'error', lastCheck: new Date().toISOString(), error: error.message };
-    });
-
-  } catch (e) {
-    console.log('Failed to connect to agent:', agentKey, e.message);
-    agentStatus[agentKey] = { status: 'offline', lastCheck: new Date().toISOString() };
-  }
-}
-
-// HTTP health check for agents without WebSocket
-async function checkAgentHealth(agentKey) {
-  const agent = agents[agentKey];
-  const startTime = Date.now();
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
-    const response = await fetch(agent.endpoint + '/health', { signal: controller.signal });
-    clearTimeout(timeout);
-
-    const latency = Date.now() - startTime;
-    if (response.ok) {
-      agentStatus[agentKey] = { status: 'online', lastCheck: new Date().toISOString(), latency };
-    } else {
-      agentStatus[agentKey] = { status: 'degraded', lastCheck: new Date().toISOString(), latency };
-    }
-  } catch (e) {
-    agentStatus[agentKey] = { status: 'offline', lastCheck: new Date().toISOString(), error: e.message };
-  }
-}
-
-// Initial agent connections
-function initAgentConnections() {
-  Object.keys(agents).forEach(key => {
-    connectToAgent(key);
-  });
-}
-
-// Periodic health checks
-function startHealthChecks() {
-  setInterval(() => {
-    Object.keys(agents).forEach(key => {
-      if (!agentConnections[key]) {
-        checkAgentHealth(key);
-      }
-    });
-    broadcastAgentStatus();
-  }, 30000);
-}
-
-// Broadcast to all WebSocket clients
-function broadcast(data) {
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
-    }
-  });
-}
-
-// Broadcast agent status update
-function broadcastAgentStatus() {
-  const statusData = {};
-  Object.keys(agents).forEach(key => {
-    statusData[key] = { ...agents[key], ...agentStatus[key] };
-  });
-  broadcast({ type: 'agent_status', agents: statusData });
-}
-
-// Auto-routing based on message keywords
-function autoRoute(message) {
-  const lowerMessage = message.toLowerCase();
-  let bestMatch = null;
-  let maxScore = 0;
-
-  for (const [key, agent] of Object.entries(agents)) {
-    let score = 0;
-    agent.keywords.forEach(keyword => {
-      if (lowerMessage.includes(keyword)) {
-        score += keyword.length;
-      }
-    });
-    if (score > maxScore) {
-      maxScore = score;
-      bestMatch = key;
-    }
-  }
-  return bestMatch || 'nova';
-}
-
-// Send message to agent via WebSocket or HTTP
-async function sendToAgent(agentKey, message, requestId) {
-  const agent = agents[agentKey];
-
-  broadcast({
-    type: 'typing',
-    agent: agentKey,
-    agentName: agent.name,
-    agentColor: agent.color,
-    agentAvatar: agent.avatar,
-    requestId
-  });
-
-  if (agentConnections[agentKey] && agentConnections[agentKey].readyState === WebSocket.OPEN) {
-    agentConnections[agentKey].send(JSON.stringify({ message, requestId }));
-    return { sent: true, method: 'websocket' };
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-
-    const response = await fetch(agent.endpoint + '/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
-      signal: controller.signal
-    });
-
-    clearTimeout(timeout);
-
-    if (response.ok) {
-      const data = await response.json();
-      const responseMsg = {
-        type: 'agent_message',
-        agent: agentKey,
-        agentName: agent.name,
-        agentColor: agent.color,
-        agentAvatar: agent.avatar,
-        message: data.response || data.message || JSON.stringify(data),
-        timestamp: new Date().toISOString(),
-        requestId
-      };
-
-      addToHistory(responseMsg);
-      broadcast(responseMsg);
-
-      return { sent: true, method: 'http', response: responseMsg };
-    } else {
-      throw new Error('HTTP ' + response.status);
-    }
-  } catch (error) {
-    const errorMsg = {
-      type: 'agent_message',
-      agent: agentKey,
-      agentName: agent.name,
-      agentColor: agent.color,
-      agentAvatar: agent.avatar,
-      message: agent.greeting + ' (I am currently connecting... please try again in a moment)',
-      timestamp: new Date().toISOString(),
-      requestId,
-      error: true
-    };
-
-    addToHistory(errorMsg);
-    broadcast(errorMsg);
-
-    return { sent: false, error: error.message };
-  }
-}
-
-// Add message to history
-function addToHistory(msg) {
-  messageHistory.push({
-    id: uuidv4(),
-    ...msg
-  });
-  if (messageHistory.length > MAX_HISTORY) {
-    messageHistory = messageHistory.slice(-MAX_HISTORY);
-  }
-}
-
-// UI HTML
-const chatUIHTML = `<!DOCTYPE html>
+// HTML UI - Steve & Alice Group Chat
+const chatHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
-  <title>Chat Hub - HolmOS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Steve & Alice - AI Conversation</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html { height: 100%; height: -webkit-fill-available; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      height: 100%;
-      height: -webkit-fill-available;
-      overflow: hidden;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
-    .container { height: 100vh; height: 100dvh; display: flex; background: #1e1e2e; color: #cdd6f4; overflow: hidden; }
-    .sidebar { width: 300px; background: #181825; border-right: 1px solid #313244; display: flex; flex-direction: column; overflow: hidden; }
-    .sidebar-header { padding: 20px; border-bottom: 1px solid #313244; background: linear-gradient(135deg, #1e1e2e 0%, #313244 100%); }
-    .sidebar-header h1 { font-size: 24px; color: #89b4fa; margin-bottom: 4px; }
-    .sidebar-header p { font-size: 12px; color: #6c7086; }
-    .connection-status { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11px; }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #a6e3a1; animation: pulse 2s infinite; }
-    .status-dot.disconnected { background: #f38ba8; animation: none; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    .agents-list { flex: 1; overflow-y: auto; padding: 12px; }
-    .agents-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #6c7086; padding: 8px 12px; margin-top: 8px; }
-    .agent-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; cursor: pointer; transition: all 0.2s; margin-bottom: 4px; position: relative; }
-    .agent-item:hover { background: #313244; }
-    .agent-item.selected { background: #45475a; box-shadow: inset 3px 0 0 #89b4fa; }
-    .agent-avatar { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px; color: #1e1e2e; flex-shrink: 0; position: relative; }
-    .agent-info { flex: 1; min-width: 0; }
-    .agent-name { font-weight: 600; font-size: 14px; color: #cdd6f4; }
-    .agent-desc { font-size: 11px; color: #6c7086; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .agent-status-indicator { position: absolute; bottom: 0; right: 0; width: 12px; height: 12px; border-radius: 50%; background: #a6e3a1; border: 2px solid #181825; }
-    .agent-status-indicator.offline { background: #f38ba8; }
-    .agent-status-indicator.unknown { background: #6c7086; }
-    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .chat-header { padding: 16px 24px; border-bottom: 1px solid #313244; display: flex; align-items: center; gap: 16px; background: #181825; }
-    .current-agent-avatar { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 22px; color: #1e1e2e; }
-    .current-agent-info h2 { font-size: 20px; color: #cdd6f4; }
-    .current-agent-info p { font-size: 13px; color: #6c7086; margin-top: 2px; }
-    .current-agent-info .personality { font-size: 11px; color: #89b4fa; font-style: italic; margin-top: 4px; }
-    .header-actions { margin-left: auto; display: flex; gap: 8px; }
-    .btn { padding: 10px 18px; border-radius: 8px; border: 1px solid #45475a; background: transparent; color: #a6adc8; font-size: 13px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
-    .btn:hover { background: #45475a; color: #cdd6f4; }
-    #messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
-    .message { max-width: 80%; display: flex; gap: 12px; animation: fadeIn 0.3s ease; }
+
+    /* Header */
+    .header {
+      padding: 16px 24px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #2d1f3d 100%);
+      border-bottom: 1px solid #313244;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .header-avatars {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 16px;
+    }
+    .avatar.steve { background: #1a1a2e; color: #89b4fa; border: 2px solid #89b4fa; }
+    .avatar.alice { background: #ff6b9d; color: #1e1e2e; }
+    .header-vs { color: #6c7086; font-size: 20px; }
+    .header-info h1 { font-size: 20px; font-weight: 600; }
+    .header-info p { font-size: 12px; color: #6c7086; margin-top: 2px; }
+    .live-badge {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #a6e3a1;
+    }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: #a6e3a1;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* Messages */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .message {
+      display: flex;
+      gap: 12px;
+      max-width: 80%;
+      animation: fadeIn 0.3s ease;
+    }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    .message.user { align-self: flex-end; flex-direction: row-reverse; }
-    .message-avatar { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #1e1e2e; flex-shrink: 0; }
-    .message.user .message-avatar { background: #89b4fa; }
-    .message-bubble { padding: 14px 18px; border-radius: 18px; word-wrap: break-word; max-width: 100%; }
-    .message.user .message-bubble { background: #89b4fa; color: #1e1e2e; border-bottom-right-radius: 4px; }
-    .message.agent .message-bubble { background: #313244; color: #cdd6f4; border-bottom-left-radius: 4px; }
-    .message-header { font-size: 11px; margin-bottom: 6px; opacity: 0.8; display: flex; align-items: center; gap: 8px; }
-    .message-time { font-size: 10px; color: #6c7086; }
-    .message-content { line-height: 1.6; font-size: 14px; white-space: pre-wrap; }
-    .typing-indicator { display: flex; gap: 5px; padding: 8px 0; }
-    .typing-indicator span { width: 8px; height: 8px; background: #a6adc8; border-radius: 50%; animation: typing 1.4s infinite ease-in-out both; }
-    .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-    .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-    @keyframes typing { 0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; } }
-    .input-area { padding: 16px 24px; border-top: 1px solid #313244; display: flex; gap: 12px; background: #181825; }
-    #input { flex: 1; padding: 16px 22px; background: #313244; border: 2px solid transparent; border-radius: 28px; color: #cdd6f4; font-size: 15px; outline: none; transition: all 0.2s; }
-    #input::placeholder { color: #6c7086; }
-    #input:focus { background: #45475a; border-color: #89b4fa; }
-    #send { padding: 16px 32px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 28px; font-weight: 600; font-size: 15px; cursor: pointer; transition: all 0.2s; }
-    #send:hover { background: #b4befe; transform: scale(1.02); }
-    #send:disabled { background: #6c7086; cursor: not-allowed; transform: none; }
-    .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 40px; background: radial-gradient(circle at 50% 50%, #313244 0%, #1e1e2e 70%); }
-    .welcome h2 { font-size: 32px; color: #89b4fa; margin-bottom: 16px; }
-    .welcome p { color: #6c7086; margin-bottom: 40px; max-width: 500px; line-height: 1.7; font-size: 16px; }
-    .agents-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 700px; }
-    .agent-card { background: #313244; border-radius: 16px; padding: 20px; cursor: pointer; transition: all 0.3s; text-align: center; border: 2px solid transparent; }
-    .agent-card:hover { background: #45475a; transform: translateY(-4px); border-color: #89b4fa; }
-    .agent-card .agent-avatar { margin: 0 auto 12px; }
-    .agent-card .agent-name { font-size: 13px; font-weight: 600; }
-    .agent-card .agent-desc { font-size: 10px; color: #6c7086; margin-top: 4px; }
-    @keyframes rainbow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-    .rainbow-bg { background: linear-gradient(45deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3); background-size: 400% 400%; animation: rainbow 3s ease infinite; }
+    .message.steve { align-self: flex-start; }
+    .message.alice { align-self: flex-end; flex-direction: row-reverse; }
+    .message.user { align-self: center; max-width: 90%; }
+    .message .msg-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .message.steve .msg-avatar { background: #1a1a2e; color: #89b4fa; border: 2px solid #89b4fa; }
+    .message.alice .msg-avatar { background: #ff6b9d; color: #1e1e2e; }
+    .message.user .msg-avatar { background: #a6e3a1; color: #1e1e2e; }
+    .bubble {
+      padding: 12px 16px;
+      border-radius: 18px;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .message.steve .bubble {
+      background: #313244;
+      border-bottom-left-radius: 4px;
+    }
+    .message.alice .bubble {
+      background: rgba(255, 107, 157, 0.15);
+      border: 1px solid rgba(255, 107, 157, 0.3);
+      border-bottom-right-radius: 4px;
+    }
+    .message.user .bubble {
+      background: rgba(166, 227, 161, 0.15);
+      border: 1px solid rgba(166, 227, 161, 0.3);
+      text-align: center;
+    }
+    .msg-header {
+      font-size: 11px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .message.steve .msg-header { color: #89b4fa; }
+    .message.alice .msg-header { color: #ff6b9d; }
+    .message.user .msg-header { color: #a6e3a1; }
+    .msg-time { color: #6c7086; }
+    .msg-topic {
+      font-size: 10px;
+      background: #45475a;
+      color: #a6adc8;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    .msg-content {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    /* Input */
+    .input-area {
+      padding: 16px 20px;
+      background: #181825;
+      border-top: 1px solid #313244;
+      display: flex;
+      gap: 12px;
+    }
+    .input-area input {
+      flex: 1;
+      padding: 12px 16px;
+      border: 1px solid #45475a;
+      border-radius: 24px;
+      background: #313244;
+      color: #cdd6f4;
+      font-size: 14px;
+      outline: none;
+    }
+    .input-area input:focus { border-color: #89b4fa; }
+    .input-area input::placeholder { color: #6c7086; }
+    .btn {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 24px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-steve {
+      background: linear-gradient(135deg, #1a1a2e, #313244);
+      color: #89b4fa;
+      border: 1px solid #89b4fa;
+    }
+    .btn-steve:hover { background: #89b4fa; color: #1e1e2e; }
+    .btn-alice {
+      background: linear-gradient(135deg, #ff6b9d33, #ff6b9d22);
+      color: #ff6b9d;
+      border: 1px solid #ff6b9d;
+    }
+    .btn-alice:hover { background: #ff6b9d; color: #1e1e2e; }
+
+    /* Scrollbar */
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: #181825; }
     ::-webkit-scrollbar-thumb { background: #45475a; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #585b70; }
 
-    /* Sidebar settings section */
-    .sidebar-settings { padding: 12px; border-top: 1px solid #313244; background: #181825; }
-    .live-dot { width: 8px; height: 8px; background: #a6e3a1; border-radius: 50%; margin-left: auto; animation: pulse 2s infinite; }
-    .bot-convo-btn { background: linear-gradient(135deg, #1a1a2e 0%, #ff6b9d33 100%); border: 1px solid #45475a; }
-    .bot-convo-btn:hover { border-color: #ff6b9d; }
-
-    /* Bot conversation view */
-    .bot-conversation { flex: 1; display: flex; flex-direction: column; background: #1e1e2e; }
-    .bot-convo-header { padding: 20px 24px; border-bottom: 1px solid #313244; background: linear-gradient(135deg, #1a1a2e 0%, #2d1f3d 100%); }
-    .bot-convo-title { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 600; color: #cdd6f4; }
-    .bot-convo-subtitle { font-size: 13px; color: #6c7086; margin-top: 6px; }
-    .bot-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }
-    .bot-avatar.steve { background: #1a1a2e; color: #cdd6f4; border: 2px solid #45475a; }
-    .bot-avatar.alice { background: #ff6b9d; color: #1e1e2e; }
-    .bot-vs { color: #6c7086; font-size: 18px; }
-    .bot-convo-messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
-    .bot-convo-footer { padding: 12px 24px; border-top: 1px solid #313244; display: flex; align-items: center; justify-content: space-between; background: #181825; }
-    .live-indicator { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a6e3a1; }
-    .bot-msg { display: flex; gap: 12px; animation: fadeIn 0.3s ease; max-width: 85%; }
-    .bot-msg.steve { align-self: flex-start; }
-    .bot-msg.alice { align-self: flex-end; flex-direction: row-reverse; }
-    .bot-msg .msg-avatar { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; flex-shrink: 0; }
-    .bot-msg.steve .msg-avatar { background: #1a1a2e; color: #cdd6f4; border: 2px solid #45475a; }
-    .bot-msg.alice .msg-avatar { background: #ff6b9d; color: #1e1e2e; }
-    .bot-msg .msg-bubble { padding: 14px 18px; border-radius: 18px; max-width: 100%; }
-    .bot-msg.steve .msg-bubble { background: #313244; color: #cdd6f4; border-bottom-left-radius: 4px; }
-    .bot-msg.alice .msg-bubble { background: #ff6b9d22; color: #cdd6f4; border: 1px solid #ff6b9d44; border-bottom-right-radius: 4px; }
-    .bot-msg .msg-header { font-size: 11px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
-    .bot-msg.steve .msg-header { color: #89b4fa; }
-    .bot-msg.alice .msg-header { color: #ff6b9d; }
-    .bot-msg .msg-time { font-size: 10px; color: #6c7086; }
-    .bot-msg .msg-content { line-height: 1.6; font-size: 14px; white-space: pre-wrap; }
-    .bot-msg .msg-topic { font-size: 10px; background: #45475a; color: #a6adc8; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
-    .settings-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.2s; color: #a6adc8; font-size: 14px; }
-    .settings-item:hover { background: #313244; color: #cdd6f4; }
-    .settings-icon { font-size: 16px; width: 20px; text-align: center; }
-
-    /* Jump to latest button */
-    .jump-to-latest {
-      display: none;
-      position: fixed;
-      bottom: 90px;
-      right: 20px;
-      background: #89b4fa;
-      color: #1e1e2e;
-      border: none;
-      border-radius: 25px;
-      padding: 10px 18px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      z-index: 101;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-      transition: all 0.2s ease;
-      animation: slideUp 0.2s ease;
+    /* Loading */
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #6c7086;
     }
-    .jump-to-latest:hover { background: #b4befe; transform: scale(1.05); }
-    .jump-to-latest:active { transform: scale(0.95); }
-    .jump-to-latest.visible { display: flex; align-items: center; gap: 6px; }
-    @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-    /* Mobile hamburger menu */
-    .hamburger { display: none; background: none; border: none; color: #cdd6f4; font-size: 24px; padding: 8px 12px; cursor: pointer; position: fixed; top: 12px; left: 12px; z-index: 1001; border-radius: 8px; }
-    .hamburger:hover { background: #313244; }
-    .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 999; }
-
-    @media (max-width: 768px) {
-      .hamburger { display: block; }
-      .sidebar { position: fixed; left: -300px; top: 0; bottom: 0; z-index: 1000; transition: left 0.3s ease; width: 280px; }
-      .sidebar.open { left: 0; }
-      .sidebar-overlay.open { display: block; }
-      .main { margin-left: 0; height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
-      .chat-header { padding: 12px 12px 12px 56px; flex-shrink: 0; }
-      .current-agent-avatar { width: 40px; height: 40px; font-size: 18px; }
-      .current-agent-info h2 { font-size: 16px; }
-      .current-agent-info p { font-size: 11px; }
-      .current-agent-info .personality { display: none; }
-      .header-actions { gap: 4px; }
-      .btn { padding: 8px 12px; font-size: 12px; }
-      #messages { padding: 12px; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 12px; }
-      .message { max-width: 90%; }
-      .input-area {
-        padding: 12px;
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: #181825;
-        border-top: 1px solid #313244;
-        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-        z-index: 100;
-      }
-      #input { padding: 12px 16px; font-size: 16px; }
-      #send { padding: 12px 20px; font-size: 14px; }
-      .welcome { padding: 20px; padding-top: 60px; flex: 1; overflow-y: auto; }
-      .welcome h2 { font-size: 24px; }
-      .welcome p { font-size: 14px; }
-      .agents-grid { grid-template-columns: repeat(3, 1fr); gap: 10px; }
-      .agent-card { padding: 14px; }
-      .agent-card .agent-avatar { width: 36px; height: 36px; font-size: 14px; }
-      .agent-card .agent-name { font-size: 11px; }
-      .agent-card .agent-desc { font-size: 9px; }
-      /* Reserve space for fixed input area */
-      .main.chat-active #messages { padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
-      .jump-to-latest { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); right: 16px; }
+    .typing {
+      display: inline-flex;
+      gap: 4px;
+      padding: 8px 16px;
+      background: #313244;
+      border-radius: 18px;
+      margin: 8px 0;
+    }
+    .typing span {
+      width: 8px;
+      height: 8px;
+      background: #6c7086;
+      border-radius: 50%;
+      animation: typing 1.4s infinite;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes typing {
+      0%, 100% { opacity: 0.3; transform: scale(0.8); }
+      50% { opacity: 1; transform: scale(1); }
     }
   </style>
 </head>
 <body>
-  <button class="hamburger" id="hamburger" onclick="toggleSidebar()">&#9776;</button>
-  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
-  <div class="container">
-    <div class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <h1>Chat Hub</h1>
-        <p>14 AI Agents at your service</p>
-        <div class="connection-status">
-          <span class="status-dot" id="connectionDot"></span>
-          <span id="connectionText">Connected</span>
-        </div>
-      </div>
-      <div class="agents-list" id="agentsList">
-        <div class="agents-section-title">AI Agents</div>
-      </div>
-      <div class="sidebar-settings">
-        <div class="agents-section-title">AI Bots</div>
-        <div class="settings-item bot-convo-btn" onclick="showBotConversation()">
-          <span class="settings-icon">&#128172;</span>
-          <span>Steve & Alice Chat</span>
-          <span class="live-dot"></span>
-        </div>
-        <div class="agents-section-title">Settings</div>
-        <div class="settings-item" onclick="clearChat()">
-          <span class="settings-icon">&#128465;</span>
-          <span>Clear Chat</span>
-        </div>
-        <div class="settings-item" onclick="showAllCapabilities()">
-          <span class="settings-icon">&#9881;</span>
-          <span>View All Capabilities</span>
-        </div>
-      </div>
+  <div class="header">
+    <div class="header-avatars">
+      <div class="avatar steve">S</div>
+      <span class="header-vs">&harr;</span>
+      <div class="avatar alice">A</div>
     </div>
-    <div class="main">
-      <div class="chat-header" id="chatHeader" style="display: none;">
-        <div class="current-agent-avatar" id="currentAvatar">N</div>
-        <div class="current-agent-info">
-          <h2 id="currentName">Nova</h2>
-          <p id="currentDesc">Cluster Overseer</p>
-          <p class="personality" id="currentPersonality"></p>
-        </div>
-        <div class="header-actions">
-          <button class="btn" onclick="showCapabilities()">Capabilities</button>
-          <button class="btn" onclick="clearChat()">Clear Chat</button>
-        </div>
-      </div>
-      <div id="welcomeScreen" class="welcome">
-        <h2>Welcome to HolmOS Chat Hub</h2>
-        <p>Your gateway to 14 AI agents including Steve (the visionary) and Alice (the curious explorer). Each agent has unique capabilities to help you manage and monitor your Kubernetes cluster. Select an agent to begin.</p>
-        <div class="agents-grid" id="agentsGrid"></div>
-      </div>
-      <div id="messages" style="display: none;"></div>
-      <div id="botConversation" class="bot-conversation" style="display: none;">
-        <div class="bot-convo-header">
-          <div class="bot-convo-title">
-            <span class="bot-avatar steve">S</span>
-            <span class="bot-vs">&#8596;</span>
-            <span class="bot-avatar alice">A</span>
-            <span>Steve & Alice</span>
-          </div>
-          <div class="bot-convo-subtitle">AI bots discussing HolmOS improvements 24/7</div>
-        </div>
-        <div class="bot-convo-messages" id="botMessages"></div>
-        <div class="bot-convo-footer">
-          <span class="live-indicator"><span class="live-dot"></span> Live conversation</span>
-          <button class="btn" onclick="refreshBotConversation()">Refresh</button>
-        </div>
-      </div>
-      <button class="jump-to-latest" id="jumpToLatest" onclick="jumpToLatest()">&#8595; New Messages</button>
-      <div class="input-area" id="inputArea" style="display: none;">
-        <input type="text" id="input" placeholder="Type a message..." autocomplete="off">
-        <button id="send">Send</button>
-      </div>
+    <div class="header-info">
+      <h1>Steve & Alice</h1>
+      <p>AI bots discussing HolmOS improvements 24/7</p>
+    </div>
+    <div class="live-badge">
+      <span class="live-dot"></span>
+      <span>Live</span>
     </div>
   </div>
+
+  <div class="messages" id="messages">
+    <div class="loading">Loading conversation...</div>
+  </div>
+
+  <div class="input-area">
+    <input type="text" id="input" placeholder="Inject a message into their conversation..." autocomplete="off">
+    <button class="btn btn-steve" onclick="sendTo('steve')">Ask Steve</button>
+    <button class="btn btn-alice" onclick="sendTo('alice')">Ask Alice</button>
+  </div>
+
   <script>
-    const agents = ${JSON.stringify(agents, null, 2)};
-    let selectedAgent = null;
-    let ws = null;
-    let agentStatuses = {};
-    let typingTimeout = null;
+    let refreshInterval;
+    let lastMessageCount = 0;
+    let isWaiting = false;
 
-    function connect() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(protocol + '//' + window.location.host + '/ws');
-      ws.onopen = () => {
-        document.getElementById('connectionDot').classList.remove('disconnected');
-        document.getElementById('connectionText').textContent = 'Connected';
-        ws.send(JSON.stringify({ type: 'get_status' }));
-      };
-      ws.onclose = () => {
-        document.getElementById('connectionDot').classList.add('disconnected');
-        document.getElementById('connectionText').textContent = 'Reconnecting...';
-        setTimeout(connect, 3000);
-      };
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        handleMessage(data);
-      };
-    }
-
-    function handleMessage(data) {
-      switch(data.type) {
-        case 'agent_status':
-          agentStatuses = data.agents;
-          renderAgentsList();
-          break;
-        case 'typing':
-          showTypingIndicator(data);
-          break;
-        case 'agent_message':
-          removeTypingIndicator();
-          if (data.agent === selectedAgent || !selectedAgent) {
-            addMessage(data.message, 'agent', data.agentName, data.agentColor, data.agentAvatar, data.timestamp);
-          }
-          break;
+    async function loadConversation() {
+      try {
+        const response = await fetch('/api/bot-conversation');
+        if (!response.ok) throw new Error('Failed to load');
+        const data = await response.json();
+        renderMessages(data.messages || []);
+        lastMessageCount = data.count || 0;
+      } catch (e) {
+        document.getElementById('messages').innerHTML = '<div class="loading">Unable to connect to bots. Are they running?</div>';
       }
     }
 
-    function renderAgentsList() {
-      const container = document.getElementById('agentsList');
-      container.innerHTML = '<div class="agents-section-title">AI Agents</div>';
-      Object.entries(agents).forEach(([key, agent]) => {
-        const status = agentStatuses[key]?.status || 'unknown';
-        const isRainbow = agent.color === 'rainbow';
-        const bgClass = isRainbow ? 'rainbow-bg' : '';
-        const bgStyle = isRainbow ? '' : 'background:' + agent.color;
-        const div = document.createElement('div');
-        div.className = 'agent-item' + (selectedAgent === key ? ' selected' : '');
-        div.onclick = () => selectAgent(key);
-        div.innerHTML = '<div class="agent-avatar ' + bgClass + '" style="' + bgStyle + '">' + agent.avatar + '<span class="agent-status-indicator ' + status + '"></span></div><div class="agent-info"><div class="agent-name">' + agent.name + '</div><div class="agent-desc">' + agent.description + '</div></div>';
-        container.appendChild(div);
-      });
-    }
+    function renderMessages(messages) {
+      const container = document.getElementById('messages');
+      const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
 
-    function renderAgentsGrid() {
-      const container = document.getElementById('agentsGrid');
       container.innerHTML = '';
-      Object.entries(agents).forEach(([key, agent]) => {
-        const isRainbow = agent.color === 'rainbow';
-        const bgClass = isRainbow ? 'rainbow-bg' : '';
-        const bgStyle = isRainbow ? '' : 'background:' + agent.color;
+
+      messages.forEach(msg => {
+        const speaker = msg.speaker.toLowerCase();
+        const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+
         const div = document.createElement('div');
-        div.className = 'agent-card';
-        div.onclick = () => selectAgent(key);
-        div.innerHTML = '<div class="agent-avatar ' + bgClass + '" style="' + bgStyle + '">' + agent.avatar + '</div><div class="agent-name">' + agent.name + '</div><div class="agent-desc">' + agent.description + '</div>';
+        div.className = 'message ' + speaker;
+
+        const avatar = speaker === 'steve' ? 'S' : (speaker === 'alice' ? 'A' : 'U');
+        const name = speaker === 'steve' ? 'Steve' : (speaker === 'alice' ? 'Alice' : 'You');
+        const topicHtml = msg.topic ? '<span class="msg-topic">' + escapeHtml(msg.topic) + '</span>' : '';
+
+        // Truncate long messages for display
+        let content = msg.message || '';
+        if (content.length > 1500) {
+          content = content.substring(0, 1500) + '...';
+        }
+
+        div.innerHTML =
+          '<div class="msg-avatar">' + avatar + '</div>' +
+          '<div class="bubble">' +
+            '<div class="msg-header">' + name + ' <span class="msg-time">' + time + '</span> ' + topicHtml + '</div>' +
+            '<div class="msg-content">' + escapeHtml(content) + '</div>' +
+          '</div>';
+
         container.appendChild(div);
       });
-    }
 
-    function selectAgent(key) {
-      selectedAgent = key;
-      const agent = agents[key];
-      if (botConvoInterval) { clearInterval(botConvoInterval); botConvoInterval = null; }
-      document.getElementById('botConversation').style.display = 'none';
-      document.getElementById('chatHeader').style.display = 'flex';
-      document.getElementById('welcomeScreen').style.display = 'none';
-      document.getElementById('messages').style.display = 'flex';
-      document.getElementById('inputArea').style.display = 'flex';
-      // Add chat-active class to main for mobile layout
-      document.querySelector('.main').classList.add('chat-active');
-      const avatarEl = document.getElementById('currentAvatar');
-      avatarEl.textContent = agent.avatar;
-      if (agent.color === 'rainbow') {
-        avatarEl.className = 'current-agent-avatar rainbow-bg';
-        avatarEl.style.background = '';
-      } else {
-        avatarEl.className = 'current-agent-avatar';
-        avatarEl.style.background = agent.color;
+      // Add typing indicator if waiting
+      if (isWaiting) {
+        const typingDiv = document.createElement('div');
+        typingDiv.className = 'typing';
+        typingDiv.innerHTML = '<span></span><span></span><span></span>';
+        container.appendChild(typingDiv);
       }
-      document.getElementById('currentName').textContent = agent.name;
-      document.getElementById('currentDesc').textContent = agent.description;
-      document.getElementById('currentPersonality').textContent = agent.personality;
-      renderAgentsList();
-      document.getElementById('messages').innerHTML = '';
-      addMessage(agent.greeting, 'agent', agent.name, agent.color, agent.avatar, new Date().toISOString());
-      document.getElementById('input').focus();
-      // Hide jump button when selecting new agent (we're at bottom)
-      document.getElementById('jumpToLatest').classList.remove('visible');
-    }
 
-    function addMessage(text, type, agentName, agentColor, agentAvatar, timestamp) {
-      const container = document.getElementById('messages');
-      // Check if user is near bottom before adding message
-      const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
-      const msgDiv = document.createElement('div');
-      msgDiv.className = 'message ' + type;
-      const time = timestamp ? new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
-      if (type === 'agent') {
-        const isRainbow = agentColor === 'rainbow';
-        const bgClass = isRainbow ? 'rainbow-bg' : '';
-        const bgStyle = isRainbow ? '' : 'background:' + agentColor;
-        msgDiv.innerHTML = '<div class="message-avatar ' + bgClass + '" style="' + bgStyle + '">' + agentAvatar + '</div><div class="message-bubble"><div class="message-header">' + agentName + ' <span class="message-time">' + time + '</span></div><div class="message-content">' + escapeHtml(text) + '</div></div>';
-      } else {
-        msgDiv.innerHTML = '<div class="message-avatar">U</div><div class="message-bubble"><div class="message-header">You <span class="message-time">' + time + '</span></div><div class="message-content">' + escapeHtml(text) + '</div></div>';
-      }
-      container.appendChild(msgDiv);
-      // Auto-scroll only if user was near bottom, or if it's their own message
-      if (wasNearBottom || type === 'user') {
+      // Scroll to bottom if was at bottom or few messages
+      if (wasAtBottom || messages.length <= 3) {
         container.scrollTop = container.scrollHeight;
-      } else {
-        // Show jump button if new message arrived while scrolled up
-        document.getElementById('jumpToLatest').classList.add('visible');
       }
-    }
-
-    function showTypingIndicator(data) {
-      removeTypingIndicator();
-      const container = document.getElementById('messages');
-      const agent = agents[data.agent];
-      if (!agent) return;
-      const isRainbow = agent.color === 'rainbow';
-      const bgClass = isRainbow ? 'rainbow-bg' : '';
-      const bgStyle = isRainbow ? '' : 'background:' + agent.color;
-      const typingDiv = document.createElement('div');
-      typingDiv.className = 'message agent';
-      typingDiv.id = 'typing-indicator';
-      typingDiv.innerHTML = '<div class="message-avatar ' + bgClass + '" style="' + bgStyle + '">' + agent.avatar + '</div><div class="message-bubble"><div class="message-header">' + agent.name + '</div><div class="typing-indicator"><span></span><span></span><span></span></div></div>';
-      container.appendChild(typingDiv);
-      container.scrollTop = container.scrollHeight;
-      typingTimeout = setTimeout(removeTypingIndicator, 30000);
-    }
-
-    function removeTypingIndicator() {
-      if (typingTimeout) { clearTimeout(typingTimeout); typingTimeout = null; }
-      const indicator = document.getElementById('typing-indicator');
-      if (indicator) indicator.remove();
     }
 
     function escapeHtml(text) {
@@ -845,140 +325,44 @@ const chatUIHTML = `<!DOCTYPE html>
       return div.innerHTML;
     }
 
-    function showCapabilities() {
-      if (!selectedAgent) return;
-      const agent = agents[selectedAgent];
-      const caps = agent.capabilities.join(', ');
-      addMessage('My capabilities include: ' + caps, 'agent', agent.name, agent.color, agent.avatar, new Date().toISOString());
-    }
-
-    function showAllCapabilities() {
-      if (!selectedAgent) {
-        alert('Please select an agent first to view capabilities.');
-        return;
-      }
-      showCapabilities();
-      if (window.innerWidth <= 768) {
-        closeSidebar();
-      }
-    }
-
-    function clearChat() {
-      if (!selectedAgent) return;
-      document.getElementById('messages').innerHTML = '';
-      const agent = agents[selectedAgent];
-      addMessage(agent.greeting, 'agent', agent.name, agent.color, agent.avatar, new Date().toISOString());
-    }
-
-    let botConvoInterval = null;
-
-    async function showBotConversation() {
-      selectedAgent = null;
-      document.getElementById('chatHeader').style.display = 'none';
-      document.getElementById('welcomeScreen').style.display = 'none';
-      document.getElementById('messages').style.display = 'none';
-      document.getElementById('inputArea').style.display = 'none';
-      document.getElementById('botConversation').style.display = 'flex';
-      document.querySelector('.main').classList.add('chat-active');
-      renderAgentsList();
-      await refreshBotConversation();
-      if (botConvoInterval) clearInterval(botConvoInterval);
-      botConvoInterval = setInterval(refreshBotConversation, 10000);
-      if (window.innerWidth <= 768) closeSidebar();
-    }
-
-    async function refreshBotConversation() {
-      try {
-        const response = await fetch('/api/bot-conversation');
-        if (!response.ok) throw new Error('Failed to fetch');
-        const data = await response.json();
-        renderBotMessages(data.messages || []);
-      } catch (e) {
-        document.getElementById('botMessages').innerHTML = '<div style="text-align:center;color:#f38ba8;padding:40px;">Unable to load conversation. Are Steve and Alice running?</div>';
-      }
-    }
-
-    function renderBotMessages(messages) {
-      const container = document.getElementById('botMessages');
-      const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
-      container.innerHTML = '';
-      messages.forEach(msg => {
-        const speaker = msg.speaker.toLowerCase();
-        const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
-        const div = document.createElement('div');
-        div.className = 'bot-msg ' + speaker;
-        const avatar = speaker === 'steve' ? 'S' : 'A';
-        const name = speaker === 'steve' ? 'Steve' : 'Alice';
-        const topicHtml = msg.topic ? '<span class="msg-topic">' + msg.topic + '</span>' : '';
-        div.innerHTML = '<div class="msg-avatar">' + avatar + '</div><div class="msg-bubble"><div class="msg-header">' + name + ' <span class="msg-time">' + time + '</span>' + topicHtml + '</div><div class="msg-content">' + escapeHtml(msg.message).substring(0, 800) + (msg.message.length > 800 ? '...' : '') + '</div></div>';
-        container.appendChild(div);
-      });
-      if (wasAtBottom || container.children.length <= 5) {
-        container.scrollTop = container.scrollHeight;
-      }
-    }
-
-    async function sendMessage() {
+    async function sendTo(bot) {
       const input = document.getElementById('input');
       const message = input.value.trim();
-      if (!message || !selectedAgent) return;
-      addMessage(message, 'user', '', '', '', new Date().toISOString());
+      if (!message || isWaiting) return;
+
       input.value = '';
-      document.getElementById('send').disabled = true;
+      isWaiting = true;
+
       try {
-        await fetch('/api/chat/' + selectedAgent, {
+        // Send to the selected bot
+        const response = await fetch('/api/inject', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: message })
+          body: JSON.stringify({ message, sendTo: bot })
         });
-      } catch (error) {
-        removeTypingIndicator();
-        addMessage('Error: Failed to send message. Please try again.', 'agent', 'System', '#f38ba8', '!', new Date().toISOString());
+
+        if (response.ok) {
+          // Refresh to see the response
+          await loadConversation();
+        }
+      } catch (e) {
+        console.error('Failed to send:', e);
       }
-      document.getElementById('send').disabled = false;
-      input.focus();
+
+      isWaiting = false;
+      await loadConversation();
     }
 
-    document.getElementById('send').addEventListener('click', sendMessage);
-    document.getElementById('input').addEventListener('keypress', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    // Handle enter key
+    document.getElementById('input').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        sendTo('steve'); // Default to Steve on Enter
+      }
     });
 
-    function toggleSidebar() {
-      document.getElementById('sidebar').classList.toggle('open');
-      document.getElementById('sidebarOverlay').classList.toggle('open');
-    }
-
-    function jumpToLatest() {
-      const messages = document.getElementById('messages');
-      messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
-      document.getElementById('jumpToLatest').classList.remove('visible');
-    }
-
-    // Track scroll position for jump to latest button
-    document.getElementById('messages').addEventListener('scroll', function() {
-      const messages = this;
-      const isNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
-      document.getElementById('jumpToLatest').classList.toggle('visible', !isNearBottom);
-    });
-
-    function closeSidebar() {
-      document.getElementById('sidebar').classList.remove('open');
-      document.getElementById('sidebarOverlay').classList.remove('open');
-    }
-
-    // Close sidebar on agent select (mobile)
-    const originalSelectAgent = selectAgent;
-    selectAgent = function(key) {
-      originalSelectAgent(key);
-      if (window.innerWidth <= 768) {
-        closeSidebar();
-      }
-    };
-
-    connect();
-    renderAgentsList();
-    renderAgentsGrid();
+    // Initial load and auto-refresh
+    loadConversation();
+    refreshInterval = setInterval(loadConversation, 5000);
   </script>
 </body>
 </html>`;
@@ -986,39 +370,19 @@ const chatUIHTML = `<!DOCTYPE html>
 // Routes
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html');
-  res.send(chatUIHTML);
+  res.send(chatHTML);
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'chat-hub', timestamp: new Date().toISOString(), connections: wss.clients.size, agents: Object.keys(agents).length });
-});
-
-app.get('/api/health', (req, res) => {
   res.json({ status: 'healthy', service: 'chat-hub', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/agents', (req, res) => {
-  const result = {};
-  Object.keys(agents).forEach(key => { result[key] = { ...agents[key], ...agentStatus[key] }; });
-  res.json(result);
-});
-
-app.get('/api/agents/status', (req, res) => {
-  const result = {};
-  Object.keys(agents).forEach(key => { result[key] = { ...agents[key], ...agentStatus[key] }; });
-  res.json(result);
-});
-
-app.get('/api/history', (req, res) => {
-  res.json(messageHistory);
-});
-
-// Bot-to-bot conversation endpoint
+// Get bot conversation
 app.get('/api/bot-conversation', async (req, res) => {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch('http://steve-bot.holm.svc.cluster.local:8080/api/conversations?limit=50', {
+    const response = await fetch(STEVE_URL + '/api/conversations?limit=50', {
       signal: controller.signal
     });
     clearTimeout(timeout);
@@ -1026,69 +390,74 @@ app.get('/api/bot-conversation', async (req, res) => {
       const data = await response.json();
       res.json(data);
     } else {
-      res.status(502).json({ error: 'Failed to fetch bot conversation' });
+      res.status(502).json({ error: 'Failed to fetch' });
     }
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
 });
 
-app.delete('/api/history', (req, res) => {
-  messageHistory = [];
-  broadcast({ type: 'history_cleared' });
-  res.json({ success: true, message: 'History cleared' });
-});
+// Inject message into conversation
+app.post('/api/inject', async (req, res) => {
+  const { message, sendTo } = req.body;
+  if (!message) {
+    return res.status(400).json({ error: 'Message required' });
+  }
 
-app.post('/api/chat', async (req, res) => {
-  const { message } = req.body;
-  if (!message) { return res.status(400).json({ error: 'Message required' }); }
-  const targetAgent = autoRoute(message);
-  const requestId = uuidv4();
-  addToHistory({ type: 'user_message', role: 'user', content: message, timestamp: new Date().toISOString() });
-  const result = await sendToAgent(targetAgent, message, requestId);
-  res.json({ success: result.sent, routedTo: targetAgent, requestId });
-});
+  const targetUrl = sendTo === 'alice' ? ALICE_URL : STEVE_URL;
+  const otherUrl = sendTo === 'alice' ? STEVE_URL : ALICE_URL;
 
-app.post('/api/chat/:agent', async (req, res) => {
-  const { agent } = req.params;
-  const { message } = req.body;
-  if (!message) { return res.status(400).json({ error: 'Message required' }); }
-  if (!agents[agent]) { return res.status(404).json({ error: 'Agent not found: ' + agent }); }
-  const requestId = uuidv4();
-  addToHistory({ type: 'user_message', role: 'user', agent: agent, content: message, timestamp: new Date().toISOString() });
-  const result = await sendToAgent(agent, message, requestId);
-  res.json({ success: result.sent, agent: agent, requestId });
-});
+  try {
+    // Send to first bot
+    const response1 = await fetch(targetUrl + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
 
-wss.on('connection', (ws) => {
-  console.log('New client WebSocket connection');
-  const statusData = {};
-  Object.keys(agents).forEach(key => { statusData[key] = { ...agents[key], ...agentStatus[key] }; });
-  ws.send(JSON.stringify({ type: 'agent_status', agents: statusData }));
+    if (!response1.ok) {
+      return res.status(502).json({ error: 'Failed to reach ' + sendTo });
+    }
 
-  ws.on('message', (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (msg.type === 'get_status') {
-        const statusData = {};
-        Object.keys(agents).forEach(key => { statusData[key] = { ...agents[key], ...agentStatus[key] }; });
-        ws.send(JSON.stringify({ type: 'agent_status', agents: statusData }));
+    const data1 = await response1.json();
+
+    // Now have the other bot respond to the first bot's response
+    if (data1.response) {
+      const response2 = await fetch(otherUrl + '/api/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: data1.response,
+          from: sendTo,
+          topic: 'user_question'
+        })
+      });
+
+      if (response2.ok) {
+        const data2 = await response2.json();
+        res.json({
+          success: true,
+          firstResponse: data1.response,
+          secondResponse: data2.response
+        });
+        return;
       }
-    } catch (e) { console.log('Invalid WebSocket message:', e.message); }
-  });
+    }
 
-  ws.on('close', () => { console.log('Client WebSocket connection closed'); });
-  ws.on('error', (error) => { console.error('Client WebSocket error:', error); });
+    res.json({ success: true, response: data1.response });
+
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// WebSocket for real-time updates
+wss.on('connection', (ws) => {
+  console.log('Client connected');
+  ws.on('close', () => console.log('Client disconnected'));
 });
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('Chat Hub running on port ' + PORT);
-  console.log('14 AI Agents configured (including Steve + Alice AI bots)');
-  console.log('WebSocket server ready');
-  setTimeout(() => {
-    console.log('Initializing agent connections...');
-    initAgentConnections();
-    startHealthChecks();
-  }, 2000);
+  console.log('Steve & Alice Chat Hub running on port ' + PORT);
 });

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: health-agg
+  namespace: holm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: health-agg
+  template:
+    metadata:
+      labels:
+        app: health-agg
+    spec:
+      containers:
+      - name: health-agg
+        image: 192.168.8.197:31500/health-agg:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: health-agg
+  namespace: holm
+spec:
+  type: NodePort
+  selector:
+    app: health-agg
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30667

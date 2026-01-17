@@ -1,75 +1,78 @@
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: pxe-server
   namespace: holm
   labels:
     app: pxe-server
 spec:
-  hostNetwork: true
-  nodeName: rpi-1
-  containers:
-  - name: pxe
-    image: alpine:latest
-    securityContext:
-      privileged: true
-    volumeMounts:
-    - name: data
-      mountPath: /tftpboot
-    command:
-    - /bin/sh
-    - -c
-    - |
-      set -e
-      echo "=== PXE Server ==="
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pxe-server
+  template:
+    metadata:
+      labels:
+        app: pxe-server
+    spec:
+      hostNetwork: true
+      nodeName: rpi-1
+      restartPolicy: Always
+      containers:
+      - name: pxe
+        image: alpine:latest
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: data
+          mountPath: /tftpboot
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "=== PXE Server ==="
 
-      apk add --no-cache tftp-hpa dnsmasq wget
+          apk add --no-cache tftp-hpa dnsmasq wget
 
-      mkdir -p /tftpboot
-      cd /tmp
+          mkdir -p /tftpboot
+          cd /tmp
 
-      wget -q http://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/netboot/netboot.tar.gz
-      tar xzf netboot.tar.gz -C /tftpboot
+          wget -q http://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/netboot/netboot.tar.gz
+          tar xzf netboot.tar.gz -C /tftpboot
 
-      # Copy to root
-      cp /tftpboot/debian-installer/amd64/bootnetx64.efi /tftpboot/
-      cp /tftpboot/debian-installer/amd64/grubx64.efi /tftpboot/
+          # Copy to root
+          cp /tftpboot/debian-installer/amd64/bootnetx64.efi /tftpboot/
+          cp /tftpboot/debian-installer/amd64/grubx64.efi /tftpboot/
 
-      # Start TFTP
-      in.tftpd -L -s /tftpboot -a 0.0.0.0:69 --verbose &
-      sleep 2
+          # Full DHCP server with PXE (not proxy mode)
+          cat > /tmp/dnsmasq.conf << 'DNSMASQ'
+          interface=eth0
+          bind-interfaces
 
-      # Full DHCP server with PXE
-      cat > /tmp/dnsmasq.conf << 'DNSMASQ'
-      interface=eth0
-      bind-interfaces
+          # Full DHCP with small range for PXE clients
+          dhcp-range=192.168.8.230,192.168.8.250,255.255.255.0,1h
+          dhcp-option=3,192.168.8.1
+          dhcp-option=6,8.8.8.8,8.8.4.4
 
-      # Full DHCP with small range for PXE clients
-      dhcp-range=192.168.8.230,192.168.8.250,255.255.255.0,1h
-      dhcp-option=3,192.168.8.1
-      dhcp-option=6,8.8.8.8,8.8.4.4
+          # PXE boot
+          dhcp-boot=bootnetx64.efi,,192.168.8.197
 
-      # PXE boot
-      dhcp-boot=bootnetx64.efi,,192.168.8.197
+          # TFTP
+          enable-tftp
+          tftp-root=/tftpboot
 
-      # TFTP
-      enable-tftp
-      tftp-root=/tftpboot
+          log-dhcp
+          DNSMASQ
 
-      log-dhcp
-      DNSMASQ
+          dnsmasq -C /tmp/dnsmasq.conf -d --log-facility=- &
 
-      # Kill standalone tftp since dnsmasq handles it
-      pkill in.tftpd || true
+          echo "=== READY ==="
+          echo "DHCP: 192.168.8.230-250"
+          echo "TFTP: 192.168.8.197:69"
+          echo "Boot: bootnetx64.efi"
 
-      dnsmasq -C /tmp/dnsmasq.conf -d --log-facility=- &
-
-      echo "=== READY ==="
-      echo "DHCP: 192.168.8.230-250"
-      echo "TFTP: 192.168.8.197"
-      echo "Boot: bootnetx64.efi"
-
-      sleep infinity
-  volumes:
-  - name: data
-    emptyDir: {}
+          sleep infinity
+      volumes:
+      - name: data
+        emptyDir: {}

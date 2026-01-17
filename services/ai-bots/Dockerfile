@@ -1,9 +1,10 @@
 # AI Bots - Steve and Alice
 FROM python:3.11-slim
 
-# Install kubectl
+# Install kubectl (detect architecture)
 RUN apt-get update && apt-get install -y curl && \
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
+    ARCH=$(dpkg --print-architecture) && \
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" && \
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && \
     rm kubectl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*

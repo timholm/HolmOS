@@ -5,6 +5,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: ai-bots-data
   namespace: holm
+  annotations:
+    volume.kubernetes.io/selected-node: rpi-1
 spec:
   accessModes:
     - ReadWriteOnce
@@ -32,6 +34,8 @@ spec:
         app: steve-bot
     spec:
       serviceAccountName: ai-bot
+      nodeSelector:
+        kubernetes.io/hostname: rpi-1
       containers:
       - name: steve-bot
         image: 192.168.8.197:31500/ai-bots:latest
@@ -115,6 +119,8 @@ spec:
         app: alice-bot
     spec:
       serviceAccountName: ai-bot
+      nodeSelector:
+        kubernetes.io/hostname: rpi-1
       initContainers:
       - name: git-clone
         image: alpine/git:latest

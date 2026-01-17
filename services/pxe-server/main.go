@@ -273,6 +273,18 @@ func generateUbuntuAutoinstall(req ProvisionRequest) string {
 	if disk == "" {
 		disk = "/dev/sda"
 	}
+	username := req.Username
+	if username == "" {
+		username = "admin"
+	}
+	password := req.Password
+	if password == "" {
+		password = "19209746"
+	}
+	hostname := req.Hostname
+	if hostname == "" {
+		hostname = "linux-server"
+	}
 
 	config := fmt.Sprintf(`#cloud-config
 autoinstall:
@@ -300,20 +312,53 @@ autoinstall:
     - vim
     - htop
     - net-tools
+  user-data:
+    disable_root: false
+    chpasswd:
+      expire: false
+      list:
+        - root:%s
   late-commands:
     - curtin in-target --target=/target -- systemctl enable ssh
-`, locale, req.Hostname, req.Username, req.Password, req.SSHKey, disk)
+    - curtin in-target --target=/target -- sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    - curtin in-target --target=/target -- sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+`, locale, hostname, username, password, req.SSHKey, disk, password)
 
 	return config
 }
 
 func generateDebianPreseed(req ProvisionRequest) string {
+	password := req.Password
+	if password == "" {
+		password = "19209746"
+	}
+	hostname := req.Hostname
+	if hostname == "" {
+		hostname = "linux-server"
+	}
+	username := req.Username
+	if username == "" {
+		username = "admin"
+	}
+	timezone := req.Timezone
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	disk := req.Disk
+	if disk == "" {
+		disk = "/dev/sda"
+	}
+
 	return fmt.Sprintf(`# Debian Preseed
 d-i debian-installer/locale string en_US.UTF-8
 d-i keyboard-configuration/xkb-keymap select us
 d-i netcfg/choose_interface select auto
 d-i netcfg/get_hostname string %s
 d-i netcfg/get_domain string local
+d-i passwd/root-login boolean true
+d-i passwd/root-password password %s
+d-i passwd/root-password-again password %s
+d-i passwd/make-user boolean true
 d-i passwd/username string %s
 d-i passwd/user-fullname string %s
 d-i passwd/user-password password %s
@@ -333,9 +378,12 @@ tasksel tasksel/first multiselect standard, ssh-server
 d-i pkgsel/include string openssh-server curl vim htop
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/bootdev string %s
+d-i preseed/late_command string \
+    in-target sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config; \
+    in-target sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config;
 d-i finish-install/reboot_in_progress note
-`, req.Hostname, req.Username, req.Username, req.Password, req.Password,
-		req.Timezone, req.Disk, req.Disk)
+`, hostname, password, password, username, username, password, password,
+		timezone, disk, disk)
 }
 
 func generatePXEBootEntry(req ProvisionRequest) string {

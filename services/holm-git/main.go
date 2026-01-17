@@ -595,13 +595,14 @@ func handleGitProtocol(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case service == "git-upload-pack" || strings.Contains(r.URL.Path, "git-upload-pack"):
+	case strings.HasSuffix(r.URL.Path, "/info/refs"):
+		// Handle refs advertisement - must come before service checks
+		handleInfoRefs(w, r, repoPath)
+	case strings.Contains(r.URL.Path, "git-upload-pack"):
 		handleGitService(w, r, repoPath, "git-upload-pack")
-	case service == "git-receive-pack" || strings.Contains(r.URL.Path, "git-receive-pack"):
+	case strings.Contains(r.URL.Path, "git-receive-pack"):
 		handleGitService(w, r, repoPath, "git-receive-pack")
 		triggerWebhooks(repoName)
-	case strings.HasSuffix(r.URL.Path, "/info/refs"):
-		handleInfoRefs(w, r, repoPath)
 	default:
 		http.NotFound(w, r)
 	}

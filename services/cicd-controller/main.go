@@ -548,7 +548,7 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 					InitContainers: []corev1.Container{
 						{
 							Name:  "git-clone",
-							Image: "alpine/git:latest",
+							Image: "bitnami/git:latest",
 							Command: []string{"sh", "-c"},
 							Args: []string{
 								func() string {

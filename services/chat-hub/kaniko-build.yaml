@@ -4,13 +4,25 @@ metadata:
   name: kaniko-chat-hub
   namespace: holm
 spec:
+  initContainers:
+  - name: git-clone
+    image: alpine/git:latest
+    command: ["sh", "-c"]
+    args:
+    - |
+      git clone --depth 1 https://github.com/timholm/HolmOS.git /workspace/repo
+      cp -r /workspace/repo/services/chat-hub/* /workspace/
+      ls -la /workspace/
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
   containers:
   - name: kaniko
     image: gcr.io/kaniko-project/executor:latest
     args:
     - "--dockerfile=Dockerfile"
     - "--context=dir:///workspace"
-    - "--destination=192.168.8.197:30500/chat-hub:latest"
+    - "--destination=192.168.8.197:31500/chat-hub:latest"
     - "--insecure"
     - "--skip-tls-verify"
     volumeMounts:
@@ -21,10 +33,6 @@ spec:
   - key: "node-role.kubernetes.io/control-plane"
     operator: "Exists"
     effect: "NoSchedule"
-  nodeSelector:
-    kubernetes.io/hostname: rpi-1
   volumes:
   - name: workspace
-    hostPath:
-      path: /tmp/chat-hub-build
-      type: DirectoryOrCreate
+    emptyDir: {}

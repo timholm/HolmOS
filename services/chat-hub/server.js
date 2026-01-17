@@ -503,6 +503,37 @@ const chatUIHTML = `<!DOCTYPE html>
 
     /* Sidebar settings section */
     .sidebar-settings { padding: 12px; border-top: 1px solid #313244; background: #181825; }
+    .live-dot { width: 8px; height: 8px; background: #a6e3a1; border-radius: 50%; margin-left: auto; animation: pulse 2s infinite; }
+    .bot-convo-btn { background: linear-gradient(135deg, #1a1a2e 0%, #ff6b9d33 100%); border: 1px solid #45475a; }
+    .bot-convo-btn:hover { border-color: #ff6b9d; }
+
+    /* Bot conversation view */
+    .bot-conversation { flex: 1; display: flex; flex-direction: column; background: #1e1e2e; }
+    .bot-convo-header { padding: 20px 24px; border-bottom: 1px solid #313244; background: linear-gradient(135deg, #1a1a2e 0%, #2d1f3d 100%); }
+    .bot-convo-title { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 600; color: #cdd6f4; }
+    .bot-convo-subtitle { font-size: 13px; color: #6c7086; margin-top: 6px; }
+    .bot-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }
+    .bot-avatar.steve { background: #1a1a2e; color: #cdd6f4; border: 2px solid #45475a; }
+    .bot-avatar.alice { background: #ff6b9d; color: #1e1e2e; }
+    .bot-vs { color: #6c7086; font-size: 18px; }
+    .bot-convo-messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+    .bot-convo-footer { padding: 12px 24px; border-top: 1px solid #313244; display: flex; align-items: center; justify-content: space-between; background: #181825; }
+    .live-indicator { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a6e3a1; }
+    .bot-msg { display: flex; gap: 12px; animation: fadeIn 0.3s ease; max-width: 85%; }
+    .bot-msg.steve { align-self: flex-start; }
+    .bot-msg.alice { align-self: flex-end; flex-direction: row-reverse; }
+    .bot-msg .msg-avatar { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; flex-shrink: 0; }
+    .bot-msg.steve .msg-avatar { background: #1a1a2e; color: #cdd6f4; border: 2px solid #45475a; }
+    .bot-msg.alice .msg-avatar { background: #ff6b9d; color: #1e1e2e; }
+    .bot-msg .msg-bubble { padding: 14px 18px; border-radius: 18px; max-width: 100%; }
+    .bot-msg.steve .msg-bubble { background: #313244; color: #cdd6f4; border-bottom-left-radius: 4px; }
+    .bot-msg.alice .msg-bubble { background: #ff6b9d22; color: #cdd6f4; border: 1px solid #ff6b9d44; border-bottom-right-radius: 4px; }
+    .bot-msg .msg-header { font-size: 11px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    .bot-msg.steve .msg-header { color: #89b4fa; }
+    .bot-msg.alice .msg-header { color: #ff6b9d; }
+    .bot-msg .msg-time { font-size: 10px; color: #6c7086; }
+    .bot-msg .msg-content { line-height: 1.6; font-size: 14px; white-space: pre-wrap; }
+    .bot-msg .msg-topic { font-size: 10px; background: #45475a; color: #a6adc8; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
     .settings-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.2s; color: #a6adc8; font-size: 14px; }
     .settings-item:hover { background: #313244; color: #cdd6f4; }
     .settings-icon { font-size: 16px; width: 20px; text-align: center; }
@@ -595,6 +626,12 @@ const chatUIHTML = `<!DOCTYPE html>
         <div class="agents-section-title">AI Agents</div>
       </div>
       <div class="sidebar-settings">
+        <div class="agents-section-title">AI Bots</div>
+        <div class="settings-item bot-convo-btn" onclick="showBotConversation()">
+          <span class="settings-icon">&#128172;</span>
+          <span>Steve & Alice Chat</span>
+          <span class="live-dot"></span>
+        </div>
         <div class="agents-section-title">Settings</div>
         <div class="settings-item" onclick="clearChat()">
           <span class="settings-icon">&#128465;</span>
@@ -625,6 +662,22 @@ const chatUIHTML = `<!DOCTYPE html>
         <div class="agents-grid" id="agentsGrid"></div>
       </div>
       <div id="messages" style="display: none;"></div>
+      <div id="botConversation" class="bot-conversation" style="display: none;">
+        <div class="bot-convo-header">
+          <div class="bot-convo-title">
+            <span class="bot-avatar steve">S</span>
+            <span class="bot-vs">&#8596;</span>
+            <span class="bot-avatar alice">A</span>
+            <span>Steve & Alice</span>
+          </div>
+          <div class="bot-convo-subtitle">AI bots discussing HolmOS improvements 24/7</div>
+        </div>
+        <div class="bot-convo-messages" id="botMessages"></div>
+        <div class="bot-convo-footer">
+          <span class="live-indicator"><span class="live-dot"></span> Live conversation</span>
+          <button class="btn" onclick="refreshBotConversation()">Refresh</button>
+        </div>
+      </div>
       <button class="jump-to-latest" id="jumpToLatest" onclick="jumpToLatest()">&#8595; New Messages</button>
       <div class="input-area" id="inputArea" style="display: none;">
         <input type="text" id="input" placeholder="Type a message..." autocomplete="off">
@@ -710,6 +763,8 @@ const chatUIHTML = `<!DOCTYPE html>
     function selectAgent(key) {
       selectedAgent = key;
       const agent = agents[key];
+      if (botConvoInterval) { clearInterval(botConvoInterval); botConvoInterval = null; }
+      document.getElementById('botConversation').style.display = 'none';
       document.getElementById('chatHeader').style.display = 'flex';
       document.getElementById('welcomeScreen').style.display = 'none';
       document.getElementById('messages').style.display = 'flex';
@@ -815,6 +870,54 @@ const chatUIHTML = `<!DOCTYPE html>
       addMessage(agent.greeting, 'agent', agent.name, agent.color, agent.avatar, new Date().toISOString());
     }
 
+    let botConvoInterval = null;
+
+    async function showBotConversation() {
+      selectedAgent = null;
+      document.getElementById('chatHeader').style.display = 'none';
+      document.getElementById('welcomeScreen').style.display = 'none';
+      document.getElementById('messages').style.display = 'none';
+      document.getElementById('inputArea').style.display = 'none';
+      document.getElementById('botConversation').style.display = 'flex';
+      document.querySelector('.main').classList.add('chat-active');
+      renderAgentsList();
+      await refreshBotConversation();
+      if (botConvoInterval) clearInterval(botConvoInterval);
+      botConvoInterval = setInterval(refreshBotConversation, 10000);
+      if (window.innerWidth <= 768) closeSidebar();
+    }
+
+    async function refreshBotConversation() {
+      try {
+        const response = await fetch('/api/bot-conversation');
+        if (!response.ok) throw new Error('Failed to fetch');
+        const data = await response.json();
+        renderBotMessages(data.messages || []);
+      } catch (e) {
+        document.getElementById('botMessages').innerHTML = '<div style="text-align:center;color:#f38ba8;padding:40px;">Unable to load conversation. Are Steve and Alice running?</div>';
+      }
+    }
+
+    function renderBotMessages(messages) {
+      const container = document.getElementById('botMessages');
+      const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      container.innerHTML = '';
+      messages.forEach(msg => {
+        const speaker = msg.speaker.toLowerCase();
+        const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+        const div = document.createElement('div');
+        div.className = 'bot-msg ' + speaker;
+        const avatar = speaker === 'steve' ? 'S' : 'A';
+        const name = speaker === 'steve' ? 'Steve' : 'Alice';
+        const topicHtml = msg.topic ? '<span class="msg-topic">' + msg.topic + '</span>' : '';
+        div.innerHTML = '<div class="msg-avatar">' + avatar + '</div><div class="msg-bubble"><div class="msg-header">' + name + ' <span class="msg-time">' + time + '</span>' + topicHtml + '</div><div class="msg-content">' + escapeHtml(msg.message).substring(0, 800) + (msg.message.length > 800 ? '...' : '') + '</div></div>';
+        container.appendChild(div);
+      });
+      if (wasAtBottom || container.children.length <= 5) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
     async function sendMessage() {
       const input = document.getElementById('input');
       const message = input.value.trim();
@@ -908,6 +1011,26 @@ app.get('/api/agents/status', (req, res) => {
 
 app.get('/api/history', (req, res) => {
   res.json(messageHistory);
+});
+
+// Bot-to-bot conversation endpoint
+app.get('/api/bot-conversation', async (req, res) => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch('http://steve-bot.holm.svc.cluster.local:8080/api/conversations?limit=50', {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (response.ok) {
+      const data = await response.json();
+      res.json(data);
+    } else {
+      res.status(502).json({ error: 'Failed to fetch bot conversation' });
+    }
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
 });
 
 app.delete('/api/history', (req, res) => {

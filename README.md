@@ -79,7 +79,23 @@ docker build -t holmos-shell .
 kubectl apply -f deployment.yaml
 ```
 
-## Credentials
+## Remote Access
+
+### Tailscale VPN (Recommended)
+
+Secure access to the cluster from anywhere via Tailscale:
+
+```bash
+# Deploy subnet router to cluster
+kubectl apply -f services/tailscale/deployment.yaml
+
+# Or install directly on nodes
+curl -fsSL https://raw.githubusercontent.com/timholm/HolmOS/main/scripts/setup-tailscale.sh | sudo bash
+```
+
+See [services/tailscale/README.md](services/tailscale/README.md) for full setup instructions.
+
+### Local Network
 
 - **SSH**: `rpi1@192.168.8.197`
 - **Registry**: `10.110.67.87:5000`

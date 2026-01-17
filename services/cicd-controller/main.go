@@ -528,27 +528,10 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					Affinity: &corev1.Affinity{
-						NodeAffinity: &corev1.NodeAffinity{
-							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-								NodeSelectorTerms: []corev1.NodeSelectorTerm{
-									{
-										MatchExpressions: []corev1.NodeSelectorRequirement{
-											{
-												Key:      "kubernetes.io/hostname",
-												Operator: corev1.NodeSelectorOpIn,
-												Values:   []string{"rpi-1"},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
 					InitContainers: []corev1.Container{
 						{
 							Name:  "git-clone",
-							Image: "bitnami/git:latest",
+							Image: "alpine/git:latest",
 							Command: []string{"sh", "-c"},
 							Args: []string{
 								func() string {

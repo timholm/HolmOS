@@ -91,6 +91,7 @@ type BuildJob struct {
 	PipelineID  string            `json:"pipelineId"`
 	Pipeline    string            `json:"pipeline"`
 	Repo        string            `json:"repo"`
+	RepoURL     string            `json:"repoUrl"`
 	Branch      string            `json:"branch"`
 	Commit      string            `json:"commit"`
 	Author      string            `json:"author"`
@@ -533,8 +534,15 @@ func executeKanikoBuild(execution *PipelineExecution, stage PipelineStage, job *
 							Image: "alpine/git:latest",
 							Command: []string{"sh", "-c"},
 							Args: []string{
-								fmt.Sprintf("set -ex && echo 'Cloning repository %s branch %s...' && git clone --depth 1 --branch %s %s/git/%s.git /workspace && echo 'Clone successful' && ls -la /workspace",
-									job.Repo, job.Branch, job.Branch, holmGitURL, job.Repo),
+								func() string {
+									// Use pipeline's repoUrl if set, otherwise construct from HolmGit
+									repoURL := job.RepoURL
+									if repoURL == "" {
+										repoURL = fmt.Sprintf("%s/git/%s.git", holmGitURL, job.Repo)
+									}
+									return fmt.Sprintf("set -ex && echo 'Cloning repository %s branch %s...' && git clone --depth 1 --branch %s %s /workspace && echo 'Clone successful' && ls -la /workspace",
+										job.Repo, job.Branch, job.Branch, repoURL)
+								}(),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "workspace", MountPath: "/workspace"},
@@ -1692,6 +1700,7 @@ func processTrigger(event *WebhookEvent) {
 				PipelineID: pipeline.ID,
 				Pipeline:   pipeline.Name,
 				Repo:       event.Repo,
+				RepoURL:    pipeline.RepoURL,
 				Branch:     event.Branch,
 				Commit:     event.Commit,
 				Author:     event.Author,

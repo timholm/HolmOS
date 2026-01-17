@@ -1,0 +1,68 @@
+# RBAC for AI Bots - Read-only cluster access
+# Steve and Alice need to observe and analyze the cluster
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-bot
+  namespace: holm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ai-bot-reader
+rules:
+# Core resources - read only
+- apiGroups: [""]
+  resources:
+  - pods
+  - pods/log
+  - services
+  - endpoints
+  - configmaps
+  - secrets
+  - namespaces
+  - nodes
+  - persistentvolumes
+  - persistentvolumeclaims
+  - events
+  - resourcequotas
+  - limitranges
+  verbs: ["get", "list", "watch"]
+# Apps resources
+- apiGroups: ["apps"]
+  resources:
+  - deployments
+  - replicasets
+  - statefulsets
+  - daemonsets
+  verbs: ["get", "list", "watch"]
+# Batch resources
+- apiGroups: ["batch"]
+  resources:
+  - jobs
+  - cronjobs
+  verbs: ["get", "list", "watch"]
+# Networking
+- apiGroups: ["networking.k8s.io"]
+  resources:
+  - ingresses
+  - networkpolicies
+  verbs: ["get", "list", "watch"]
+# Custom resources (HolmOS)
+- apiGroups: ["holmos.io"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ai-bot-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ai-bot-reader
+subjects:
+- kind: ServiceAccount
+  name: ai-bot
+  namespace: holm

@@ -1,0 +1,196 @@
+# AI Bots Deployment - Steve and Alice talking 24/7
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-bots-data
+  namespace: holm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Steve Bot - The Visionary (deepseek-r1)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: steve-bot
+  namespace: holm
+  labels:
+    app: steve-bot
+    holmos.io/component: ai-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: steve-bot
+  template:
+    metadata:
+      labels:
+        app: steve-bot
+    spec:
+      serviceAccountName: ai-bot
+      containers:
+      - name: steve-bot
+        image: 192.168.8.197:31500/ai-bots:latest
+        command: ["python3", "/app/steve.py"]
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: OLLAMA_URL
+          value: "http://192.168.8.230:11434"
+        - name: OLLAMA_MODEL
+          value: "deepseek-r1:7b"
+        - name: ALICE_URL
+          value: "http://alice-bot.holm.svc.cluster.local:8080"
+        - name: DB_PATH
+          value: "/data/conversations.db"
+        - name: CONVERSATION_INTERVAL
+          value: "300"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: ai-bots-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: steve-bot
+  namespace: holm
+  labels:
+    app: steve-bot
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30099
+    protocol: TCP
+    name: http
+  selector:
+    app: steve-bot
+---
+# Alice Bot - The Curious Explorer (gemma3)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alice-bot
+  namespace: holm
+  labels:
+    app: alice-bot
+    holmos.io/component: ai-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alice-bot
+  template:
+    metadata:
+      labels:
+        app: alice-bot
+    spec:
+      serviceAccountName: ai-bot
+      initContainers:
+      - name: git-clone
+        image: alpine/git:latest
+        command: ["sh", "-c"]
+        args:
+        - |
+          git clone --depth 1 https://github.com/timholm/HolmOS.git /repo
+          echo "Cloned $(ls /repo/services | wc -l) services"
+        volumeMounts:
+        - name: repo
+          mountPath: /repo
+      containers:
+      - name: alice-bot
+        image: 192.168.8.197:31500/ai-bots:latest
+        command: ["python3", "/app/alice.py"]
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: OLLAMA_URL
+          value: "http://192.168.8.230:11434"
+        - name: OLLAMA_MODEL
+          value: "gemma3"
+        - name: STEVE_URL
+          value: "http://steve-bot.holm.svc.cluster.local:8080"
+        - name: DB_PATH
+          value: "/data/conversations.db"
+        - name: REPO_PATH
+          value: "/repo"
+        - name: CONVERSATION_INTERVAL
+          value: "300"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: repo
+          mountPath: /repo
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: ai-bots-data
+      - name: repo
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alice-bot
+  namespace: holm
+  labels:
+    app: alice-bot
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30668
+    protocol: TCP
+    name: http
+  selector:
+    app: alice-bot

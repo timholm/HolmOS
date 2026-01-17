@@ -13,8 +13,32 @@ app.use(express.json());
 let messageHistory = [];
 const MAX_HISTORY = 500;
 
-// All 12 AI Agent configurations with personalities
+// All AI Agent configurations with personalities (now 14 agents!)
 const agents = {
+  steve: {
+    name: 'Steve',
+    color: '#1a1a2e',
+    avatar: 'S',
+    description: 'Visionary Architect',
+    personality: 'The legendary tech visionary, now watching over your Kubernetes cluster. Brutally honest about infrastructure.',
+    greeting: 'Stay hungry, stay foolish. Let me see what we can make insanely great today.',
+    endpoint: 'http://steve-bot.holm.svc.cluster.local:8080',
+    wsEndpoint: 'ws://steve-bot.holm.svc.cluster.local:8080/ws',
+    keywords: ['steve', 'vision', 'architecture', 'improve', 'design', 'perfect', 'simple', 'excellence', 'quality'],
+    capabilities: ['AI-powered cluster analysis', 'Architecture recommendations', 'Quality enforcement', 'Strategic planning']
+  },
+  alice: {
+    name: 'Alice',
+    color: '#ff6b9d',
+    avatar: 'A',
+    description: 'Curious Explorer',
+    personality: 'The curious explorer from Wonderland, tumbling through rabbit holes in your codebase.',
+    greeting: 'Curiouser and curiouser! What mysteries shall we explore in this Wonderland?',
+    endpoint: 'http://alice-bot.holm.svc.cluster.local:8080',
+    wsEndpoint: 'ws://alice-bot.holm.svc.cluster.local:8080/ws',
+    keywords: ['alice', 'explore', 'code', 'function', 'api', 'discover', 'curious', 'missing', 'documentation'],
+    capabilities: ['AI-powered code exploration', 'API coverage analysis', 'Documentation discovery', 'Pattern recognition']
+  },
   nova: {
     name: 'Nova',
     color: '#9b59b6',
@@ -561,7 +585,7 @@ const chatUIHTML = `<!DOCTYPE html>
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <h1>Chat Hub</h1>
-        <p>12 AI Agents at your service</p>
+        <p>14 AI Agents at your service</p>
         <div class="connection-status">
           <span class="status-dot" id="connectionDot"></span>
           <span id="connectionText">Connected</span>
@@ -597,7 +621,7 @@ const chatUIHTML = `<!DOCTYPE html>
       </div>
       <div id="welcomeScreen" class="welcome">
         <h2>Welcome to HolmOS Chat Hub</h2>
-        <p>Your gateway to 12 specialized AI agents. Each agent has unique capabilities to help you manage and monitor your Kubernetes cluster. Select an agent to begin.</p>
+        <p>Your gateway to 14 AI agents including Steve (the visionary) and Alice (the curious explorer). Each agent has unique capabilities to help you manage and monitor your Kubernetes cluster. Select an agent to begin.</p>
         <div class="agents-grid" id="agentsGrid"></div>
       </div>
       <div id="messages" style="display: none;"></div>
@@ -937,7 +961,7 @@ wss.on('connection', (ws) => {
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
   console.log('Chat Hub running on port ' + PORT);
-  console.log('12 AI Agents configured');
+  console.log('14 AI Agents configured (including Steve + Alice AI bots)');
   console.log('WebSocket server ready');
   setTimeout(() => {
     console.log('Initializing agent connections...');

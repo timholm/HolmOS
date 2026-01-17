@@ -8,21 +8,25 @@ FROM alpine:latest
 RUN apk --no-cache add \
     dnsmasq \
     tftp-hpa \
-    syslinux \
     nginx \
     curl \
     wget \
-    ca-certificates
+    ca-certificates \
+    xz
 
 # Create directories
 RUN mkdir -p /tftpboot/pxelinux.cfg /var/www/html/autoinstall /iso
 
-# Copy PXELINUX files
-RUN cp /usr/share/syslinux/pxelinux.0 /tftpboot/ && \
-    cp /usr/share/syslinux/ldlinux.c32 /tftpboot/ && \
-    cp /usr/share/syslinux/libutil.c32 /tftpboot/ && \
-    cp /usr/share/syslinux/menu.c32 /tftpboot/ && \
-    cp /usr/share/syslinux/libcom32.c32 /tftpboot/
+# Download x86_64 SYSLINUX for PXE boot (these are architecture-independent boot files for x86 clients)
+RUN cd /tmp && \
+    wget -q https://mirrors.edge.kernel.org/pub/linux/utils/boot/syslinux/syslinux-6.03.tar.xz && \
+    tar -xf syslinux-6.03.tar.xz && \
+    cp syslinux-6.03/bios/core/pxelinux.0 /tftpboot/ && \
+    cp syslinux-6.03/bios/com32/elflink/ldlinux/ldlinux.c32 /tftpboot/ && \
+    cp syslinux-6.03/bios/com32/libutil/libutil.c32 /tftpboot/ && \
+    cp syslinux-6.03/bios/com32/menu/menu.c32 /tftpboot/ && \
+    cp syslinux-6.03/bios/com32/lib/libcom32.c32 /tftpboot/ && \
+    rm -rf /tmp/syslinux*
 
 WORKDIR /app
 COPY --from=builder /app/pxe-server .

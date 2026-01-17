@@ -367,6 +367,320 @@ def api_terminal_url(hostname):
     })
 
 
+@app.route("/api/v1/nodes/<hostname>/details")
+def api_node_details(hostname):
+    """Get detailed information for a single node"""
+    with cache_lock:
+        node = next((n for n in node_cache["nodes"] if n["hostname"] == hostname), None)
+
+    if not node:
+        # Try fresh lookup
+        nodes = get_node_list()
+        node_config = next((n for n in nodes if n.get("hostname") == hostname), None)
+        if not node_config:
+            return jsonify({"success": False, "error": "Node not found"}), 404
+
+        # Ping to get current status
+        online, latency = ping_node(node_config.get("ip", ""))
+        node = {
+            "hostname": hostname,
+            "ip": node_config.get("ip", ""),
+            "online": online,
+            "latency_ms": latency,
+            "is_control_plane": hostname == "rpi-1",
+            "is_nas": hostname == "openmediavault",
+            "role": "control-plane" if hostname == "rpi-1" else ("nas" if hostname == "openmediavault" else "worker")
+        }
+
+    return jsonify({"success": True, "data": node})
+
+
+@app.route("/api/v1/nodes/online")
+def api_nodes_online():
+    """Get all online nodes"""
+    with cache_lock:
+        if time.time() - node_cache["last_updated"] < 10 and node_cache["nodes"]:
+            online_nodes = [n for n in node_cache["nodes"] if n.get("online")]
+            return jsonify({"success": True, "data": online_nodes})
+
+    nodes = update_node_cache()
+    online_nodes = [n for n in nodes if n.get("online")]
+    return jsonify({"success": True, "data": online_nodes})
+
+
+@app.route("/api/v1/nodes/offline")
+def api_nodes_offline():
+    """Get all offline nodes"""
+    with cache_lock:
+        if time.time() - node_cache["last_updated"] < 10 and node_cache["nodes"]:
+            offline_nodes = [n for n in node_cache["nodes"] if not n.get("online")]
+            return jsonify({"success": True, "data": offline_nodes})
+
+    nodes = update_node_cache()
+    offline_nodes = [n for n in nodes if not n.get("online")]
+    return jsonify({"success": True, "data": offline_nodes})
+
+
+@app.route("/api/v1/nodes/<hostname>/exec", methods=["POST"])
+def api_exec_command(hostname):
+    """Execute a custom command on a specific node"""
+    with cache_lock:
+        node = next((n for n in node_cache["nodes"] if n["hostname"] == hostname), None)
+
+    if not node:
+        nodes = get_node_list()
+        node = next((n for n in nodes if n.get("hostname") == hostname), None)
+
+    if not node:
+        return jsonify({"success": False, "error": "Node not found"}), 404
+
+    data = request.get_json() or {}
+    command = data.get("command", "")
+    timeout = min(data.get("timeout", 60), 300)  # Max 5 minutes
+
+    if not command:
+        return jsonify({"success": False, "error": "Command is required"}), 400
+
+    # Security: block dangerous commands
+    dangerous_patterns = ["rm -rf /", "mkfs", "> /dev/", "dd if=", ":(){ :|:& };:"]
+    for pattern in dangerous_patterns:
+        if pattern in command:
+            return jsonify({"success": False, "error": "Command contains dangerous pattern"}), 403
+
+    result = run_ssh_command(node["ip"], command, timeout=timeout)
+
+    return jsonify({
+        "success": result["success"],
+        "data": {
+            "hostname": hostname,
+            "command": command,
+            "output": result.get("output", "")[:5000],
+            "error": result.get("error", "")[:1000],
+            "exit_code": result.get("exit_code", -1)
+        }
+    })
+
+
+@app.route("/api/v1/nodes/<hostname>/metrics")
+def api_node_metrics(hostname):
+    """Get system metrics for a specific node (CPU, memory, disk)"""
+    with cache_lock:
+        node = next((n for n in node_cache["nodes"] if n["hostname"] == hostname), None)
+
+    if not node:
+        nodes = get_node_list()
+        node = next((n for n in nodes if n.get("hostname") == hostname), None)
+
+    if not node:
+        return jsonify({"success": False, "error": "Node not found"}), 404
+
+    # Gather metrics via SSH
+    metrics_commands = {
+        "cpu": "top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d'%' -f1",
+        "memory": "free -m | awk 'NR==2{printf \"%d %d %.1f\", $3, $2, $3*100/$2}'",
+        "disk": "df -h / | awk 'NR==2{printf \"%s %s %s\", $3, $2, $5}'",
+        "uptime": "uptime -p",
+        "load": "cat /proc/loadavg | awk '{print $1, $2, $3}'"
+    }
+
+    metrics = {"hostname": hostname, "ip": node["ip"]}
+
+    for metric_name, cmd in metrics_commands.items():
+        result = run_ssh_command(node["ip"], cmd, timeout=10)
+        if result["success"]:
+            output = result["output"].strip()
+            if metric_name == "memory":
+                parts = output.split()
+                if len(parts) >= 3:
+                    metrics["memory"] = {
+                        "used_mb": int(parts[0]),
+                        "total_mb": int(parts[1]),
+                        "percent": float(parts[2])
+                    }
+            elif metric_name == "disk":
+                parts = output.split()
+                if len(parts) >= 3:
+                    metrics["disk"] = {
+                        "used": parts[0],
+                        "total": parts[1],
+                        "percent": parts[2]
+                    }
+            elif metric_name == "load":
+                parts = output.split()
+                if len(parts) >= 3:
+                    metrics["load"] = {
+                        "1min": float(parts[0]),
+                        "5min": float(parts[1]),
+                        "15min": float(parts[2])
+                    }
+            elif metric_name == "cpu":
+                try:
+                    metrics["cpu_percent"] = float(output)
+                except ValueError:
+                    metrics["cpu_percent"] = None
+            else:
+                metrics[metric_name] = output
+        else:
+            metrics[metric_name] = None
+
+    return jsonify({"success": True, "data": metrics})
+
+
+@app.route("/api/v1/nodes/<hostname>/shutdown", methods=["POST"])
+def api_shutdown_node(hostname):
+    """Shutdown a specific node"""
+    with cache_lock:
+        node = next((n for n in node_cache["nodes"] if n["hostname"] == hostname), None)
+
+    if not node:
+        nodes = get_node_list()
+        node = next((n for n in nodes if n.get("hostname") == hostname), None)
+
+    if not node:
+        return jsonify({"success": False, "error": "Node not found"}), 404
+
+    # Warn if control plane
+    if node.get("hostname") == "rpi-1":
+        data = request.get_json() or {}
+        if not data.get("confirm_control_plane"):
+            return jsonify({
+                "success": False,
+                "error": "This is the control plane node. Set confirm_control_plane=true to proceed."
+            }), 400
+
+    # Start shutdown in background - don't wait for response
+    def do_shutdown():
+        run_ssh_command(node["ip"], "sudo shutdown -h now", timeout=10)
+
+    threading.Thread(target=do_shutdown, daemon=True).start()
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "hostname": hostname,
+            "message": "Shutdown initiated"
+        }
+    })
+
+
+@app.route("/api/v1/cluster/summary")
+def api_cluster_summary():
+    """Get a comprehensive cluster summary"""
+    with cache_lock:
+        nodes = node_cache["nodes"] if node_cache["nodes"] else []
+        last_updated = node_cache["last_updated"]
+
+    if not nodes:
+        nodes = update_node_cache()
+        last_updated = time.time()
+
+    total = len(nodes)
+    online = sum(1 for n in nodes if n.get("online"))
+    offline = total - online
+
+    control_plane = next((n for n in nodes if n.get("is_control_plane")), None)
+    nas = next((n for n in nodes if n.get("is_nas")), None)
+    workers = [n for n in nodes if not n.get("is_control_plane") and not n.get("is_nas")]
+
+    workers_online = sum(1 for n in workers if n.get("online"))
+    workers_total = len(workers)
+
+    avg_latency = 0
+    online_with_latency = [n for n in nodes if n.get("online") and n.get("latency_ms", 0) > 0]
+    if online_with_latency:
+        avg_latency = sum(n["latency_ms"] for n in online_with_latency) / len(online_with_latency)
+
+    health_pct = round((online / total) * 100) if total > 0 else 0
+
+    # Determine cluster status
+    if health_pct == 100:
+        cluster_status = "healthy"
+    elif control_plane and control_plane.get("online") and health_pct >= 50:
+        cluster_status = "degraded"
+    elif control_plane and control_plane.get("online"):
+        cluster_status = "critical"
+    else:
+        cluster_status = "offline"
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "cluster_status": cluster_status,
+            "health_percentage": health_pct,
+            "total_nodes": total,
+            "online_nodes": online,
+            "offline_nodes": offline,
+            "control_plane": {
+                "hostname": control_plane.get("hostname") if control_plane else None,
+                "ip": control_plane.get("ip") if control_plane else None,
+                "online": control_plane.get("online") if control_plane else False
+            },
+            "nas": {
+                "hostname": nas.get("hostname") if nas else None,
+                "ip": nas.get("ip") if nas else None,
+                "online": nas.get("online") if nas else False
+            },
+            "workers": {
+                "total": workers_total,
+                "online": workers_online,
+                "offline": workers_total - workers_online,
+                "nodes": [{"hostname": w["hostname"], "online": w.get("online", False)} for w in workers]
+            },
+            "network": {
+                "average_latency_ms": round(avg_latency, 1)
+            },
+            "last_updated": last_updated,
+            "last_updated_ago_seconds": round(time.time() - last_updated, 1)
+        }
+    })
+
+
+@app.route("/api/v1/reboot-all", methods=["POST"])
+def api_reboot_all():
+    """Reboot all nodes including control plane (use with caution)"""
+    data = request.get_json() or {}
+
+    # Require explicit confirmation
+    if not data.get("confirm"):
+        return jsonify({
+            "success": False,
+            "error": "This will reboot ALL nodes including control plane. Set confirm=true to proceed."
+        }), 400
+
+    results = []
+    nodes = get_node_list()
+
+    # Sort to reboot workers first, then NAS, then control plane last
+    sorted_nodes = sorted(nodes, key=lambda n: (
+        0 if n.get("hostname") not in ["rpi-1", "openmediavault"] else
+        1 if n.get("hostname") == "openmediavault" else 2
+    ))
+
+    def reboot_node(node):
+        """Reboot a single node"""
+        run_ssh_command(node["ip"], "sudo reboot", timeout=10)
+        return {"hostname": node["hostname"], "success": True, "message": "Reboot initiated"}
+
+    for node in sorted_nodes:
+        # Start reboot in background with slight delay between nodes
+        threading.Thread(target=reboot_node, args=(node,), daemon=True).start()
+        results.append({
+            "hostname": node["hostname"],
+            "success": True,
+            "message": "Reboot initiated"
+        })
+        time.sleep(0.5)  # Small delay between initiating reboots
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "message": "All nodes are being rebooted",
+            "results": results,
+            "warning": "Cluster will be unavailable for several minutes"
+        }
+    })
+
+
 def get_dashboard_html():
     return '''<!DOCTYPE html>
 <html lang="en">

@@ -110,6 +110,31 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event_broker_requests_total %d\n", atomic.LoadUint64(&requestCounter))
 }
 
+func statsHandler(w http.ResponseWriter, r *http.Request) {
+	atomic.AddUint64(&requestCounter, 1)
+
+	stats := map[string]interface{}{
+		"running": false,
+	}
+
+	if natsServer != nil && natsServer.Running() {
+		stats["running"] = true
+		stats["connections"] = natsServer.NumClients()
+		stats["subscriptions"] = natsServer.NumSubscriptions()
+		stats["routes"] = natsServer.NumRoutes()
+		stats["remotes"] = natsServer.NumRemotes()
+		stats["in_msgs"] = natsServer.Varz().InMsgs
+		stats["out_msgs"] = natsServer.Varz().OutMsgs
+		stats["in_bytes"] = natsServer.Varz().InBytes
+		stats["out_bytes"] = natsServer.Varz().OutBytes
+		stats["slow_consumers"] = natsServer.Varz().SlowConsumers
+		stats["uptime"] = natsServer.Varz().Now.Sub(natsServer.Varz().Start).String()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
 func uiHandler(w http.ResponseWriter, r *http.Request) {
 	running := natsServer != nil && natsServer.Running()
 	statusColor := ColorGreen
@@ -193,6 +218,7 @@ func main() {
 
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/metrics", metricsHandler)
+	http.HandleFunc("/stats", statsHandler)
 	http.HandleFunc("/", uiHandler)
 
 	port := os.Getenv("HTTP_PORT")

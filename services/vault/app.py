@@ -246,6 +246,341 @@ def list_secrets():
     log_audit('LIST', '*', details=f"Listed {len(result)} secrets")
     return result
 
+def list_secret_versions(name: str):
+    """List all versions of a secret"""
+    secrets_data = load_secrets()
+    if name not in secrets_data:
+        raise KeyError(f"Secret '{name}' not found")
+
+    secret = secrets_data[name]
+    versions = []
+    for v in secret['versions']:
+        versions.append({
+            'version': v['version'],
+            'created_at': v['created_at'],
+            'metadata': v.get('metadata', {})
+        })
+    log_audit('LIST_VERSIONS', name, details=f"Listed {len(versions)} versions")
+    return {
+        'name': name,
+        'current_version': secret['current_version'],
+        'versions': versions
+    }
+
+def rollback_secret(name: str, version: int):
+    """Rollback a secret to a previous version"""
+    with file_lock:
+        secrets_data = load_secrets()
+        if name not in secrets_data:
+            raise KeyError(f"Secret '{name}' not found")
+
+        secret = secrets_data[name]
+        target_version = None
+        for v in secret['versions']:
+            if v['version'] == version:
+                target_version = v
+                break
+
+        if not target_version:
+            raise KeyError(f"Version {version} not found for secret '{name}'")
+
+        # Create a new version with the old value
+        new_version = secret['current_version'] + 1
+        version_entry = {
+            'version': new_version,
+            'encrypted': target_version['encrypted'],
+            'created_at': datetime.now().isoformat(),
+            'metadata': {**target_version.get('metadata', {}), 'rollback_from': version}
+        }
+
+        secret['versions'].append(version_entry)
+        secret['current_version'] = new_version
+        secret['updated_at'] = datetime.now().isoformat()
+
+        save_secrets(secrets_data)
+        log_audit('ROLLBACK', name, details=f"Rolled back to version {version}, created version {new_version}")
+        return version_entry
+
+def update_secret_metadata(name: str, metadata: dict, version: int = None):
+    """Update metadata for a secret without changing the value"""
+    with file_lock:
+        secrets_data = load_secrets()
+        if name not in secrets_data:
+            raise KeyError(f"Secret '{name}' not found")
+
+        secret = secrets_data[name]
+        target_version = version or secret['current_version']
+
+        for v in secret['versions']:
+            if v['version'] == target_version:
+                v['metadata'] = {**v.get('metadata', {}), **metadata}
+                save_secrets(secrets_data)
+                log_audit('UPDATE_METADATA', name, details=f"Updated metadata for version {target_version}")
+                return {'version': target_version, 'metadata': v['metadata']}
+
+        raise KeyError(f"Version {target_version} not found for secret '{name}'")
+
+def bulk_create_secrets(secrets_list: list):
+    """Create multiple secrets at once"""
+    results = {'created': [], 'errors': []}
+    for item in secrets_list:
+        try:
+            name = item.get('name')
+            value = item.get('value')
+            metadata = item.get('metadata', {})
+            if not name or not value:
+                results['errors'].append({'name': name, 'error': 'Name and value are required'})
+                continue
+            create_secret(name, value, metadata)
+            results['created'].append(name)
+        except Exception as e:
+            results['errors'].append({'name': item.get('name'), 'error': str(e)})
+    return results
+
+def bulk_delete_secrets(names: list):
+    """Delete multiple secrets at once"""
+    results = {'deleted': [], 'errors': []}
+    for name in names:
+        try:
+            delete_secret(name)
+            results['deleted'].append(name)
+        except Exception as e:
+            results['errors'].append({'name': name, 'error': str(e)})
+    return results
+
+def rotate_master_key():
+    """Rotate the master encryption key and re-encrypt all secrets"""
+    with file_lock:
+        secrets_data = load_secrets()
+
+        # Decrypt all values with old key
+        decrypted_secrets = {}
+        for name, secret in secrets_data.items():
+            decrypted_secrets[name] = {
+                'secret': secret,
+                'decrypted_versions': []
+            }
+            for v in secret['versions']:
+                try:
+                    decrypted_value = decrypt_value(v['encrypted'])
+                    decrypted_secrets[name]['decrypted_versions'].append({
+                        'version': v['version'],
+                        'value': decrypted_value,
+                        'created_at': v['created_at'],
+                        'metadata': v.get('metadata', {})
+                    })
+                except Exception:
+                    # If decryption fails, skip this version
+                    pass
+
+        # Generate new key
+        new_key = secrets.token_bytes(32)
+
+        # Backup old key
+        if os.path.exists(KEY_FILE):
+            backup_file = KEY_FILE + '.backup.' + datetime.now().strftime('%Y%m%d%H%M%S')
+            with open(KEY_FILE, 'rb') as f:
+                old_key = f.read()
+            with open(backup_file, 'wb') as f:
+                f.write(old_key)
+            os.chmod(backup_file, 0o600)
+
+        # Write new key
+        with open(KEY_FILE, 'wb') as f:
+            f.write(new_key)
+        os.chmod(KEY_FILE, 0o600)
+
+        # Re-encrypt all secrets with new key
+        for name, data in decrypted_secrets.items():
+            secret = data['secret']
+            new_versions = []
+            for dv in data['decrypted_versions']:
+                encrypted = encrypt_value(dv['value'])
+                new_versions.append({
+                    'version': dv['version'],
+                    'encrypted': encrypted,
+                    'created_at': dv['created_at'],
+                    'metadata': dv['metadata']
+                })
+            secret['versions'] = new_versions
+            secrets_data[name] = secret
+
+        save_secrets(secrets_data)
+        log_audit('KEY_ROTATE', '*', details='Master key rotated, all secrets re-encrypted')
+        return {'success': True, 'secrets_reencrypted': len(secrets_data)}
+
+def get_vault_stats():
+    """Get vault statistics"""
+    secrets_data = load_secrets()
+    total_secrets = len(secrets_data)
+    total_versions = sum(len(s['versions']) for s in secrets_data.values())
+
+    # Get audit log stats
+    audit_logs = get_audit_logs(1000)
+    action_counts = {}
+    for log in audit_logs:
+        action = log.get('action', 'UNKNOWN')
+        action_counts[action] = action_counts.get(action, 0) + 1
+
+    # Key info
+    key_exists = os.path.exists(KEY_FILE)
+    key_created = None
+    if key_exists:
+        key_created = datetime.fromtimestamp(os.path.getctime(KEY_FILE)).isoformat()
+
+    return {
+        'total_secrets': total_secrets,
+        'total_versions': total_versions,
+        'encryption': 'AES-256-GCM',
+        'key_exists': key_exists,
+        'key_created': key_created,
+        'audit_action_counts': action_counts,
+        'total_audit_entries': len(audit_logs)
+    }
+
+def search_secrets(query: str, search_metadata: bool = True):
+    """Search secrets by name or metadata"""
+    secrets_data = load_secrets()
+    results = []
+    query_lower = query.lower()
+
+    for name, data in secrets_data.items():
+        matched = False
+        match_reason = []
+
+        # Search in name
+        if query_lower in name.lower():
+            matched = True
+            match_reason.append('name')
+
+        # Search in metadata
+        if search_metadata:
+            for v in data['versions']:
+                metadata = v.get('metadata', {})
+                for key, value in metadata.items():
+                    if query_lower in str(key).lower() or query_lower in str(value).lower():
+                        matched = True
+                        match_reason.append(f'metadata.{key}')
+                        break
+
+        if matched:
+            results.append({
+                'name': name,
+                'current_version': data['current_version'],
+                'version_count': len(data['versions']),
+                'created_at': data['created_at'],
+                'updated_at': data['updated_at'],
+                'match_reason': list(set(match_reason))
+            })
+
+    log_audit('SEARCH', '*', details=f"Searched for '{query}', found {len(results)} results")
+    return results
+
+def secret_exists(name: str):
+    """Check if a secret exists"""
+    secrets_data = load_secrets()
+    return name in secrets_data
+
+def export_secrets_metadata():
+    """Export secrets metadata (without values) for backup purposes"""
+    secrets_data = load_secrets()
+    export_data = {
+        'exported_at': datetime.now().isoformat(),
+        'total_secrets': len(secrets_data),
+        'secrets': []
+    }
+
+    for name, data in secrets_data.items():
+        secret_meta = {
+            'name': name,
+            'current_version': data['current_version'],
+            'created_at': data['created_at'],
+            'updated_at': data['updated_at'],
+            'versions': []
+        }
+        for v in data['versions']:
+            secret_meta['versions'].append({
+                'version': v['version'],
+                'created_at': v['created_at'],
+                'metadata': v.get('metadata', {})
+            })
+        export_data['secrets'].append(secret_meta)
+
+    log_audit('EXPORT', '*', details=f"Exported metadata for {len(secrets_data)} secrets")
+    return export_data
+
+def get_key_info():
+    """Get information about the master encryption key"""
+    key_exists = os.path.exists(KEY_FILE)
+    if not key_exists:
+        return {
+            'exists': False,
+            'created_at': None,
+            'algorithm': 'AES-256-GCM',
+            'key_size': 256
+        }
+
+    key_stat = os.stat(KEY_FILE)
+    return {
+        'exists': True,
+        'created_at': datetime.fromtimestamp(key_stat.st_ctime).isoformat(),
+        'modified_at': datetime.fromtimestamp(key_stat.st_mtime).isoformat(),
+        'algorithm': 'AES-256-GCM',
+        'key_size': 256,
+        'key_file_permissions': oct(key_stat.st_mode)[-3:]
+    }
+
+def copy_secret(source_name: str, dest_name: str, include_all_versions: bool = False):
+    """Copy a secret to a new name"""
+    with file_lock:
+        secrets_data = load_secrets()
+        if source_name not in secrets_data:
+            raise KeyError(f"Secret '{source_name}' not found")
+        if dest_name in secrets_data:
+            raise ValueError(f"Secret '{dest_name}' already exists")
+
+        source = secrets_data[source_name]
+
+        if include_all_versions:
+            # Copy all versions
+            new_secret = {
+                'current_version': source['current_version'],
+                'versions': [],
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
+            }
+            for v in source['versions']:
+                new_secret['versions'].append({
+                    'version': v['version'],
+                    'encrypted': v['encrypted'],
+                    'created_at': datetime.now().isoformat(),
+                    'metadata': {**v.get('metadata', {}), 'copied_from': source_name}
+                })
+        else:
+            # Copy only current version as version 1
+            current_version = None
+            for v in source['versions']:
+                if v['version'] == source['current_version']:
+                    current_version = v
+                    break
+
+            new_secret = {
+                'current_version': 1,
+                'versions': [{
+                    'version': 1,
+                    'encrypted': current_version['encrypted'],
+                    'created_at': datetime.now().isoformat(),
+                    'metadata': {**current_version.get('metadata', {}), 'copied_from': source_name}
+                }],
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
+            }
+
+        secrets_data[dest_name] = new_secret
+        save_secrets(secrets_data)
+        log_audit('COPY', source_name, details=f"Copied to '{dest_name}'")
+        return {'source': source_name, 'destination': dest_name, 'versions_copied': len(new_secret['versions'])}
+
 # ============ HTML Template ============
 
 VAULT_HTML = '''
@@ -1032,6 +1367,152 @@ def health():
         'motto': VAULT_MOTTO,
         'encryption': 'AES-256-GCM'
     })
+
+# ============ New API Endpoints ============
+
+@app.route('/api/secrets/<name>/versions', methods=['GET'])
+def api_list_secret_versions(name):
+    """List all versions of a secret"""
+    try:
+        result = list_secret_versions(name)
+        return jsonify(result)
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/<name>/rollback', methods=['POST'])
+def api_rollback_secret(name):
+    """Rollback a secret to a previous version"""
+    try:
+        data = request.get_json()
+        version = data.get('version')
+        if not version:
+            return jsonify({'error': 'Version is required'}), 400
+        result = rollback_secret(name, version)
+        return jsonify({'success': True, 'new_version': result['version']})
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/<name>/metadata', methods=['PATCH'])
+def api_update_secret_metadata(name):
+    """Update metadata for a secret without changing the value"""
+    try:
+        data = request.get_json()
+        metadata = data.get('metadata', {})
+        version = data.get('version')
+        if not metadata:
+            return jsonify({'error': 'Metadata is required'}), 400
+        result = update_secret_metadata(name, metadata, version)
+        return jsonify({'success': True, 'result': result})
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/bulk', methods=['POST'])
+def api_bulk_create_secrets():
+    """Create multiple secrets at once"""
+    try:
+        data = request.get_json()
+        secrets_list = data.get('secrets', [])
+        if not secrets_list:
+            return jsonify({'error': 'Secrets list is required'}), 400
+        result = bulk_create_secrets(secrets_list)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/bulk', methods=['DELETE'])
+def api_bulk_delete_secrets():
+    """Delete multiple secrets at once"""
+    try:
+        data = request.get_json()
+        names = data.get('names', [])
+        if not names:
+            return jsonify({'error': 'Names list is required'}), 400
+        result = bulk_delete_secrets(names)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/key/rotate', methods=['POST'])
+def api_rotate_master_key():
+    """Rotate the master encryption key and re-encrypt all secrets"""
+    try:
+        result = rotate_master_key()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/key/info', methods=['GET'])
+def api_get_key_info():
+    """Get information about the master encryption key"""
+    try:
+        result = get_key_info()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/stats', methods=['GET'])
+def api_get_vault_stats():
+    """Get vault statistics"""
+    try:
+        result = get_vault_stats()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/search', methods=['GET'])
+def api_search_secrets():
+    """Search secrets by name or metadata"""
+    try:
+        query = request.args.get('q', '')
+        if not query:
+            return jsonify({'error': 'Query parameter q is required'}), 400
+        search_metadata = request.args.get('metadata', 'true').lower() == 'true'
+        result = search_secrets(query, search_metadata)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/<name>/exists', methods=['GET'])
+def api_secret_exists(name):
+    """Check if a secret exists"""
+    try:
+        exists = secret_exists(name)
+        return jsonify({'name': name, 'exists': exists})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/export', methods=['GET'])
+def api_export_secrets_metadata():
+    """Export secrets metadata (without values) for backup purposes"""
+    try:
+        result = export_secrets_metadata()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/secrets/<name>/copy', methods=['POST'])
+def api_copy_secret(name):
+    """Copy a secret to a new name"""
+    try:
+        data = request.get_json()
+        dest_name = data.get('destination')
+        if not dest_name:
+            return jsonify({'error': 'Destination name is required'}), 400
+        include_all_versions = data.get('include_all_versions', False)
+        result = copy_secret(name, dest_name, include_all_versions)
+        return jsonify({'success': True, 'result': result})
+    except KeyError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Ensure data directory exists

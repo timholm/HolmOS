@@ -800,6 +800,9 @@ func main() {
 
 	r := mux.NewRouter()
 
+	// Register new API endpoints (must be before generic routes for proper matching)
+	RegisterAPIRoutes(r)
+
 	// Core endpoints
 	r.HandleFunc("/", indexHandler).Methods("GET")
 	r.HandleFunc("/health", healthHandler).Methods("GET")

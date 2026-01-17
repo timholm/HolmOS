@@ -279,6 +279,55 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event_replay_requests_total %d\n", atomic.LoadUint64(&requestCounter))
 }
 
+func eventsHandler(w http.ResponseWriter, r *http.Request) {
+	if db == nil {
+		http.Error(w, "Database not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, type, source, data, error, retries, created_at, last_retry
+		FROM failed_events
+		ORDER BY created_at DESC LIMIT 100
+	`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var events []map[string]interface{}
+	for rows.Next() {
+		var event FailedEvent
+		var lastRetry sql.NullTime
+
+		if err := rows.Scan(&event.ID, &event.Type, &event.Source, &event.Data, &event.Error, &event.Retries, &event.CreatedAt, &lastRetry); err != nil {
+			continue
+		}
+
+		eventMap := map[string]interface{}{
+			"id":         event.ID,
+			"type":       event.Type,
+			"source":     event.Source,
+			"data":       event.Data,
+			"error":      event.Error,
+			"retries":    event.Retries,
+			"created_at": event.CreatedAt,
+		}
+		if lastRetry.Valid {
+			eventMap["last_retry"] = lastRetry.Time
+		}
+
+		events = append(events, eventMap)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(events)
+}
+
 func replayHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -373,6 +422,7 @@ func main() {
 
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/metrics", metricsHandler)
+	http.HandleFunc("/events", eventsHandler)
 	http.HandleFunc("/replay", replayHandler)
 	http.HandleFunc("/", uiHandler)
 

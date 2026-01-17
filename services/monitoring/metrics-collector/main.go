@@ -365,12 +365,17 @@ func main() {
 	http.HandleFunc("/health", collector.handleHealth)
 	http.HandleFunc("/register", collector.handleRegister)
 
+	// New API endpoints for service management
+	http.HandleFunc("/services", collector.handleListServices)
+	http.HandleFunc("/services/", collector.handleServicesRouter)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 	log.Printf("metrics-collector starting on port %s", port)
 	log.Printf("Endpoints: GET /metrics, GET /collect, GET /health, POST /register")
+	log.Printf("Service API: GET /services, GET /services/{name}/metrics, GET /services/{name}/status, POST /services/{name}/collect, DELETE /services/{name}")
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatalf("Server failed: %v", err)

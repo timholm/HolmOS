@@ -2139,7 +2139,7 @@ def capabilities():
     return jsonify({
         "agent": NOVA_NAME,
         "catchphrase": NOVA_CATCHPHRASE,
-        "version": "3.0.0",
+        "version": "3.1.0",
         "features": [
             "Real-time cluster dashboard",
             "13-node constellation view with animated background",
@@ -2152,6 +2152,22 @@ def capabilities():
             "Node detail modal",
             "Live log streaming",
             "Auto-refresh every 15 seconds"
+        ],
+        "api_endpoints": [
+            {"path": "/api/dashboard", "method": "GET", "description": "Get all dashboard data"},
+            {"path": "/api/nodes", "method": "GET", "description": "List all nodes with details"},
+            {"path": "/api/nodes/<name>", "method": "GET", "description": "Get specific node details"},
+            {"path": "/api/pods", "method": "GET", "description": "List all pods (supports ?namespace=X&status=Y filters)"},
+            {"path": "/api/pods/<namespace>/<name>", "method": "GET", "description": "Get specific pod details"},
+            {"path": "/api/deployments", "method": "GET", "description": "List all deployments (supports ?namespace=X filter)"},
+            {"path": "/api/deployments/<namespace>/<name>", "method": "GET", "description": "Get specific deployment details"},
+            {"path": "/api/metrics", "method": "GET", "description": "Get cluster-wide metrics summary"},
+            {"path": "/api/top-pods", "method": "GET", "description": "Get top resource-consuming pods (supports ?limit=N)"},
+            {"path": "/api/scale", "method": "POST", "description": "Scale a deployment"},
+            {"path": "/api/restart", "method": "POST", "description": "Restart a deployment"},
+            {"path": "/api/logs", "method": "POST", "description": "Get pod logs"},
+            {"path": "/health", "method": "GET", "description": "Health check endpoint"},
+            {"path": "/chat", "method": "POST", "description": "Chat with Nova"}
         ]
     })
 
@@ -2195,6 +2211,218 @@ Or ask me about: status, nodes, pods, deployments"""
         "response": response,
         "agent": NOVA_NAME
     })
+
+# =============================================================================
+# NEW API ENDPOINTS - Individual resource endpoints for external service access
+# =============================================================================
+
+@app.route("/api/nodes", methods=["GET"])
+def api_nodes():
+    """Get all nodes with detailed information."""
+    nodes = get_nodes_detailed()
+    return jsonify({
+        "nodes": nodes,
+        "count": len(nodes),
+        "healthy": sum(1 for n in nodes if n["status"] == "Ready"),
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route("/api/nodes/<name>", methods=["GET"])
+def api_node_detail(name):
+    """Get detailed information for a specific node."""
+    nodes = get_nodes_detailed()
+    node = next((n for n in nodes if n["name"] == name), None)
+
+    if not node:
+        return jsonify({"error": f"Node '{name}' not found"}), 404
+
+    # Get pods running on this node
+    pods = get_pods_detailed()
+    node_pods = [p for p in pods if p.get("node") == name]
+
+    return jsonify({
+        "node": node,
+        "pods": node_pods,
+        "pod_count": len(node_pods),
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route("/api/pods", methods=["GET"])
+def api_pods():
+    """Get all pods with detailed information."""
+    pods = get_pods_detailed()
+
+    # Optional namespace filter
+    namespace = request.args.get("namespace")
+    if namespace:
+        pods = [p for p in pods if p.get("namespace") == namespace]
+
+    # Optional status filter
+    status = request.args.get("status")
+    if status:
+        pods = [p for p in pods if p.get("status") == status]
+
+    return jsonify({
+        "pods": pods,
+        "count": len(pods),
+        "running": sum(1 for p in pods if p.get("status") == "Running"),
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route("/api/pods/<namespace>/<name>", methods=["GET"])
+def api_pod_detail(namespace, name):
+    """Get detailed information for a specific pod."""
+    if not USE_K8S_CLIENT:
+        return jsonify({"error": "Kubernetes client not available"}), 503
+
+    try:
+        pod = v1.read_namespaced_pod(name, namespace, _request_timeout=API_TIMEOUT_SECONDS)
+
+        restarts = 0
+        container_statuses = []
+        for cs in pod.status.container_statuses or []:
+            restarts += cs.restart_count
+            container_statuses.append({
+                "name": cs.name,
+                "ready": cs.ready,
+                "restart_count": cs.restart_count,
+                "state": "running" if cs.state.running else "waiting" if cs.state.waiting else "terminated"
+            })
+
+        pod_data = {
+            "name": pod.metadata.name,
+            "namespace": pod.metadata.namespace,
+            "status": pod.status.phase,
+            "node": pod.spec.node_name or "Unscheduled",
+            "ip": pod.status.pod_ip,
+            "host_ip": pod.status.host_ip,
+            "restarts": restarts,
+            "containers": container_statuses,
+            "created_at": pod.metadata.creation_timestamp.isoformat() if pod.metadata.creation_timestamp else None,
+            "labels": dict(pod.metadata.labels or {}),
+        }
+
+        return jsonify({
+            "pod": pod_data,
+            "timestamp": datetime.now().isoformat()
+        })
+    except ApiException as e:
+        if e.status == 404:
+            return jsonify({"error": f"Pod '{namespace}/{name}' not found"}), 404
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/deployments", methods=["GET"])
+def api_deployments():
+    """Get all deployments with detailed information."""
+    deployments = get_deployments_detailed()
+
+    # Optional namespace filter
+    namespace = request.args.get("namespace")
+    if namespace:
+        deployments = [d for d in deployments if d.get("namespace") == namespace]
+
+    return jsonify({
+        "deployments": deployments,
+        "count": len(deployments),
+        "healthy": sum(1 for d in deployments if d.get("ready", 0) == d.get("replicas", 0) and d.get("replicas", 0) > 0),
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route("/api/deployments/<namespace>/<name>", methods=["GET"])
+def api_deployment_detail(namespace, name):
+    """Get detailed information for a specific deployment."""
+    if not USE_K8S_CLIENT:
+        return jsonify({"error": "Kubernetes client not available"}), 503
+
+    try:
+        deploy = apps_v1.read_namespaced_deployment(name, namespace, _request_timeout=API_TIMEOUT_SECONDS)
+
+        deployment_data = {
+            "name": deploy.metadata.name,
+            "namespace": deploy.metadata.namespace,
+            "replicas": deploy.spec.replicas or 0,
+            "ready": deploy.status.ready_replicas or 0,
+            "available": deploy.status.available_replicas or 0,
+            "updated": deploy.status.updated_replicas or 0,
+            "strategy": deploy.spec.strategy.type if deploy.spec.strategy else "RollingUpdate",
+            "created_at": deploy.metadata.creation_timestamp.isoformat() if deploy.metadata.creation_timestamp else None,
+            "labels": dict(deploy.metadata.labels or {}),
+            "selector": dict(deploy.spec.selector.match_labels or {}) if deploy.spec.selector else {},
+        }
+
+        # Get pods belonging to this deployment
+        pods = get_pods_detailed()
+        selector = deployment_data["selector"]
+        deployment_pods = []
+        for pod in pods:
+            if pod.get("namespace") == namespace and pod.get("name", "").startswith(name):
+                deployment_pods.append(pod)
+
+        return jsonify({
+            "deployment": deployment_data,
+            "pods": deployment_pods,
+            "pod_count": len(deployment_pods),
+            "timestamp": datetime.now().isoformat()
+        })
+    except ApiException as e:
+        if e.status == 404:
+            return jsonify({"error": f"Deployment '{namespace}/{name}' not found"}), 404
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/metrics", methods=["GET"])
+def api_metrics():
+    """Get cluster-wide metrics summary."""
+    metrics = get_cluster_metrics()
+    nodes = get_nodes_detailed()
+    pods = get_pods_detailed()
+    deployments = get_deployments_detailed()
+
+    return jsonify({
+        "cluster": {
+            "cpu_avg": metrics.get("cpu_avg", 0),
+            "mem_avg": metrics.get("mem_avg", 0),
+        },
+        "nodes": {
+            "total": len(nodes),
+            "ready": sum(1 for n in nodes if n["status"] == "Ready"),
+            "not_ready": sum(1 for n in nodes if n["status"] != "Ready"),
+        },
+        "pods": {
+            "total": len(pods),
+            "running": sum(1 for p in pods if p.get("status") == "Running"),
+            "pending": sum(1 for p in pods if p.get("status") == "Pending"),
+            "failed": sum(1 for p in pods if p.get("status") == "Failed"),
+        },
+        "deployments": {
+            "total": len(deployments),
+            "healthy": sum(1 for d in deployments if d.get("ready", 0) == d.get("replicas", 0) and d.get("replicas", 0) > 0),
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route("/api/top-pods", methods=["GET"])
+def api_top_pods():
+    """Get top resource-consuming pods."""
+    limit = request.args.get("limit", 10, type=int)
+    top_pods = get_top_pods()[:limit]
+
+    return jsonify({
+        "pods": top_pods,
+        "count": len(top_pods),
+        "timestamp": datetime.now().isoformat()
+    })
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 80))

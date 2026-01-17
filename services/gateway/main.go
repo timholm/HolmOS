@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Service represents a backend service
@@ -66,6 +68,19 @@ type GatewayMetrics struct {
 	latencyCount    int64
 }
 
+// WebSocket upgrader
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for development
+	},
+}
+
+// WebSocket clients
+var (
+	wsClients   = make(map[*websocket.Conn]bool)
+	wsClientsMu sync.RWMutex
+)
+
 var (
 	services      = make(map[string]*Service)
 	routes        = []Route{}
@@ -111,6 +126,10 @@ func main() {
 	mux.HandleFunc("/api/routes", handleAPIRoutes)
 	mux.HandleFunc("/api/metrics", handleAPIMetrics)
 	mux.HandleFunc("/api/health", handleAPIHealth)
+	mux.HandleFunc("/api/status", handleAPIStatus)
+
+	// WebSocket endpoint
+	mux.HandleFunc("/ws", handleWebSocket)
 
 	// Gateway proxy - catch all
 	mux.HandleFunc("/", handleProxy)
@@ -649,6 +668,145 @@ func handleAPIHealth(w http.ResponseWriter, r *http.Request) {
 		"total_count":     totalCount,
 		"services":        serviceHealth,
 		"uptime_seconds":  int64(time.Since(startTime).Seconds()),
+	})
+}
+
+func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	serviceMu.RLock()
+	healthyCount := 0
+	totalCount := len(services)
+	serviceStatuses := make([]map[string]interface{}, 0, totalCount)
+
+	for _, svc := range services {
+		if svc.Healthy {
+			healthyCount++
+		}
+		serviceStatuses = append(serviceStatuses, map[string]interface{}{
+			"name":       svc.Name,
+			"url":        svc.URL,
+			"healthy":    svc.Healthy,
+			"latency_ms": svc.Latency,
+			"last_check": svc.LastCheck,
+		})
+	}
+	serviceMu.RUnlock()
+
+	routeMu.RLock()
+	routeCount := len(routes)
+	routeMu.RUnlock()
+
+	status := "healthy"
+	if healthyCount == 0 && totalCount > 0 {
+		status = "unhealthy"
+	} else if healthyCount < totalCount {
+		status = "degraded"
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"service":           "gateway",
+		"version":           "1.0",
+		"status":            status,
+		"message":           "All roads lead through me",
+		"uptime_seconds":    int64(time.Since(startTime).Seconds()),
+		"total_requests":    atomic.LoadInt64(&metrics.TotalRequests),
+		"success_requests":  atomic.LoadInt64(&metrics.SuccessRequests),
+		"error_requests":    atomic.LoadInt64(&metrics.ErrorRequests),
+		"active_connections": atomic.LoadInt64(&metrics.ActiveConns),
+		"healthy_services":  healthyCount,
+		"total_services":    totalCount,
+		"total_routes":      routeCount,
+		"services":          serviceStatuses,
+	})
+}
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	// Register client
+	wsClientsMu.Lock()
+	wsClients[conn] = true
+	wsClientsMu.Unlock()
+
+	log.Printf("WebSocket client connected, total clients: %d", len(wsClients))
+
+	// Send initial status
+	sendWebSocketStatus(conn)
+
+	// Keep connection alive and handle messages
+	for {
+		messageType, msg, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("WebSocket read error: %v", err)
+			break
+		}
+
+		// Handle ping/pong and text messages
+		if messageType == websocket.TextMessage {
+			var request map[string]interface{}
+			if err := json.Unmarshal(msg, &request); err == nil {
+				if request["type"] == "ping" {
+					conn.WriteJSON(map[string]interface{}{
+						"type":      "pong",
+						"timestamp": time.Now().UTC().Format(time.RFC3339),
+					})
+				} else if request["type"] == "status" {
+					sendWebSocketStatus(conn)
+				}
+			}
+		}
+	}
+
+	// Unregister client
+	wsClientsMu.Lock()
+	delete(wsClients, conn)
+	wsClientsMu.Unlock()
+
+	log.Printf("WebSocket client disconnected, remaining clients: %d", len(wsClients))
+}
+
+func sendWebSocketStatus(conn *websocket.Conn) {
+	serviceMu.RLock()
+	healthyCount := 0
+	totalCount := len(services)
+	serviceStatuses := make([]map[string]interface{}, 0, totalCount)
+
+	for _, svc := range services {
+		if svc.Healthy {
+			healthyCount++
+		}
+		serviceStatuses = append(serviceStatuses, map[string]interface{}{
+			"name":       svc.Name,
+			"healthy":    svc.Healthy,
+			"latency_ms": svc.Latency,
+		})
+	}
+	serviceMu.RUnlock()
+
+	status := "healthy"
+	if healthyCount == 0 && totalCount > 0 {
+		status = "unhealthy"
+	} else if healthyCount < totalCount {
+		status = "degraded"
+	}
+
+	conn.WriteJSON(map[string]interface{}{
+		"type":             "status",
+		"service":          "gateway",
+		"status":           status,
+		"healthy_services": healthyCount,
+		"total_services":   totalCount,
+		"total_requests":   atomic.LoadInt64(&metrics.TotalRequests),
+		"active_connections": atomic.LoadInt64(&metrics.ActiveConns),
+		"uptime_seconds":   int64(time.Since(startTime).Seconds()),
+		"services":         serviceStatuses,
+		"timestamp":        time.Now().UTC().Format(time.RFC3339),
 	})
 }
 

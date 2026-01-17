@@ -243,6 +243,23 @@ def forge_trigger():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/build/session/<session_id>')
+def build_session(session_id):
+    """Get build session status and history"""
+    try:
+        if session_id not in build_sessions:
+            return jsonify({"error": "Session not found"}), 404
+
+        session = build_sessions[session_id]
+        return jsonify({
+            "session_id": session_id,
+            "status": session.get("status", "unknown"),
+            "messages": session.get("messages", []),
+            "builds": session.get("builds", [])
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/build/stream/<session_id>')
 def build_stream(session_id):
     """SSE stream for build progress"""

@@ -255,6 +255,117 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event_persist_requests_total %d\n", atomic.LoadUint64(&requestCounter))
 }
 
+func eventsHandler(w http.ResponseWriter, r *http.Request) {
+	if db == nil {
+		http.Error(w, "Database not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Parse query parameters
+	eventType := r.URL.Query().Get("type")
+	limit := r.URL.Query().Get("limit")
+	if limit == "" {
+		limit = "100"
+	}
+
+	var rows *sql.Rows
+	var err error
+
+	if eventType != "" {
+		rows, err = db.QueryContext(ctx,
+			`SELECT id, type, source, data, timestamp, created_at FROM events WHERE type = $1 ORDER BY timestamp DESC LIMIT $2`,
+			eventType, limit)
+	} else {
+		rows, err = db.QueryContext(ctx,
+			`SELECT id, type, source, data, timestamp, created_at FROM events ORDER BY timestamp DESC LIMIT $1`,
+			limit)
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var events []map[string]interface{}
+	for rows.Next() {
+		var id, eventType, source string
+		var data []byte
+		var timestamp, createdAt time.Time
+
+		if err := rows.Scan(&id, &eventType, &source, &data, &timestamp, &createdAt); err != nil {
+			continue
+		}
+
+		var dataMap map[string]interface{}
+		json.Unmarshal(data, &dataMap)
+
+		events = append(events, map[string]interface{}{
+			"id":         id,
+			"type":       eventType,
+			"source":     source,
+			"data":       dataMap,
+			"timestamp":  timestamp,
+			"created_at": createdAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(events)
+}
+
+func eventHandler(w http.ResponseWriter, r *http.Request) {
+	if db == nil {
+		http.Error(w, "Database not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get event ID from query parameter
+	eventID := r.URL.Query().Get("id")
+	if eventID == "" {
+		http.Error(w, "Missing event id parameter", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var id, eventType, source string
+	var data []byte
+	var timestamp, createdAt time.Time
+
+	err := db.QueryRowContext(ctx,
+		`SELECT id, type, source, data, timestamp, created_at FROM events WHERE id = $1`,
+		eventID).Scan(&id, &eventType, &source, &data, &timestamp, &createdAt)
+
+	if err == sql.ErrNoRows {
+		http.Error(w, "Event not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var dataMap map[string]interface{}
+	json.Unmarshal(data, &dataMap)
+
+	event := map[string]interface{}{
+		"id":         id,
+		"type":       eventType,
+		"source":     source,
+		"data":       dataMap,
+		"timestamp":  timestamp,
+		"created_at": createdAt,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(event)
+}
+
 func uiHandler(w http.ResponseWriter, r *http.Request) {
 	dbStatus := "Disconnected"
 	dbColor := ColorRed
@@ -322,6 +433,8 @@ func main() {
 
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/metrics", metricsHandler)
+	http.HandleFunc("/events", eventsHandler)
+	http.HandleFunc("/event", eventHandler)
 	http.HandleFunc("/", uiHandler)
 
 	port := os.Getenv("HTTP_PORT")

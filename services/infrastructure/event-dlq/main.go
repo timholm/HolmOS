@@ -292,6 +292,79 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event_dlq_requests_total %d\n", atomic.LoadUint64(&requestCounter))
 }
 
+func retryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if db == nil || nc == nil {
+		http.Error(w, "Service not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get event ID from query parameter
+	eventID := r.URL.Query().Get("id")
+	if eventID == "" {
+		http.Error(w, "Missing event id parameter", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Fetch the event from DLQ
+	var dbID int
+	var eventType, source sql.NullString
+	var data []byte
+	err := db.QueryRowContext(ctx,
+		`SELECT id, event_type, source, data FROM dead_letter_queue WHERE event_id = $1 AND processed = FALSE`,
+		eventID).Scan(&dbID, &eventType, &source, &data)
+
+	if err == sql.ErrNoRows {
+		http.Error(w, "Event not found or already processed", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Republish to the original topic
+	subject := fmt.Sprintf("events.%s", eventType.String)
+	eventPayload := map[string]interface{}{
+		"id":        eventID,
+		"type":      eventType.String,
+		"source":    source.String,
+		"data":      json.RawMessage(data),
+		"timestamp": time.Now().UTC(),
+		"retry":     true,
+	}
+
+	payload, _ := json.Marshal(eventPayload)
+	if err := nc.Publish(subject, payload); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to republish: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// Mark as processed
+	_, err = db.ExecContext(ctx,
+		`UPDATE dead_letter_queue SET processed = TRUE, processed_at = NOW() WHERE id = $1`,
+		dbID)
+	if err != nil {
+		logger.Log("warn", "Failed to mark DLQ event as processed", map[string]interface{}{"error": err.Error()})
+	}
+
+	logger.Log("info", "DLQ event retried", map[string]interface{}{"event_id": eventID, "type": eventType.String})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "retried",
+		"event_id": eventID,
+		"subject":  subject,
+	})
+}
+
 func listHandler(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		http.Error(w, "Database not connected", http.StatusServiceUnavailable)
@@ -419,6 +492,7 @@ func main() {
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/metrics", metricsHandler)
 	http.HandleFunc("/list", listHandler)
+	http.HandleFunc("/retry", retryHandler)
 	http.HandleFunc("/", uiHandler)
 
 	port := os.Getenv("HTTP_PORT")

@@ -1949,6 +1949,9 @@ func main() {
 	http.HandleFunc("/api/volume", handleVolumeStats)
 	http.HandleFunc("/api/chat", handleChat)
 
+	// Register additional API routes from api.go
+	RegisterAPIRoutes()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

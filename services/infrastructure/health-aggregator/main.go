@@ -276,6 +276,39 @@ func allHealthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(cache)
 }
 
+func checkHandler(w http.ResponseWriter, r *http.Request) {
+	serviceName := r.URL.Query().Get("service")
+	if serviceName == "" {
+		http.Error(w, "Missing service parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Find the service URL
+	var serviceURL string
+	for _, svc := range services {
+		if svc.Name == serviceName {
+			serviceURL = svc.URL
+			break
+		}
+	}
+
+	if serviceURL == "" {
+		http.Error(w, "Service not found", http.StatusNotFound)
+		return
+	}
+
+	// Perform the health check
+	health := checkService(serviceName, serviceURL)
+
+	// Update the cache
+	healthCacheMu.Lock()
+	healthCache[serviceName] = health
+	healthCacheMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(health)
+}
+
 func refreshHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -425,6 +458,7 @@ func main() {
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/metrics", metricsHandler)
 	http.HandleFunc("/all", allHealthHandler)
+	http.HandleFunc("/check", checkHandler)
 	http.HandleFunc("/refresh", refreshHandler)
 	http.HandleFunc("/", uiHandler)
 

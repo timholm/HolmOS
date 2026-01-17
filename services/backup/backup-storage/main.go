@@ -108,6 +108,10 @@ func main() {
 	r.HandleFunc("/health", healthHandler).Methods("GET")
 	r.HandleFunc("/backups", createBackupHandler).Methods("POST")
 	r.HandleFunc("/backups", listBackupsHandler).Methods("GET")
+
+	// Register additional API routes (must be before generic {id} routes)
+	registerAPIRoutes(r)
+
 	r.HandleFunc("/backups/{id}", getBackupHandler).Methods("GET")
 	r.HandleFunc("/backups/{id}/download", downloadBackupHandler).Methods("GET")
 	r.HandleFunc("/backups/{id}", deleteBackupHandler).Methods("DELETE")

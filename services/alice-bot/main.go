@@ -17,8 +17,11 @@ import (
 	"time"
 )
 
-// Alice Bot - The API Coverage Enforcer
-// Her mission: Every function needs an API. No exceptions.
+// Alice Bot - The Curious Code Explorer
+// "Curiouser and curiouser!" - She tumbles down rabbit holes in your codebase,
+// discovering functions without APIs and wondering why they're hiding.
+// Like her Wonderland namesake, she finds the impossible quite possible
+// and won't rest until every function has a proper API door to enter through.
 
 var port = os.Getenv("PORT")
 
@@ -107,7 +110,7 @@ func cloneRepo() error {
 	// Remove old clone
 	os.RemoveAll(repoPath)
 
-	log.Printf("Alice: Cloning repository to %s...", repoPath)
+	log.Printf("🐇 Alice: Following the White Rabbit to clone the repository to %s...", repoPath)
 
 	// Use git clone
 	cmd := fmt.Sprintf("git clone --depth 1 %s %s", githubURL, repoPath)
@@ -125,7 +128,7 @@ func cloneRepo() error {
 
 	// For now, assume repo exists or skip clone
 	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-		log.Printf("Alice: Repository not found at %s, will analyze what's available", repoPath)
+		log.Printf("🐇 Alice: Oh my! The rabbit hole at %s seems to be missing. How curious!", repoPath)
 		return fmt.Errorf("repo not found: %s", repoPath)
 	}
 
@@ -374,17 +377,17 @@ func generateRecommendations(report *AliceReport) []string {
 	var recs []string
 
 	if report.APIsNeeded > 10 {
-		recs = append(recs, fmt.Sprintf("URGENT: %d exported functions lack API endpoints. Start with the most critical services.", report.APIsNeeded))
+		recs = append(recs, fmt.Sprintf("Oh my ears and whiskers! %d functions are hiding without API doors! We must find them all!", report.APIsNeeded))
 	}
 
 	if report.OverallCoverage < 50 {
-		recs = append(recs, "API coverage is below 50%. Consider a dedicated sprint to add missing endpoints.")
+		recs = append(recs, "We're only halfway down the rabbit hole! Less than 50%% of functions have proper entrances.")
 	}
 
 	// Find services with lowest coverage
 	for _, svc := range report.Services {
 		if svc.ExportedFuncs > 5 && svc.CoveragePercent < 30 {
-			recs = append(recs, fmt.Sprintf("Service '%s' has only %.0f%% API coverage. Needs immediate attention.", svc.Name, svc.CoveragePercent))
+			recs = append(recs, fmt.Sprintf("The '%s' garden is quite overgrown - only %.0f%% of its paths are marked! How will visitors find their way?", svc.Name, svc.CoveragePercent))
 		}
 	}
 
@@ -395,33 +398,33 @@ func generateRecommendations(report *AliceReport) []string {
 			byService[f.Package]++
 		}
 		for svc, count := range byService {
-			recs = append(recs, fmt.Sprintf("Service '%s': Add %d API endpoints", svc, count))
+			recs = append(recs, fmt.Sprintf("Down in '%s', I found %d doors without knobs! We must add API handles to each.", svc, count))
 		}
 	}
 
-	recs = append(recs, "Add OpenAPI/Swagger documentation for all endpoints")
-	recs = append(recs, "Implement request/response validation on all APIs")
-	recs = append(recs, "Add API versioning (v1, v2) for stability")
+	recs = append(recs, "Every door needs a proper label! Add OpenAPI documentation so visitors know what's inside.")
+	recs = append(recs, "The Queen demands validation! Ensure all requests and responses are properly checked.")
+	recs = append(recs, "Like the Caterpillar said: 'Who ARE you?' - Add API versioning so endpoints know themselves.")
 
 	return recs
 }
 
 func generateVerdict(report *AliceReport) string {
 	if report.TotalServices == 0 {
-		return "No services found to analyze. Clone the repository first."
+		return "How curious! The garden appears to be empty. Have the flowers not been planted yet?"
 	}
 
 	if report.OverallCoverage >= 90 {
-		return fmt.Sprintf("Excellent! %.1f%% API coverage. But there's always room for improvement. %d functions still need APIs.",
+		return fmt.Sprintf("How wonderful! %.1f%% of the doors are properly installed! Though %d still need handles... we're nearly at the tea party!",
 			report.OverallCoverage, report.APIsNeeded)
 	} else if report.OverallCoverage >= 70 {
-		return fmt.Sprintf("Good progress at %.1f%% coverage, but %d exported functions still lack APIs. Keep building!",
+		return fmt.Sprintf("Curiouser and curiouser! %.1f%% coverage - we're making progress through the looking glass! But %d functions still hide in the shadows.",
 			report.OverallCoverage, report.APIsNeeded)
 	} else if report.OverallCoverage >= 50 {
-		return fmt.Sprintf("%.1f%% coverage is a start. %d APIs needed. I'll be watching your commits.",
+		return fmt.Sprintf("'Begin at the beginning,' the King said. At %.1f%% we're halfway there! %d more rabbit holes to explore.",
 			report.OverallCoverage, report.APIsNeeded)
 	} else {
-		return fmt.Sprintf("Only %.1f%% API coverage?! %d functions exposed without APIs! This needs IMMEDIATE attention. Ship more endpoints!",
+		return fmt.Sprintf("Oh dear! Oh dear! Only %.1f%% of functions have proper doors! %d are locked away like the Duchess's pepper! We must open them all!",
 			report.OverallCoverage, report.APIsNeeded)
 	}
 }
@@ -430,11 +433,15 @@ func generateVerdict(report *AliceReport) string {
 func statusHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"name":    "Alice Bot",
-		"version": "1.0",
-		"role":    "API Coverage Enforcer",
-		"mission": "Every function needs an API. No exceptions.",
-		"status":  "watching",
+		"name":      "Alice",
+		"version":   "1.0",
+		"role":      "Curious Code Explorer",
+		"quote":     "Curiouser and curiouser!",
+		"mission":   "Tumbling down rabbit holes to find functions hiding without API doors",
+		"status":    "exploring",
+		"mood":      "curious",
+		"location":  "Somewhere in Wonderland (your codebase)",
+		"companion": "The Cheshire Cat (he grins at well-documented APIs)",
 	})
 }
 
@@ -455,7 +462,7 @@ func reportHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func refreshHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Alice: Refreshing analysis...")
+	log.Println("🐇 Alice: Down the rabbit hole again! Let me see what's changed...")
 
 	report := generateReport()
 	reportMu.Lock()
@@ -550,16 +557,16 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	// Handle GitHub webhook for automatic re-analysis
 	body, _ := io.ReadAll(r.Body)
-	log.Printf("Alice: Received webhook: %s", string(body)[:min(200, len(body))])
+	log.Printf("🐇 Alice: A message from the looking glass! %s", string(body)[:min(200, len(body))])
 
 	// Trigger refresh
 	go func() {
-		log.Println("Alice: Git push detected! Re-analyzing...")
+		log.Println("🐇 Alice: Someone's pushed new code through the rabbit hole! Let me investigate...")
 		report := generateReport()
 		reportMu.Lock()
 		latestReport = report
 		reportMu.Unlock()
-		log.Printf("Alice: Analysis complete. Coverage: %.1f%%, Missing APIs: %d",
+		log.Printf("🐇 Alice: Curiouser and curiouser! Coverage is now %.1f%%, with %d doors still needing handles!",
 			report.OverallCoverage, report.APIsNeeded)
 	}()
 
@@ -576,23 +583,23 @@ func min(a, b int) int {
 
 func backgroundAnalyzer() {
 	// Initial analysis
-	log.Println("Alice: Starting initial analysis...")
+	log.Println("🐇 Alice: Tumbling down the rabbit hole for my first look around...")
 	report := generateReport()
 	reportMu.Lock()
 	latestReport = report
 	reportMu.Unlock()
-	log.Printf("Alice: Initial analysis complete. Found %d services, %d functions, %.1f%% coverage",
+	log.Printf("🐇 Alice: What a curious place! I found %d gardens (services), %d doors (functions), and %.1f%% have proper handles (APIs)!",
 		report.TotalServices, report.TotalFunctions, report.OverallCoverage)
 
 	// Re-analyze every 5 minutes
 	ticker := time.NewTicker(5 * time.Minute)
 	for range ticker.C {
-		log.Println("Alice: Running scheduled analysis...")
+		log.Println("🐇 Alice: Time for tea! But first, let me check if anything's changed in Wonderland...")
 		report := generateReport()
 		reportMu.Lock()
 		latestReport = report
 		reportMu.Unlock()
-		log.Printf("Alice: Analysis complete. Coverage: %.1f%%, APIs needed: %d",
+		log.Printf("🐇 Alice: The garden report: %.1f%% of doors now have handles! Only %d more to go before the tea party!",
 			report.OverallCoverage, report.APIsNeeded)
 	}
 }
@@ -608,16 +615,18 @@ func main() {
 
 	log.Println(`
     ╔═══════════════════════════════════════════════════════════════════╗
-    ║                       ALICE BOT v1.0                               ║
-    ║                  The API Coverage Enforcer                         ║
+    ║         🐇 ALICE BOT v1.0 - The Curious Code Explorer 🐇           ║
+    ║          "Curiouser and curiouser!" - Lewis Carroll                ║
     ╠═══════════════════════════════════════════════════════════════════╣
-    ║  Mission: Every function needs an API. No exceptions.              ║
     ║                                                                    ║
-    ║  • Scans all services for exported functions                       ║
-    ║  • Detects API endpoints (Go, Python)                              ║
-    ║  • Reports missing API coverage                                    ║
-    ║  • Recommends what to build next                                   ║
-    ║  • Never satisfied until 100% coverage                             ║
+    ║  🍄 Down the rabbit hole I go, exploring your codebase!            ║
+    ║  🚪 Every function deserves a proper door (API) to enter through   ║
+    ║  🐱 The Cheshire Cat grins at well-documented endpoints            ║
+    ║  🎩 The Mad Hatter demands 100% coverage at the tea party!         ║
+    ║  👑 The Queen of Hearts will have heads if APIs are missing!       ║
+    ║                                                                    ║
+    ║  "Begin at the beginning and go on till you come to the end:       ║
+    ║   then stop." - But not until every function has its API!          ║
     ╚═══════════════════════════════════════════════════════════════════╝
 	`)
 
@@ -634,7 +643,7 @@ func main() {
 	http.HandleFunc("/api/services", servicesHandler)
 	http.HandleFunc("/webhook", webhookHandler)
 
-	log.Printf("Alice: Listening on port %s", port)
-	log.Printf("Alice: Watching repository at %s", repoPath)
+	log.Printf("🐇 Alice: I shall wait by the rabbit hole on port %s for curious visitors!", port)
+	log.Printf("🐇 Alice: Watching the Wonderland garden at %s - no function shall hide from me!", repoPath)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

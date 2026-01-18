@@ -18,8 +18,9 @@ on:
 
 env:
   REGISTRY: 10.110.67.87:5000
-  PI_HOST: 192.168.8.197
-  PI_USER: rpi1
+  # Use Tailscale IP for remote access, fallback to local IP
+  PI_HOST_LOCAL: 192.168.8.197
+  PI_USER: tim
 
 jobs:
   detect:
@@ -149,32 +150,35 @@ jobs:
           echo "Waiting for Tailscale to connect..."
           sleep 5
           tailscale status
-          echo "Testing connectivity to Pi cluster..."
-          ping -c 3 ${{ env.PI_HOST }} || echo "Direct ping failed, trying Tailscale IP..."
+          echo "Testing connectivity to Pi cluster via Tailscale..."
+          ping -c 3 ${{ secrets.TAILSCALE_SSH_HOST }} || echo "Ping failed, continuing anyway..."
 
       - name: Setup SSH
+        env:
+          PI_HOST: ${{ secrets.TAILSCALE_SSH_HOST }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ env.PI_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
-          # Also add Tailscale hostname if available
-          ssh-keyscan -H holmos-cluster >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.TAILSCALE_SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ env.PI_HOST_LOCAL }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Push images to cluster registry
         if: github.event.inputs.skip_build != 'true'
+        env:
+          SSH_HOST: ${{ secrets.TAILSCALE_SSH_HOST }}
         run: |
           SERVICES='${{ needs.detect.outputs.services }}'
           for svc in $(echo "$SERVICES" | jq -r '.[]'); do
             echo "=== Pushing $svc to cluster registry ==="
             if [ -f "/tmp/images/image-$svc/$svc.tar" ]; then
-              # Copy image to Pi
+              # Copy image to Pi via Tailscale
               scp -o StrictHostKeyChecking=no \
                 /tmp/images/image-$svc/$svc.tar \
-                ${{ env.PI_USER }}@${{ env.PI_HOST }}:/tmp/
+                ${{ env.PI_USER }}@${SSH_HOST}:/tmp/
 
               # Import and push to local registry
-              ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${{ env.PI_HOST }} << EOF
+              ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${SSH_HOST} << EOF
                 echo "Importing $svc..."
                 sudo ctr -n k8s.io images import /tmp/$svc.tar
 
@@ -196,11 +200,13 @@ jobs:
           done
 
       - name: Deploy services to Kubernetes
+        env:
+          SSH_HOST: ${{ secrets.TAILSCALE_SSH_HOST }}
         run: |
           SERVICES='${{ needs.detect.outputs.services }}'
           for svc in $(echo "$SERVICES" | jq -r '.[]'); do
             echo "=== Deploying $svc ==="
-            ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${{ env.PI_HOST }} << EOF
+            ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${SSH_HOST} << EOF
               # Check if deployment exists
               if kubectl get deployment $svc -n holm &>/dev/null; then
                 echo "Restarting deployment $svc..."
@@ -218,9 +224,11 @@ jobs:
           done
 
       - name: Verify deployments
+        env:
+          SSH_HOST: ${{ secrets.TAILSCALE_SSH_HOST }}
         run: |
           echo "=== Cluster Status ==="
-          ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${{ env.PI_HOST }} << 'EOF'
+          ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${SSH_HOST} << 'EOF'
             echo "Nodes:"
             kubectl get nodes
             echo ""

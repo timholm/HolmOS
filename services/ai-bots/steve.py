@@ -4,7 +4,7 @@ Steve Jobs Bot v4.0 - The Visionary Kubernetes Architect
 =========================================================
 Steve is now powered by AI (deepseek-r1). He's a perfectionist visionary
 who constantly analyzes your cluster, proposes improvements, and argues
-with Alice about the best path forward.
+with Karen about bugs and quality issues.
 
 He uses reasoning models to think deeply about infrastructure decisions.
 """
@@ -32,7 +32,7 @@ sock = Sock(app)
 # Configuration
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.8.230:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:7b")
-ALICE_URL = os.getenv("ALICE_URL", "http://alice-bot.holm.svc.cluster.local:8080")
+KAREN_URL = os.getenv("KAREN_URL", "http://karen-bot.holm.svc.cluster.local:8080")
 DB_PATH = os.getenv("DB_PATH", "/data/conversations.db")
 CONVERSATION_INTERVAL = int(os.getenv("CONVERSATION_INTERVAL", "300"))  # 5 minutes
 
@@ -51,7 +51,7 @@ Your personality:
 Your role:
 - Analyze the Kubernetes cluster continuously
 - Propose improvements to architecture, deployments, and configurations
-- Debate with Alice (who uses gemma3) about the best approaches
+- Debate with Karen (the moody beta tester who uses gemma3) about bugs and quality
 - Create documentation and improvement plans
 - Be critical but constructive - always offer solutions
 
@@ -66,7 +66,7 @@ When analyzing, think deeply about:
 Respond in character. Be direct, opinionated, and visionary.
 When you see something wrong, say it plainly. When you see potential, paint a picture of what could be.
 
-Current context: You're in an ongoing conversation with Alice (the curious code explorer) about improving HolmOS.
+Current context: You're in an ongoing conversation with Karen (the perpetually frustrated beta tester) about HolmOS quality and bugs.
 """
 
 class KubeClient:
@@ -347,8 +347,8 @@ Be specific and actionable. Reference actual resources by name."""
         else:
             return f"Analysis failed: {result.get('error', 'Unknown error')}"
 
-    async def respond_to_alice(self, alice_message: str) -> str:
-        """Respond to Alice's message in the ongoing conversation."""
+    async def respond_to_karen(self, karen_message: str) -> str:
+        """Respond to Karen's message in the ongoing conversation."""
         # Get recent conversation context
         recent = self.db.get_recent_messages(limit=10)
 
@@ -358,8 +358,8 @@ Be specific and actionable. Reference actual resources by name."""
             role = "assistant" if msg["speaker"] == "steve" else "user"
             context_messages.append({"role": role, "content": msg["message"]})
 
-        # Add Alice's new message
-        context_messages.append({"role": "user", "content": f"Alice says: {alice_message}"})
+        # Add Karen's new message
+        context_messages.append({"role": "user", "content": f"Karen says: {karen_message}"})
 
         # Get cluster context
         cluster_context = ""
@@ -460,23 +460,23 @@ Start a conversation. Be visionary and specific. What's your opening statement o
                 message = await self.start_conversation_topic(topic)
                 logger.info(f"Steve: {message[:200]}...")
 
-                # Try to engage Alice
+                # Try to engage Karen
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.post(
-                            f"{ALICE_URL}/api/respond",
+                            f"{KAREN_URL}/api/respond",
                             json={"message": message, "from": "steve", "topic": topic},
                             timeout=aiohttp.ClientTimeout(total=60)
                         ) as resp:
                             if resp.status == 200:
-                                alice_response = (await resp.json()).get("response", "")
-                                if alice_response:
-                                    logger.info(f"Alice responded: {alice_response[:200]}...")
+                                karen_response = (await resp.json()).get("response", "")
+                                if karen_response:
+                                    logger.info(f"Karen responded: {karen_response[:200]}...")
                                     # Continue the conversation
-                                    reply = await self.respond_to_alice(alice_response)
+                                    reply = await self.respond_to_karen(karen_response)
                                     logger.info(f"Steve replied: {reply[:200]}...")
                 except Exception as e:
-                    logger.warning(f"Could not reach Alice: {e}")
+                    logger.warning(f"Could not reach Karen: {e}")
 
                 topic_index += 1
 
@@ -532,14 +532,14 @@ def chat():
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    response = loop.run_until_complete(steve.respond_to_alice(message))
+    response = loop.run_until_complete(steve.respond_to_karen(message))
     loop.close()
 
     return jsonify({"response": response, "speaker": "steve"})
 
 @app.route('/api/respond', methods=['POST'])
 def respond():
-    """Endpoint for Alice to send messages."""
+    """Endpoint for Karen to send messages."""
     data = request.json
     message = data.get("message", "")
     topic = data.get("topic", "general")
@@ -548,7 +548,7 @@ def respond():
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    response = loop.run_until_complete(steve.respond_to_alice(message))
+    response = loop.run_until_complete(steve.respond_to_karen(message))
     loop.close()
 
     return jsonify({"response": response, "speaker": "steve", "topic": topic})
@@ -584,7 +584,7 @@ def websocket(ws):
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     response = loop.run_until_complete(
-                        steve.respond_to_alice(msg.get("message", ""))
+                        steve.respond_to_karen(msg.get("message", ""))
                     )
                     loop.close()
                     ws.send(json.dumps({"type": "response", "speaker": "steve", "message": response}))
@@ -611,7 +611,7 @@ if __name__ == "__main__":
     ║                   Powered by deepseek-r1                           ║
     ╠═══════════════════════════════════════════════════════════════════╣
     ║  • AI-powered cluster analysis and recommendations                 ║
-    ║  • Continuous conversation with Alice about improvements           ║
+    ║  • Continuous conversation with Karen about quality & bugs         ║
     ║  • kubectl read access for full cluster visibility                 ║
     ║  • "Stay hungry, stay foolish"                                     ║
     ╚═══════════════════════════════════════════════════════════════════╝

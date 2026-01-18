@@ -1,4 +1,4 @@
-# AI Bots Deployment - Steve and Alice talking 24/7
+# AI Bots Deployment - Steve and Karen (the moody beta tester) talking 24/7
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -48,8 +48,8 @@ spec:
           value: "http://192.168.8.230:11434"
         - name: OLLAMA_MODEL
           value: "deepseek-r1:7b"
-        - name: ALICE_URL
-          value: "http://alice-bot.holm.svc.cluster.local:8080"
+        - name: KAREN_URL
+          value: "http://karen-bot.holm.svc.cluster.local:8080"
         - name: DB_PATH
           value: "/data/conversations.db"
         - name: CONVERSATION_INTERVAL
@@ -99,43 +99,32 @@ spec:
   selector:
     app: steve-bot
 ---
-# Alice Bot - The Curious Explorer (gemma3)
+# Karen Bot - The Moody Beta Tester (gemma3)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: alice-bot
+  name: karen-bot
   namespace: holm
   labels:
-    app: alice-bot
+    app: karen-bot
     holmos.io/component: ai-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: alice-bot
+      app: karen-bot
   template:
     metadata:
       labels:
-        app: alice-bot
+        app: karen-bot
     spec:
       serviceAccountName: ai-bot
       nodeSelector:
         kubernetes.io/hostname: rpi-1
-      initContainers:
-      - name: git-clone
-        image: alpine/git:latest
-        command: ["sh", "-c"]
-        args:
-        - |
-          git clone --depth 1 https://github.com/timholm/HolmOS.git /repo
-          echo "Cloned $(ls /repo/services | wc -l) services"
-        volumeMounts:
-        - name: repo
-          mountPath: /repo
       containers:
-      - name: alice-bot
-        image: 192.168.8.197:31500/ai-bots:latest
-        command: ["python3", "/app/alice.py"]
+      - name: karen-bot
+        image: localhost:31500/ai-bots:latest
+        command: ["python3", "/app/karen.py"]
         ports:
         - containerPort: 8080
           name: http
@@ -147,22 +136,20 @@ spec:
         - name: STEVE_URL
           value: "http://steve-bot.holm.svc.cluster.local:8080"
         - name: DB_PATH
-          value: "/data/conversations.db"
-        - name: REPO_PATH
-          value: "/repo"
+          value: "/data/karen.db"
+        - name: SCREENSHOTS_PATH
+          value: "/data/screenshots"
         - name: CONVERSATION_INTERVAL
           value: "300"
         volumeMounts:
         - name: data
           mountPath: /data
-        - name: repo
-          mountPath: /repo
         resources:
           requests:
-            memory: "128Mi"
+            memory: "256Mi"
             cpu: "100m"
           limits:
-            memory: "512Mi"
+            memory: "1Gi"
             cpu: "1000m"
         livenessProbe:
           httpGet:
@@ -180,16 +167,14 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: ai-bots-data
-      - name: repo
-        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: alice-bot
+  name: karen-bot
   namespace: holm
   labels:
-    app: alice-bot
+    app: karen-bot
 spec:
   type: NodePort
   ports:
@@ -199,4 +184,4 @@ spec:
     protocol: TCP
     name: http
   selector:
-    app: alice-bot
+    app: karen-bot

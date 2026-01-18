@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-ai-bots-rebuild
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  initContainers:
+  - name: git-clone
+    image: alpine/git:latest
+    command: ["sh", "-c"]
+    args:
+    - |
+      git clone --depth 1 https://github.com/timholm/HolmOS.git /repo
+      cp -r /repo/services/ai-bots/* /workspace/
+      ls -la /workspace/
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--dockerfile=Dockerfile"
+    - "--context=dir:///workspace"
+    - "--destination=registry.holm.svc.cluster.local:5000/ai-bots:latest"
+    - "--insecure"
+    - "--skip-tls-verify"
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  restartPolicy: Never
+  volumes:
+  - name: workspace
+    emptyDir: {}

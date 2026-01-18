@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-settings-web
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  restartPolicy: Never
+  initContainers:
+  - name: clone-repo
+    image: alpine/git:latest
+    command:
+    - /bin/sh
+    - -c
+    - |
+      git clone --depth 1 https://github.com/timholm/HolmOS.git /repo
+      cp -r /repo/services/settings-web/* /workspace/
+      ls -la /workspace/
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--dockerfile=/workspace/Dockerfile"
+    - "--context=/workspace"
+    - "--destination=registry.holm.svc.cluster.local:5000/settings-web:latest"
+    - "--insecure"
+    - "--skip-tls-verify"
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  volumes:
+  - name: workspace
+    emptyDir: {}

@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-clock-app-build
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  initContainers:
+  - name: git-clone
+    image: alpine/git:latest
+    command:
+    - /bin/sh
+    - -c
+    - |
+      git clone https://github.com/timholm/HolmOS.git /repo
+      cp -r /repo/services/clock-app/* /workspace/
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--dockerfile=/workspace/Dockerfile"
+    - "--context=/workspace"
+    - "--destination=registry.holm.svc.cluster.local:5000/clock-app:latest"
+    - "--insecure"
+    - "--skip-tls-verify"
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  restartPolicy: Never
+  volumes:
+  - name: workspace
+    emptyDir: {}

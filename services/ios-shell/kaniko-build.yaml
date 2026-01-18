@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-ios-shell
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  restartPolicy: Never
+  initContainers:
+  - name: copy-files
+    image: busybox:latest
+    command:
+    - /bin/sh
+    - -c
+    - |
+      cp /configmap/* /workspace/
+      ls -la /workspace/
+    volumeMounts:
+    - name: configmap
+      mountPath: /configmap
+    - name: workspace
+      mountPath: /workspace
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--dockerfile=/workspace/Dockerfile"
+    - "--context=dir:///workspace"
+    - "--destination=registry.holm.svc.cluster.local:5000/ios-shell:latest"
+    - "--insecure"
+    - "--skip-tls-verify"
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  volumes:
+  - name: configmap
+    configMap:
+      name: ios-shell-src
+  - name: workspace
+    emptyDir: {}

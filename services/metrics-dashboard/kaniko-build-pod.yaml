@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metrics-dashboard-dockerfile
+  namespace: holm
+data:
+  Dockerfile: |
+    FROM golang:1.21-alpine AS builder
+    WORKDIR /app
+    COPY go.mod ./
+    COPY *.go ./
+    RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o metrics-dashboard .
+    
+    FROM alpine:3.19
+    RUN apk --no-cache add ca-certificates
+    WORKDIR /app
+    COPY --from=builder /app/metrics-dashboard .
+    EXPOSE 8080
+    CMD ["./metrics-dashboard"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-metrics-dash-build
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  restartPolicy: Never
+  initContainers:
+    - name: clone-repo
+      image: alpine/git:latest
+      command:
+        - /bin/sh
+        - -c
+        - |
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i to clone repo..."
+            git clone --depth 1 https://github.com/timholm/HolmOS.git /repo && break
+            sleep 10
+          done
+          if [ -d /repo/services/metrics-dashboard ]; then
+            cp /repo/services/metrics-dashboard/*.go /workspace/
+            cp /repo/services/metrics-dashboard/go.mod /workspace/
+            ls -la /workspace/
+          else
+            echo "Clone failed after 5 attempts"
+            exit 1
+          fi
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: repo
+          mountPath: /repo
+  containers:
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:latest
+      args:
+        - --dockerfile=/dockerfile/Dockerfile
+        - --context=/workspace
+        - --destination=10.43.48.161:5000/metrics-dashboard:latest
+        - --insecure
+        - --skip-tls-verify
+        - --insecure-registry=10.43.48.161:5000
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: dockerfile
+          mountPath: /dockerfile
+  volumes:
+    - name: workspace
+      emptyDir: {}
+    - name: repo
+      emptyDir: {}
+    - name: dockerfile
+      configMap:
+        name: metrics-dashboard-dockerfile

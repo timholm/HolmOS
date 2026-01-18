@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-pulse-build
+  namespace: holm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: rpi-1
+  restartPolicy: Never
+  initContainers:
+  - name: clone-repo
+    image: alpine/git:latest
+    command:
+    - /bin/sh
+    - -c
+    - |
+      git clone https://github.com/timholm/HolmOS.git /repo
+      cp -r /repo/services/pulse/* /workspace/
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+    - name: repo
+      mountPath: /repo
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    args:
+    - "--dockerfile=/workspace/Dockerfile"
+    - "--context=/workspace"
+    - "--destination=registry.holm.svc.cluster.local:5000/pulse:latest"
+    - "--insecure"
+    - "--skip-tls-verify"
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+  volumes:
+  - name: workspace
+    emptyDir: {}
+  - name: repo
+    emptyDir: {}

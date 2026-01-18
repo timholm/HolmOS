@@ -1,0 +1,43 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-pdb
+  namespace: holm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth-gateway-pdb
+  namespace: holm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: auth-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: registry-pdb
+  namespace: holm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: registry
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: holmos-shell-pdb
+  namespace: holm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: holmos-shell

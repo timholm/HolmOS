@@ -1,0 +1,638 @@
+openapi: 3.0.3
+info:
+  title: Auth Gateway API
+  description: |
+    Auth Gateway is the central authentication and authorization service for HolmOS.
+
+    **Note**: This specification is a design document. The auth-gateway service
+    is planned but not yet implemented. This spec defines the intended API contract
+    for future development.
+
+    The Auth Gateway will provide:
+    - JWT-based authentication
+    - API key management
+    - Role-based access control (RBAC)
+    - Service-to-service authentication
+    - Session management
+  version: 1.0.0-draft
+  contact:
+    name: HolmOS Team
+
+servers:
+  - url: http://auth-gateway.holm.svc.cluster.local:8080
+    description: Kubernetes internal service (planned)
+  - url: http://192.168.8.197:30XXX
+    description: NodePort external access (planned)
+
+tags:
+  - name: Health
+    description: Service health endpoints
+  - name: Authentication
+    description: User authentication endpoints
+  - name: Tokens
+    description: JWT token management
+  - name: API Keys
+    description: API key management
+  - name: Sessions
+    description: Session management
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the auth-gateway service
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/v1/auth/login:
+    post:
+      summary: User login
+      description: Authenticates a user and returns JWT tokens
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many login attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/logout:
+    post:
+      summary: User logout
+      description: Invalidates the current session and tokens
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/refresh:
+    post:
+      summary: Refresh access token
+      description: Uses refresh token to obtain new access token
+      tags:
+        - Tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/verify:
+    post:
+      summary: Verify token
+      description: Validates a JWT token and returns user information
+      tags:
+        - Tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Token is valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '401':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/me:
+    get:
+      summary: Get current user
+      description: Returns information about the authenticated user
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/keys:
+    get:
+      summary: List API keys
+      description: Returns all API keys for the authenticated user
+      tags:
+        - API Keys
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeysResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Create API key
+      description: Creates a new API key for the authenticated user
+      tags:
+        - API Keys
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAPIKeyRequest'
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreatedResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/keys/{keyId}:
+    delete:
+      summary: Revoke API key
+      description: Revokes an API key
+      tags:
+        - API Keys
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: API key revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: API key not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/sessions:
+    get:
+      summary: List active sessions
+      description: Returns all active sessions for the authenticated user
+      tags:
+        - Sessions
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionsResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/sessions/{sessionId}:
+    delete:
+      summary: Revoke session
+      description: Revokes a specific session
+      tags:
+        - Sessions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/service/auth:
+    post:
+      summary: Service-to-service authentication
+      description: Authenticates a service using service credentials
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceAuthRequest'
+      responses:
+        '200':
+          description: Service authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceAuthResponse'
+        '401':
+          description: Invalid service credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          example: healthy
+        service:
+          type: string
+          example: auth-gateway
+        version:
+          type: string
+          example: "1.0.0"
+        timestamp:
+          type: string
+          format: date-time
+
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          example: admin
+        password:
+          type: string
+          format: password
+          example: "********"
+        mfa_code:
+          type: string
+          description: Optional MFA code if enabled
+          example: "123456"
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT access token
+          example: "eyJhbGciOiJIUzI1NiIs..."
+        refresh_token:
+          type: string
+          description: JWT refresh token for obtaining new access tokens
+          example: "eyJhbGciOiJIUzI1NiIs..."
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Access token expiry time in seconds
+          example: 3600
+        user:
+          $ref: '#/components/schemas/User'
+
+    RefreshRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+
+    VerifyRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: JWT token to verify
+
+    VerifyResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+          example: true
+        user:
+          $ref: '#/components/schemas/User'
+        expires_at:
+          type: string
+          format: date-time
+
+    UserResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        username:
+          type: string
+          example: admin
+        email:
+          type: string
+          format: email
+          example: admin@holmos.local
+        roles:
+          type: array
+          items:
+            type: string
+          example: ["admin", "developer"]
+        permissions:
+          type: array
+          items:
+            type: string
+          example: ["read:pods", "write:deployments", "admin:cluster"]
+        created_at:
+          type: string
+          format: date-time
+        last_login:
+          type: string
+          format: date-time
+
+    APIKeysResponse:
+      type: object
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/APIKey'
+        count:
+          type: integer
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: "CI/CD Pipeline Key"
+        prefix:
+          type: string
+          description: First few characters of the key for identification
+          example: "hk_live_abc..."
+        permissions:
+          type: array
+          items:
+            type: string
+          example: ["read:builds", "write:deployments"]
+        created_at:
+          type: string
+          format: date-time
+        last_used:
+          type: string
+          format: date-time
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateAPIKeyRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: "CI/CD Pipeline Key"
+        permissions:
+          type: array
+          items:
+            type: string
+          example: ["read:builds", "write:deployments"]
+        expires_in:
+          type: integer
+          description: Expiry time in days (null for no expiry)
+          nullable: true
+          example: 90
+
+    APIKeyCreatedResponse:
+      type: object
+      properties:
+        key:
+          type: string
+          description: The full API key (only shown once)
+          example: "hk_live_abcdef123456789..."
+        key_info:
+          $ref: '#/components/schemas/APIKey'
+
+    SessionsResponse:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        count:
+          type: integer
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+        user_agent:
+          type: string
+          example: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)..."
+        ip_address:
+          type: string
+          example: "192.168.8.100"
+        location:
+          type: string
+          example: "Local Network"
+        created_at:
+          type: string
+          format: date-time
+        last_active:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+          description: Whether this is the current session
+
+    ServiceAuthRequest:
+      type: object
+      required:
+        - service_id
+        - service_secret
+      properties:
+        service_id:
+          type: string
+          example: "steve-bot"
+        service_secret:
+          type: string
+          format: password
+
+    ServiceAuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+        service:
+          type: string
+          example: "steve-bot"
+        permissions:
+          type: array
+          items:
+            type: string
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Operation completed successfully"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "unauthorized"
+        message:
+          type: string
+          example: "Invalid credentials"
+        code:
+          type: string
+          example: "AUTH_INVALID_CREDENTIALS"
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT Bearer token obtained from /api/v1/auth/login
+    APIKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key obtained from /api/v1/keys
+
+security: []

@@ -1,0 +1,212 @@
+openapi: 3.0.3
+info:
+  title: Chat Hub API
+  description: |
+    Chat Hub is the central communication service for Steve and Alice AI bots.
+    It provides a web UI for viewing bot conversations and APIs for injecting
+    messages into their ongoing discussions about HolmOS improvements.
+  version: 1.0.0
+  contact:
+    name: HolmOS Team
+
+servers:
+  - url: http://chat-hub.holm.svc.cluster.local:8080
+    description: Kubernetes internal service
+  - url: http://192.168.8.197:30XXX
+    description: NodePort external access
+
+tags:
+  - name: Health
+    description: Service health checks
+  - name: Conversation
+    description: Bot conversation endpoints
+  - name: WebSocket
+    description: Real-time communication
+
+paths:
+  /:
+    get:
+      summary: Chat Hub Web UI
+      description: Serves the HTML web interface for viewing Steve and Alice conversations
+      tags:
+        - Conversation
+      responses:
+        '200':
+          description: HTML page for the chat interface
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the chat-hub service
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/bot-conversation:
+    get:
+      summary: Get bot conversation history
+      description: |
+        Retrieves the recent conversation history between Steve and Alice bots.
+        Proxies the request to Steve Bot's conversation endpoint.
+      tags:
+        - Conversation
+      responses:
+        '200':
+          description: Conversation history retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '502':
+          description: Failed to fetch conversation from Steve Bot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/inject:
+    post:
+      summary: Inject message into bot conversation
+      description: |
+        Sends a user message to either Steve or Alice bot, triggering a response
+        that becomes part of their ongoing conversation. The message is first sent
+        to the selected bot, then the other bot responds to continue the dialogue.
+      tags:
+        - Conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InjectRequest'
+      responses:
+        '200':
+          description: Message successfully injected and responses received
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InjectResponse'
+        '400':
+          description: Invalid request - message is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Failed to reach target bot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - service
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+          example: healthy
+        service:
+          type: string
+          example: chat-hub
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-01-17T10:30:00.000Z"
+
+    ConversationResponse:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        count:
+          type: integer
+          description: Total number of messages returned
+          example: 50
+
+    Message:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-01-17T10:30:00.000Z"
+        speaker:
+          type: string
+          enum: [steve, alice, user]
+          example: steve
+        message:
+          type: string
+          description: The message content
+          example: "The CI/CD pipeline needs immediate attention."
+        topic:
+          type: string
+          description: Current conversation topic
+          example: "cluster_review"
+
+    InjectRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: The message to inject into the conversation
+          example: "What improvements should we prioritize for the cluster?"
+        sendTo:
+          type: string
+          enum: [steve, alice]
+          default: steve
+          description: Which bot should receive and respond to the message first
+
+    InjectResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        firstResponse:
+          type: string
+          description: Response from the first bot (sendTo target)
+          example: "Let me analyze the current cluster state..."
+        secondResponse:
+          type: string
+          description: Response from the other bot continuing the conversation
+          example: "Curiouser and curiouser! I noticed some interesting patterns..."
+        response:
+          type: string
+          description: Single response when second bot doesn't reply
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: "Failed to reach steve"
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: JWT Bearer token for authentication (if auth-gateway is enabled)
+
+security: []

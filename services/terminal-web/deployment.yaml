@@ -55,7 +55,11 @@ spec:
           name: http
         env:
         - name: DATABASE_URL
-          value: "host=postgres.holm.svc.cluster.local port=5432 user=holm password=holm-secret-123 dbname=holm sslmode=disable"
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: database-url
+              optional: true
         resources:
           requests:
             memory: "64Mi"

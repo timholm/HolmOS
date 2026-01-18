@@ -1,1 +1,18 @@
 # Auto-generated
+
+# Secrets - never commit actual secret values
+# The k8s/secrets/ directory contains templates with placeholder values
+# If you create local files with real secrets, add them here:
+*.secret.yaml
+*-secret-values.yaml
+secrets-local/
+
+# Environment files that might contain secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Kubeconfig files
+kubeconfig
+.kube/

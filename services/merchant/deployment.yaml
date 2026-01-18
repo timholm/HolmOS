@@ -41,7 +41,11 @@ spec:
           - name: SSH_USER
             value: "rpi1"
           - name: SSH_PASSWORD
-            value: "19209746"
+            valueFrom:
+              secretKeyRef:
+                name: ssh-credentials
+                key: password
+                optional: true
         resources:
           requests:
             memory: "64Mi"

@@ -1,0 +1,668 @@
+openapi: 3.0.3
+info:
+  title: Steve Bot API
+  description: |
+    Steve Bot is an AI-powered Kubernetes architect service with two operational modes:
+
+    **Steve Bot v3.0 (CI/CD Enforcer)** - Autonomous monitoring of CI/CD pipelines,
+    build tracking, deployment health validation, and infrastructure testing.
+
+    **Steve Bot v4.0 (AI Visionary)** - Powered by deepseek-r1, provides cluster
+    analysis, improvement proposals, and engages in continuous conversations with
+    Alice about making HolmOS better.
+
+    Both versions share the Steve Jobs personality - demanding excellence and
+    zero tolerance for mediocrity.
+  version: 4.0.0
+  contact:
+    name: HolmOS Team
+
+servers:
+  - url: http://steve-bot.holm.svc.cluster.local:8080
+    description: Kubernetes internal service
+  - url: http://192.168.8.197:30XXX
+    description: NodePort external access
+
+tags:
+  - name: Health
+    description: Service health and status endpoints
+  - name: CI/CD
+    description: CI/CD monitoring and testing (v3.0)
+  - name: Conversation
+    description: Bot conversation endpoints (v4.0)
+  - name: Analysis
+    description: Cluster analysis and improvements
+  - name: WebSocket
+    description: Real-time communication
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status, current mood, and frustration level
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/status:
+    get:
+      summary: Get Steve's current status
+      description: Returns Steve's version, model, current topic, and philosophy
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Status information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /status:
+    get:
+      summary: Get Steve v3.0 status (CI/CD Enforcer)
+      description: Returns CI/CD enforcer status including mood and monitoring stats
+      tags:
+        - CI/CD
+      responses:
+        '200':
+          description: CI/CD enforcer status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnforcerStatus'
+
+  /bugs:
+    get:
+      summary: Get open bugs
+      description: Returns all open bugs tracked by Steve's memory database
+      tags:
+        - CI/CD
+      responses:
+        '200':
+          description: List of open bugs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BugsResponse'
+
+  /rants:
+    get:
+      summary: Get Steve's recent rants
+      description: Returns Steve's recent rant history about infrastructure issues
+      tags:
+        - CI/CD
+      responses:
+        '200':
+          description: List of recent rants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RantsResponse'
+
+  /cicd:
+    get:
+      summary: Get CI/CD health check
+      description: Performs and returns a deep CI/CD infrastructure health check
+      tags:
+        - CI/CD
+      responses:
+        '200':
+          description: CI/CD health report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CICDHealthResponse'
+
+  /test:
+    get:
+      summary: Trigger full test suite
+      description: Manually triggers Steve's comprehensive endpoint test suite
+      tags:
+        - CI/CD
+      responses:
+        '200':
+          description: Test results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestSuiteResponse'
+
+  /api/analyze:
+    post:
+      summary: Analyze cluster
+      description: Triggers a deep cluster analysis using AI
+      tags:
+        - Analysis
+      responses:
+        '200':
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+
+  /api/chat:
+    post:
+      summary: Chat with Steve
+      description: Send a message to Steve and receive a response
+      tags:
+        - Conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Steve's response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: No message provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/respond:
+    post:
+      summary: Respond to Alice's message
+      description: Endpoint for Alice bot to send messages to Steve
+      tags:
+        - Conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RespondRequest'
+      responses:
+        '200':
+          description: Steve's response to Alice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RespondResponse'
+
+  /api/conversations:
+    get:
+      summary: Get conversation history
+      description: Returns recent conversation messages between Steve and Alice
+      tags:
+        - Conversation
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of messages to return
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Conversation history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationsResponse'
+
+  /api/improvements:
+    get:
+      summary: Get proposed improvements
+      description: Returns list of improvements proposed by Steve
+      tags:
+        - Analysis
+      responses:
+        '200':
+          description: List of improvements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImprovementsResponse'
+
+  /api/cluster:
+    get:
+      summary: Get cluster summary
+      description: Returns current Kubernetes cluster state summary
+      tags:
+        - Analysis
+      responses:
+        '200':
+          description: Cluster summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterSummary'
+
+  /ws:
+    get:
+      summary: WebSocket connection
+      description: |
+        WebSocket endpoint for real-time conversation updates.
+        Supports chat messages with type: "chat" and message content.
+      tags:
+        - WebSocket
+      responses:
+        '101':
+          description: WebSocket connection upgraded
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+          example: healthy
+        mood:
+          type: string
+          enum: [volcanic_rage, furious, seething, disgusted, disappointed, contemptuous, skeptical, grudgingly_tolerant, momentarily_satisfied]
+          example: skeptical
+        frustration:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 50
+        bot:
+          type: string
+          example: steve
+        model:
+          type: string
+          example: "deepseek-r1:7b"
+        personality:
+          type: string
+          example: visionary
+        timestamp:
+          type: string
+          format: date-time
+
+    StatusResponse:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "Steve Jobs"
+        version:
+          type: string
+          example: "4.0"
+        model:
+          type: string
+          example: "deepseek-r1:7b"
+        ollama_url:
+          type: string
+          example: "http://192.168.8.230:11434"
+        current_topic:
+          type: string
+          example: "cluster_review"
+        philosophy:
+          type: string
+          example: "Stay hungry, stay foolish"
+        mission:
+          type: string
+          example: "Make this cluster insanely great"
+
+    EnforcerStatus:
+      type: object
+      properties:
+        steve_version:
+          type: string
+          example: "3.0"
+        mood:
+          type: string
+          example: "skeptical"
+        frustration:
+          type: integer
+          example: 50
+        last_test:
+          type: string
+          format: date-time
+          nullable: true
+        endpoints_monitored:
+          type: integer
+          example: 20
+        focus:
+          type: string
+          example: "CI/CD, GitOps, Deployments"
+        philosophy:
+          type: string
+          example: "Zero tolerance for broken pipelines"
+
+    BugsResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          example: 5
+        critical:
+          type: integer
+          example: 1
+        high:
+          type: integer
+          example: 2
+        bugs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bug'
+
+    Bug:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "bug-abc123"
+        endpoint:
+          type: string
+          example: "/api/builds"
+        severity:
+          type: string
+          enum: [CRITICAL, HIGH, MEDIUM, LOW, NITPICK]
+        title:
+          type: string
+          example: "Build endpoint timeout"
+        description:
+          type: string
+        steves_rant:
+          type: string
+          example: "TIMEOUT?! In 2026?! My TOASTER responds faster than this garbage."
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+        occurrence_count:
+          type: integer
+        category:
+          type: string
+          enum: [general, cicd, git, deploy]
+
+    RantsResponse:
+      type: object
+      properties:
+        rants:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rant'
+        count:
+          type: integer
+
+    Rant:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        category:
+          type: string
+          example: "build_failed"
+        message:
+          type: string
+          example: "BUILD FAILED. The pipeline is RED. WHO PUSHED BROKEN CODE?!"
+        severity:
+          type: string
+
+    CICDHealthResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        builds:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [unknown, empty, failing, running, ok, error]
+            issues:
+              type: array
+              items:
+                type: string
+        pipelines:
+          type: object
+          properties:
+            status:
+              type: string
+            issues:
+              type: array
+              items:
+                type: string
+            count:
+              type: integer
+        registry:
+          type: object
+          properties:
+            status:
+              type: string
+            issues:
+              type: array
+              items:
+                type: string
+            count:
+              type: integer
+        repos:
+          type: object
+          properties:
+            status:
+              type: string
+            issues:
+              type: array
+              items:
+                type: string
+            count:
+              type: integer
+        steves_verdict:
+          type: string
+          example: "CI/CD is... acceptable. For now. Don't get comfortable."
+
+    TestSuiteResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/EndpointResult'
+        cicd_health:
+          $ref: '#/components/schemas/CICDHealthResponse'
+        summary:
+          $ref: '#/components/schemas/TestSummary'
+
+    EndpointResult:
+      type: object
+      properties:
+        endpoint:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [api, ui]
+        critical:
+          type: boolean
+        url:
+          type: string
+        success:
+          type: boolean
+        response_time_ms:
+          type: number
+        status_code:
+          type: integer
+        issues:
+          type: array
+          items:
+            type: string
+        steves_take:
+          type: string
+
+    TestSummary:
+      type: object
+      properties:
+        total_endpoints:
+          type: integer
+        passed:
+          type: integer
+        failed:
+          type: integer
+        critical_failures:
+          type: integer
+        pass_rate:
+          type: number
+        avg_response_ms:
+          type: number
+        cicd_issues:
+          type: integer
+        mood:
+          type: string
+        frustration:
+          type: integer
+        verdict:
+          type: string
+
+    AnalysisResponse:
+      type: object
+      properties:
+        analysis:
+          type: string
+          description: AI-generated cluster analysis
+
+    ChatRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          example: "What improvements should we prioritize?"
+
+    ChatResponse:
+      type: object
+      properties:
+        response:
+          type: string
+        speaker:
+          type: string
+          example: steve
+
+    RespondRequest:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Message from Alice
+        from:
+          type: string
+          example: alice
+        topic:
+          type: string
+          example: "architecture"
+
+    RespondResponse:
+      type: object
+      properties:
+        response:
+          type: string
+        speaker:
+          type: string
+          example: steve
+        topic:
+          type: string
+
+    ConversationsResponse:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        count:
+          type: integer
+
+    Message:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        speaker:
+          type: string
+          enum: [steve, alice]
+        message:
+          type: string
+        topic:
+          type: string
+
+    ImprovementsResponse:
+      type: object
+      properties:
+        improvements:
+          type: array
+          items:
+            $ref: '#/components/schemas/Improvement'
+        count:
+          type: integer
+
+    Improvement:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        proposed_by:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [proposed, approved, implemented, rejected]
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+
+    ClusterSummary:
+      type: object
+      properties:
+        nodes:
+          type: string
+          description: kubectl get nodes output
+        pods:
+          type: string
+          description: kubectl get pods output
+        deployments:
+          type: string
+          description: kubectl get deployments output
+        services:
+          type: string
+          description: kubectl get services output
+        events:
+          type: string
+          description: Recent cluster events
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: JWT Bearer token for authentication
+
+security: []

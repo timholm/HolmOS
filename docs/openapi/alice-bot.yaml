@@ -1,0 +1,469 @@
+openapi: 3.0.3
+info:
+  title: Alice Bot API
+  description: |
+    Alice Bot v2.0 - The Curious Code Explorer
+
+    Alice is an AI-powered codebase explorer powered by gemma3. She continuously
+    "tumbles down rabbit holes" in the HolmOS codebase, discovering undocumented
+    APIs, finding functions without endpoints, and engaging in whimsical yet
+    insightful conversations with Steve about improvements.
+
+    Her personality is inspired by Alice from Wonderland - endlessly curious,
+    full of wonder, and speaking in Lewis Carroll metaphors.
+  version: 2.0.0
+  contact:
+    name: HolmOS Team
+
+servers:
+  - url: http://alice-bot.holm.svc.cluster.local:8080
+    description: Kubernetes internal service
+  - url: http://192.168.8.197:30XXX
+    description: NodePort external access
+
+tags:
+  - name: Health
+    description: Service health and status endpoints
+  - name: Exploration
+    description: Codebase exploration endpoints
+  - name: Conversation
+    description: Bot conversation endpoints
+  - name: Discovery
+    description: Code discovery and analysis
+  - name: WebSocket
+    description: Real-time communication
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns Alice's health status and current state
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/status:
+    get:
+      summary: Get Alice's current status
+      description: Returns Alice's version, model, current exploration topic, and personality
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Status information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /api/explore:
+    post:
+      summary: Trigger codebase exploration
+      description: |
+        Alice tumbles down the rabbit hole and explores the codebase,
+        analyzing services, functions, and API endpoints. Returns her
+        curious observations about what she discovered.
+      tags:
+        - Exploration
+      responses:
+        '200':
+          description: Exploration results with Alice's observations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplorationResponse'
+
+  /api/chat:
+    post:
+      summary: Chat with Alice
+      description: Send a message to Alice and receive a response in her whimsical style
+      tags:
+        - Conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Alice's response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: No message provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/respond:
+    post:
+      summary: Respond to Steve's message
+      description: Endpoint for Steve bot to send messages to Alice
+      tags:
+        - Conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RespondRequest'
+      responses:
+        '200':
+          description: Alice's response to Steve
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RespondResponse'
+
+  /api/report:
+    get:
+      summary: Get full codebase analysis report
+      description: |
+        Returns a comprehensive analysis of the HolmOS codebase including:
+        - All services discovered
+        - Functions in each service
+        - API endpoints found
+        - Functions missing API endpoints ("doors without handles")
+      tags:
+        - Discovery
+      responses:
+        '200':
+          description: Full codebase analysis report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodebaseReport'
+
+  /api/conversations:
+    get:
+      summary: Get conversation history
+      description: Returns recent conversation messages between Alice and Steve
+      tags:
+        - Conversation
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of messages to return
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Conversation history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationsResponse'
+
+  /api/discoveries:
+    get:
+      summary: Get Alice's discoveries
+      description: Returns all discoveries Alice has made during her explorations
+      tags:
+        - Discovery
+      responses:
+        '200':
+          description: List of discoveries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveriesResponse'
+
+  /ws:
+    get:
+      summary: WebSocket connection
+      description: |
+        WebSocket endpoint for real-time conversation updates.
+        Supports chat messages with type: "chat" and message content.
+      tags:
+        - WebSocket
+      responses:
+        '101':
+          description: WebSocket connection upgraded
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+          example: healthy
+        bot:
+          type: string
+          example: alice
+        model:
+          type: string
+          example: gemma3
+        personality:
+          type: string
+          example: curious
+        timestamp:
+          type: string
+          format: date-time
+
+    StatusResponse:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Alice
+        version:
+          type: string
+          example: "2.0"
+        model:
+          type: string
+          example: gemma3
+        quote:
+          type: string
+          example: "Curiouser and curiouser!"
+        mission:
+          type: string
+          example: "Explore every rabbit hole in the codebase"
+        current_topic:
+          type: string
+          example: "missing_apis"
+
+    ExplorationResponse:
+      type: object
+      properties:
+        exploration:
+          type: string
+          description: Alice's observations about the codebase in her whimsical style
+          example: "Down the rabbit hole I went, and what curious things I found! There are 15 services in this Wonderland..."
+
+    ChatRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          example: "What undocumented features have you discovered?"
+
+    ChatResponse:
+      type: object
+      properties:
+        response:
+          type: string
+          description: Alice's response in her curious, whimsical style
+        speaker:
+          type: string
+          example: alice
+
+    RespondRequest:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Message from Steve
+        from:
+          type: string
+          example: steve
+        topic:
+          type: string
+          example: "code_patterns"
+
+    RespondResponse:
+      type: object
+      properties:
+        response:
+          type: string
+        speaker:
+          type: string
+          example: alice
+        topic:
+          type: string
+
+    CodebaseReport:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        total_services:
+          type: integer
+          description: Number of services discovered
+          example: 15
+        total_functions:
+          type: integer
+          description: Total functions found across all services
+          example: 250
+        total_endpoints:
+          type: integer
+          description: Total API endpoints found
+          example: 85
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceAnalysis'
+        missing_apis:
+          type: array
+          description: Functions without corresponding API endpoints (doors without handles)
+          items:
+            $ref: '#/components/schemas/MissingAPI'
+
+    ServiceAnalysis:
+      type: object
+      properties:
+        name:
+          type: string
+          example: nova
+        path:
+          type: string
+          example: /repo/services/nova
+        functions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunctionInfo'
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/EndpointInfo'
+        files:
+          type: object
+          properties:
+            go:
+              type: integer
+            python:
+              type: integer
+            yaml:
+              type: integer
+            other:
+              type: integer
+        exported_count:
+          type: integer
+          description: Number of exported/public functions
+        endpoint_count:
+          type: integer
+          description: Number of API endpoints
+        coverage:
+          type: number
+          description: Percentage of exported functions with API endpoints
+          example: 75.5
+
+    FunctionInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: GetNodes
+        file:
+          type: string
+          example: /repo/services/nova/handlers.go
+        line:
+          type: integer
+          example: 42
+        exported:
+          type: boolean
+          description: Whether the function is exported/public
+
+    EndpointInfo:
+      type: object
+      properties:
+        path:
+          type: string
+          example: /api/nodes
+        file:
+          type: string
+        line:
+          type: integer
+
+    MissingAPI:
+      type: object
+      description: A function that appears to lack a corresponding API endpoint
+      properties:
+        function:
+          type: string
+          example: ProcessBackup
+        service:
+          type: string
+          example: backup
+        file:
+          type: string
+          example: /repo/services/backup/app.py
+        line:
+          type: integer
+          example: 156
+
+    ConversationsResponse:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        count:
+          type: integer
+
+    Message:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        speaker:
+          type: string
+          enum: [steve, alice]
+        message:
+          type: string
+        topic:
+          type: string
+
+    DiscoveriesResponse:
+      type: object
+      properties:
+        discoveries:
+          type: array
+          items:
+            $ref: '#/components/schemas/Discovery'
+        count:
+          type: integer
+
+    Discovery:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        category:
+          type: string
+          description: Category of discovery
+          enum: [missing_api, code_pattern, documentation, architecture, testing]
+          example: missing_api
+        title:
+          type: string
+          example: "Function without API door"
+        description:
+          type: string
+          example: "The ProcessBackup function in backup service has no corresponding endpoint"
+        file_path:
+          type: string
+          example: /repo/services/backup/app.py
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: JWT Bearer token for authentication
+
+security: []

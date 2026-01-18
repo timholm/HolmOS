@@ -80,4 +80,6 @@ metadata:
   namespace: holm
 type: Opaque
 stringData:
-  database-url: "postgres://holm:holm-secret-123@postgres.holm.svc.cluster.local:5432/holm?sslmode=disable"
+  # WARNING: Set real values in cluster, not here!
+  # Use: kubectl create secret generic user-preferences-db-secret --from-literal=database-url='postgres://USER:PASS@HOST:PORT/DB?sslmode=disable' -n holm
+  database-url: "postgres://holm:CHANGE_ME_IN_CLUSTER@postgres.holm.svc.cluster.local:5432/holm?sslmode=disable"

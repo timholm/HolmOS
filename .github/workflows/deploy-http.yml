@@ -1,0 +1,201 @@
+name: Deploy via HTTP API
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to deploy (or "all")'
+        required: true
+        default: 'all'
+      command:
+        description: 'Custom command to run (optional, overrides service deploy)'
+        required: false
+
+env:
+  REGISTRY: 192.168.8.197:31500
+
+jobs:
+  custom-command:
+    name: Run Custom Command
+    if: github.event.inputs.command != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run command on cluster
+        env:
+          REMOTE_API_URL: ${{ secrets.REMOTE_API_URL }}
+        run: |
+          if [ -z "$REMOTE_API_URL" ]; then
+            echo "Error: REMOTE_API_URL secret not set"
+            exit 1
+          fi
+
+          echo "Running: ${{ github.event.inputs.command }}"
+          RESPONSE=$(curl -s -X POST "${REMOTE_API_URL}/run" \
+            -H "Content-Type: application/json" \
+            -d '{"cmd": "${{ github.event.inputs.command }}"}')
+
+          echo "$RESPONSE" | jq -r '.stdout // empty'
+          STDERR=$(echo "$RESPONSE" | jq -r '.stderr // empty')
+          [ -n "$STDERR" ] && echo "$STDERR" >&2
+          CODE=$(echo "$RESPONSE" | jq -r '.code // "1"')
+          exit $CODE
+
+  detect:
+    name: Detect Changes
+    if: github.event.inputs.command == ''
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      services: ${{ steps.set-matrix.outputs.services }}
+      has_services: ${{ steps.set-matrix.outputs.has_services }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect services to build
+        id: set-matrix
+        run: |
+          if [ "${{ github.event.inputs.service }}" = "all" ]; then
+            SERVICES=$(find services -name "Dockerfile" -exec dirname {} \; | xargs -I {} basename {} | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          else
+            SERVICES="[\"${{ github.event.inputs.service }}\"]"
+          fi
+
+          if [ -z "$SERVICES" ] || [ "$SERVICES" = "[]" ] || [ "$SERVICES" = '[""]' ]; then
+            echo "has_services=false" >> $GITHUB_OUTPUT
+            echo "services=[]" >> $GITHUB_OUTPUT
+            echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+          else
+            echo "has_services=true" >> $GITHUB_OUTPUT
+            MATRIX='{"include":[]}'
+            for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+              if [ -f "services/$svc/Dockerfile" ]; then
+                MATRIX=$(echo "$MATRIX" | jq -c --arg s "$svc" '.include += [{"service": $s}]')
+              fi
+            done
+            echo "services=$(echo "$SERVICES" | jq -c .)" >> $GITHUB_OUTPUT
+            echo "matrix=$(echo "$MATRIX" | jq -c .)" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build ${{ matrix.service }}
+    needs: detect
+    if: needs.detect.outputs.has_services == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and save image
+        run: |
+          cd services/${{ matrix.service }}
+          docker buildx build \
+            --platform linux/arm64 \
+            --tag ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
+            --tag ${{ env.REGISTRY }}/${{ matrix.service }}:latest \
+            --output type=docker,dest=/tmp/${{ matrix.service }}.tar \
+            .
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp/${{ matrix.service }}.tar
+          retention-days: 1
+
+  deploy:
+    name: Deploy ${{ matrix.service }}
+    needs: [detect, build]
+    if: needs.detect.outputs.has_services == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp
+
+      - name: Deploy via HTTP API
+        env:
+          REMOTE_API_URL: ${{ secrets.REMOTE_API_URL }}
+        run: |
+          SERVICE="${{ matrix.service }}"
+          IMAGE_TAG="${{ github.sha }}"
+
+          # Helper function to run remote commands
+          run_remote() {
+            local cmd="$1"
+            RESPONSE=$(curl -s -X POST "${REMOTE_API_URL}/run" \
+              -H "Content-Type: application/json" \
+              -d "{\"cmd\": \"$cmd\"}")
+            echo "$RESPONSE" | jq -r '.stdout // empty'
+            STDERR=$(echo "$RESPONSE" | jq -r '.stderr // empty')
+            [ -n "$STDERR" ] && echo "$STDERR" >&2
+            CODE=$(echo "$RESPONSE" | jq -r '.code // "1"')
+            return $CODE
+          }
+
+          echo "📦 Uploading image to Mac Mini..."
+          # Base64 encode and send in chunks via API
+          base64 /tmp/${SERVICE}.tar > /tmp/${SERVICE}.b64
+
+          # Upload via API (chunked for large files)
+          CHUNK_SIZE=1000000  # 1MB chunks
+          split -b $CHUNK_SIZE /tmp/${SERVICE}.b64 /tmp/chunk_
+
+          run_remote "rm -f /tmp/${SERVICE}.b64"
+          for chunk in /tmp/chunk_*; do
+            CHUNK_DATA=$(cat "$chunk" | tr -d '\n')
+            run_remote "echo '${CHUNK_DATA}' >> /tmp/${SERVICE}.b64"
+          done
+
+          echo "📥 Decoding image on Mac Mini..."
+          run_remote "base64 -d /tmp/${SERVICE}.b64 > /tmp/${SERVICE}.tar && rm /tmp/${SERVICE}.b64"
+
+          echo "🚀 Deploying to Pi cluster..."
+          run_remote "sshpass -p '19209746' scp -o StrictHostKeyChecking=no /tmp/${SERVICE}.tar rpi1@192.168.8.197:/tmp/${SERVICE}.tar"
+
+          run_remote "sshpass -p '19209746' ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 'sudo ctr -n k8s.io images import /tmp/${SERVICE}.tar'"
+
+          echo "🔄 Updating deployment..."
+          run_remote "sshpass -p '19209746' ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 'kubectl set image deployment/${SERVICE} ${SERVICE}=${{ env.REGISTRY }}/${SERVICE}:${IMAGE_TAG} -n holm 2>/dev/null || echo No deployment found'"
+
+          echo "🧹 Cleaning up..."
+          run_remote "rm -f /tmp/${SERVICE}.tar"
+          run_remote "sshpass -p '19209746' ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 'rm -f /tmp/${SERVICE}.tar'"
+
+          echo "✅ Deployment complete!"
+
+  summary:
+    name: Deployment Summary
+    needs: [detect, build, deploy]
+    if: always() && github.event.inputs.command == ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🚀 HolmOS HTTP API Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Services:** ${{ needs.detect.outputs.services }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Detect | ${{ needs.detect.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY

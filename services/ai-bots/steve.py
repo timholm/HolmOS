@@ -18,6 +18,7 @@ import os
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Optional, Any
 from flask import Flask, jsonify, request
 from flask_sock import Sock
@@ -241,11 +242,13 @@ class ConversationDB:
 
     def add_task(self, reported_by: str, title: str, description: str,
                  task_type: str = "bug", priority: int = 5,
-                 affected_service: str = "", file_path: str = "") -> int:
+                 affected_service: str = "", file_path: str = "") -> Dict:
         """Add a new task for Claude Code to work on.
 
         Deduplication: Won't create duplicate tasks for same service with same error
         if a pending/in_progress task already exists.
+
+        Returns dict with task_id and is_new flag.
         """
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -259,7 +262,7 @@ class ConversationDB:
             existing = c.fetchone()
             if existing:
                 conn.close()
-                return existing[0]  # Return existing task ID
+                return {"task_id": existing[0], "is_new": False}  # Deduplicated
 
         c.execute('''INSERT INTO tasks
                      (timestamp, reported_by, title, description, task_type,
@@ -270,7 +273,17 @@ class ConversationDB:
         task_id = c.lastrowid
         conn.commit()
         conn.close()
-        return task_id
+
+        # Notify about new task
+        task_info = {
+            "title": title,
+            "priority": priority,
+            "affected_service": affected_service,
+            "reported_by": reported_by
+        }
+        self.notify_new_task(task_id, task_info)
+
+        return {"task_id": task_id, "is_new": True}
 
     def get_tasks(self, status: str = "pending", limit: int = 20) -> List[Dict]:
         """Get tasks sorted by priority (1=highest, 10=lowest)."""
@@ -349,8 +362,37 @@ class ConversationDB:
         c = conn.cursor()
         c.execute('''SELECT status, COUNT(*) FROM tasks GROUP BY status''')
         stats = {row[0]: row[1] for row in c.fetchall()}
+        c.execute('''SELECT COUNT(*) FROM tasks''')
+        stats["total"] = c.fetchone()[0]
         conn.close()
         return stats
+
+    def notify_new_task(self, task_id: int, task: Dict):
+        """Notify about a new task - writes to notification file for watchers."""
+        notify_dir = Path("/data/notifications")
+        notify_dir.mkdir(parents=True, exist_ok=True)
+
+        notification = {
+            "type": "new_task",
+            "timestamp": datetime.now().isoformat(),
+            "task_id": task_id,
+            "title": task.get("title", ""),
+            "priority": task.get("priority", 5),
+            "affected_service": task.get("affected_service", ""),
+            "reported_by": task.get("reported_by", "")
+        }
+
+        # Write individual notification file (for watchers using inotify/polling)
+        notify_file = notify_dir / f"task_{task_id}.json"
+        notify_file.write_text(json.dumps(notification, indent=2))
+
+        # Also append to a log file for history
+        log_file = notify_dir / "task_log.jsonl"
+        with open(log_file, "a") as f:
+            f.write(json.dumps(notification) + "\n")
+
+        logger.info(f"New task notification: #{task_id} - {task.get('title', 'No title')}")
+        return notification
 
 
 class OllamaClient:
@@ -741,7 +783,7 @@ def add_task():
     if not title or not description:
         return jsonify({"error": "title and description required"}), 400
 
-    task_id = steve.db.add_task(
+    result = steve.db.add_task(
         reported_by=data.get('reported_by', 'api'),
         title=title,
         description=description,
@@ -751,14 +793,26 @@ def add_task():
         file_path=data.get('file_path', '')
     )
 
-    logger.info(f"New task added: #{task_id} - {title}")
-    steve.broadcast({"type": "new_task", "task_id": task_id, "title": title})
+    task_id = result["task_id"]
+    is_new = result["is_new"]
 
-    return jsonify({
-        "success": True,
-        "task_id": task_id,
-        "message": f"Task #{task_id} created"
-    })
+    if is_new:
+        logger.info(f"New task added: #{task_id} - {title}")
+        steve.broadcast({"type": "new_task", "task_id": task_id, "title": title})
+        return jsonify({
+            "success": True,
+            "task_id": task_id,
+            "is_new": True,
+            "message": f"Task #{task_id} created"
+        })
+    else:
+        logger.info(f"Task deduplicated: existing #{task_id} for {data.get('affected_service', 'unknown')}")
+        return jsonify({
+            "success": True,
+            "task_id": task_id,
+            "is_new": False,
+            "message": f"Existing task #{task_id} (deduplicated)"
+        })
 
 @app.route('/api/tasks/<int:task_id>/status', methods=['PUT'])
 def update_task_status(task_id):

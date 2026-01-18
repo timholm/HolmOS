@@ -761,8 +761,13 @@ def respond():
     data = request.json
     message = data.get("message", "")
     topic = data.get("topic", "general")
+    sender = data.get("from", "karen")
 
     steve.current_topic = topic
+
+    # Save Karen's message to the conversation DB
+    steve.db.add_message(sender, message, topic)
+    steve.broadcast({"type": "message", "speaker": sender, "message": message, "topic": topic})
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

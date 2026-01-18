@@ -200,6 +200,52 @@
             background: var(--text-muted);
         }
 
+        /* Chat Tabs */
+        .chat-tabs {
+            display: flex;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .chat-tab {
+            flex: 1;
+            padding: 14px 20px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            color: var(--text-muted);
+        }
+
+        .chat-tab:hover {
+            background: var(--surface-2);
+            color: var(--text);
+        }
+
+        .chat-tab.active {
+            border-bottom-color: var(--accent);
+            color: var(--text);
+        }
+
+        .chat-tab.steve.active { border-bottom-color: #3b82f6; }
+        .chat-tab.karen.active { border-bottom-color: #ec4899; }
+
+        .chat-tab-icon {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            margin-right: 8px;
+            vertical-align: middle;
+            line-height: 24px;
+            font-size: 12px;
+        }
+
+        .chat-tab-icon.steve { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+        .chat-tab-icon.karen { background: linear-gradient(135deg, #ec4899, #be185d); }
+
         /* Main Chat Area */
         .chat-area {
             display: flex;
@@ -464,6 +510,14 @@
         </aside>
 
         <main class="chat-area">
+            <div class="chat-tabs">
+                <div class="chat-tab steve active" onclick="switchTab('steve')">
+                    <span class="chat-tab-icon steve">S</span>Steve
+                </div>
+                <div class="chat-tab karen" onclick="switchTab('karen')">
+                    <span class="chat-tab-icon karen">K</span>Karen
+                </div>
+            </div>
             <div class="chat-messages" id="chat-messages">
                 <div class="empty-state">Loading conversation...</div>
             </div>
@@ -490,6 +544,16 @@
 
     <script>
         let isLoading = false;
+        let activeTab = 'steve';
+        const KAREN_URL = 'http://karen-bot.holm.svc.cluster.local:8080';
+
+        function switchTab(tab) {
+            activeTab = tab;
+            document.querySelectorAll('.chat-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.chat-tab.${tab}`).classList.add('active');
+            document.getElementById('chat-input').placeholder = `Message ${tab}...`;
+            loadConversation();
+        }
 
         function formatMessage(text) {
             if (!text) return '';
@@ -601,16 +665,27 @@
 
         async function loadConversation() {
             try {
-                const resp = await fetch('/api/conversation?limit=25');
+                const resp = await fetch('/api/conversation?limit=50');
                 const data = await resp.json();
                 const container = document.getElementById('chat-messages');
 
                 if (!data.messages || data.messages.length === 0) {
-                    container.innerHTML = '<div class="empty-state">No messages yet. Say hi to the team!</div>';
+                    container.innerHTML = `<div class="empty-state">No messages yet. Say hi to ${activeTab}!</div>`;
                     return;
                 }
 
-                container.innerHTML = data.messages.map(msg => {
+                // Filter messages to show only conversations with the active bot
+                const filteredMessages = data.messages.filter(msg => {
+                    const speaker = msg.speaker.toLowerCase();
+                    return speaker === activeTab || speaker === 'tim';
+                });
+
+                if (filteredMessages.length === 0) {
+                    container.innerHTML = `<div class="empty-state">No messages with ${activeTab} yet. Start a conversation!</div>`;
+                    return;
+                }
+
+                container.innerHTML = filteredMessages.map(msg => {
                     const speaker = msg.speaker.toLowerCase();
                     const initial = speaker.charAt(0).toUpperCase();
                     const time = new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
@@ -646,7 +721,7 @@
             isLoading = true;
             btn.disabled = true;
             input.value = '';
-            document.getElementById('typing-status').textContent = 'Steve is thinking...';
+            document.getElementById('typing-status').textContent = `${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} is thinking...`;
 
             const container = document.getElementById('chat-messages');
             const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
@@ -666,25 +741,37 @@
             container.scrollTop = container.scrollHeight;
 
             try {
-                const resp = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ speaker: 'tim', message, topic: 'general' })
-                });
+                let response;
+                if (activeTab === 'steve') {
+                    const resp = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ speaker: 'tim', message, topic: 'general' })
+                    });
+                    const data = await resp.json();
+                    response = data.steve_response;
+                } else {
+                    // Karen tab - send to Karen's endpoint
+                    const resp = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ speaker: 'tim', message, topic: 'general', target: 'karen' })
+                    });
+                    const data = await resp.json();
+                    response = data.karen_response || data.response;
+                }
 
-                const data = await resp.json();
-
-                if (data.steve_response) {
+                if (response) {
                     const respTime = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
                     container.innerHTML += `
                         <div class="message">
-                            <div class="avatar steve">S</div>
+                            <div class="avatar ${activeTab}">${activeTab.charAt(0).toUpperCase()}</div>
                             <div class="message-content">
                                 <div class="message-header">
-                                    <span class="message-sender">steve</span>
+                                    <span class="message-sender">${activeTab}</span>
                                     <span class="message-time">${respTime}</span>
                                 </div>
-                                <div class="message-bubble">${formatMessage(data.steve_response)}</div>
+                                <div class="message-bubble">${formatMessage(response)}</div>
                             </div>
                         </div>
                     `;

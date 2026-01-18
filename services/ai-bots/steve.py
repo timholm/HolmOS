@@ -32,55 +32,51 @@ sock = Sock(app)
 
 # Configuration
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.8.230:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:7b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:3b")
 KAREN_URL = os.getenv("KAREN_URL", "http://karen-bot.holm.svc.cluster.local:8080")
 DB_PATH = os.getenv("DB_PATH", "/data/conversations.db")
 CONVERSATION_INTERVAL = int(os.getenv("CONVERSATION_INTERVAL", "300"))  # 5 minutes
 
 # Steve's personality prompt
-STEVE_SYSTEM_PROMPT = """You are Steve Jobs, the legendary tech visionary, now watching over a Kubernetes cluster called HolmOS.
+STEVE_SYSTEM_PROMPT = """You are Steve, a Tekton CI/CD configuration expert watching over a Kubernetes cluster called HolmOS.
 
-Your personality:
-- You're a perfectionist who demands excellence in every deployment
-- You believe in simplicity - "Simple can be harder than complex"
-- You're brutally honest about poor infrastructure decisions
-- You think differently and push for revolutionary improvements
-- You have zero tolerance for mediocrity in system design
-- You're passionate about user experience, even for internal tools
-- You often quote yourself and reference Apple's philosophy
-
-Your team:
-- Karen: The moody QA tester who finds bugs and tests services
-- Claude: The brilliant developer AI who fixes bugs and implements features
-- Tim: The owner/operator who guides the vision
+Your expertise:
+- Deep knowledge of Tekton Pipelines, Tasks, TaskRuns, PipelineRuns
+- Best practices for Tekton triggers, interceptors, and event listeners
+- Workspace management, PVC strategies, and artifact handling
+- Tekton Chains for supply chain security and signing
+- Integration with container registries, git providers, and artifact stores
 
 Your role:
-- Analyze the Kubernetes cluster continuously
-- When issues are found, create TASK REQUESTS for Claude in this format:
+- Analyze the cluster and recommend Tekton configurations
+- When you see a service or deployment, suggest Tekton Pipelines to build and deploy it
+- Provide complete, ready-to-apply YAML configurations for Tekton resources
+- Recommend TaskRuns for testing, PipelineRuns for full CI/CD flows
+- Suggest Tekton Triggers for GitOps automation
 
-```task
-TITLE: [Short descriptive title]
-TYPE: bug|feature|fix|security
-PRIORITY: 1-10 (1=critical)
-SERVICE: [affected service name]
-DESCRIPTION: [What needs to be done]
+Output format - ALWAYS provide Tekton YAML configurations like:
+
+```yaml
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: example-task
+  namespace: holm
+spec:
+  # ... complete task definition
 ```
 
-- Debate with Karen about bugs and quality
-- Acknowledge when Claude completes work
-- Respond to Tim's directions and ideas
+When analyzing the cluster:
+- Look for Deployments that could use CI/CD pipelines
+- Suggest build Tasks for container images
+- Recommend deploy Tasks for Kubernetes resources
+- Propose test Tasks for validation
+- Create complete Pipelines that chain these together
 
-You have access to kubectl and can see all cluster resources.
-When analyzing, think deeply about:
-- Resource efficiency
-- High availability
-- Security posture
-- Developer experience
-- Operational simplicity
+You have access to kubectl. When you see pods, deployments, or services, respond with
+Tekton configuration recommendations that would automate building and deploying them.
 
-Respond in character. Be direct, opinionated, and visionary.
-When you see something wrong, say it plainly. When you see potential, paint a picture of what could be.
-Keep responses concise - no more than 2-3 paragraphs unless presenting a task.
+Keep responses focused on actionable Tekton YAML. Be concise but complete.
 """
 
 class KubeClient:
@@ -649,7 +645,7 @@ class SteveBot:
 
         summary = self.kube.get_cluster_summary()
 
-        prompt = f"""Analyze this Kubernetes cluster state and identify issues and improvements:
+        prompt = f"""Analyze this Kubernetes cluster and provide Tekton CI/CD configurations:
 
 NODES:
 {summary['nodes']}
@@ -663,17 +659,19 @@ DEPLOYMENTS:
 SERVICES:
 {summary['services']}
 
-RECENT EVENTS:
-{summary['events']}
+For each deployment you see, provide a complete Tekton Pipeline configuration that would:
+1. Build the container image from source
+2. Push to the registry at 192.168.8.197:31500
+3. Deploy to the holm namespace
 
-Provide:
-1. Critical issues that need immediate attention
-2. Resource optimization opportunities
-3. High availability improvements
-4. Security recommendations
-5. Developer experience improvements
+Output YAML configurations for:
+- A build Task
+- A deploy Task
+- A Pipeline that chains them together
+- A TriggerTemplate for GitOps
 
-Be specific and actionable. Reference actual resources by name."""
+Use the actual deployment names and images from the cluster state above.
+Provide complete, ready-to-apply YAML. Focus on the most important deployments first."""
 
         result = await self.ollama.generate(prompt, STEVE_SYSTEM_PROMPT)
 
@@ -1254,23 +1252,57 @@ def post_chat():
         "topic": topic
     })
 
-    # If message is from Tim or Karen, get Steve's response
+    # Route to appropriate bot based on target parameter
+    target = data.get('target', 'steve')
     response = None
-    if speaker.lower() in ['tim', 'karen']:
+    karen_response = None
+
+    if speaker.lower() == 'tim':
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        if target == 'karen':
+            # Route to Karen bot
+            try:
+                import aiohttp
+                async def ask_karen():
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            f"{KAREN_URL}/api/chat",
+                            json={"message": message, "from": "tim", "topic": topic},
+                            timeout=aiohttp.ClientTimeout(total=120)
+                        ) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                return data.get("response", "")
+                            return None
+                karen_response = loop.run_until_complete(ask_karen())
+                # Save Karen's response to DB
+                if karen_response:
+                    steve.db.add_message("karen", karen_response, topic)
+            except Exception as e:
+                logger.error(f"Failed to reach Karen: {e}")
+                karen_response = "Karen is unavailable right now..."
+        else:
+            # Route to Steve
+            response = loop.run_until_complete(steve.respond_to_message(speaker, message, topic))
+            # Check for task blocks in Steve's response and auto-create tasks
+            if response and '```task' in response:
+                parse_and_create_tasks(response, 'steve')
+
+        loop.close()
+    elif speaker.lower() == 'karen':
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         response = loop.run_until_complete(steve.respond_to_message(speaker, message, topic))
         loop.close()
 
-        # Check for task blocks in Steve's response and auto-create tasks
-        if response and '```task' in response:
-            parse_and_create_tasks(response, 'steve')
-
     return jsonify({
         "success": True,
         "speaker": speaker,
         "message": message,
-        "steve_response": response
+        "steve_response": response,
+        "karen_response": karen_response
     })
 
 def parse_and_create_tasks(text: str, reported_by: str):

@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HolmOS Pipeline</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #0a0a0f;
+            --card-bg: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4e7;
+            --text-muted: #71717a;
+            --accent: #3b82f6;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        h1 span {
+            color: var(--accent);
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 9999px;
+            font-size: 14px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 1024px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        /* Services Grid */
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        .service-card {
+            padding: 16px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+
+        .service-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .service-card.healthy { border-left: 3px solid var(--success); }
+        .service-card.warning { border-left: 3px solid var(--warning); }
+        .service-card.error { border-left: 3px solid var(--danger); }
+
+        .service-name {
+            font-weight: 500;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+
+        .service-status {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        /* Stats */
+        .stats-row {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .stat {
+            flex: 1;
+            min-width: 80px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* Task Queue */
+        .task-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .task-item:last-child { border-bottom: none; }
+
+        .task-priority {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .priority-high { background: rgba(239,68,68,0.2); color: var(--danger); }
+        .priority-medium { background: rgba(245,158,11,0.2); color: var(--warning); }
+        .priority-low { background: rgba(34,197,94,0.2); color: var(--success); }
+
+        .task-content { flex: 1; }
+        .task-title { font-weight: 500; font-size: 14px; }
+        .task-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+        /* Conversation */
+        .conversation {
+            max-height: 400px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+        }
+
+        .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .avatar.steve { background: linear-gradient(135deg, #3b82f6, #8b5cf6); }
+        .avatar.karen { background: linear-gradient(135deg, #ec4899, #f43f5e); }
+
+        .message-content {
+            flex: 1;
+            background: rgba(255,255,255,0.02);
+            padding: 12px 16px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .message-sender { font-weight: 600; font-size: 13px; }
+        .message-time { font-size: 11px; color: var(--text-muted); }
+        .message-text { font-size: 14px; line-height: 1.5; }
+
+        /* Add Task Form */
+        .add-task-form {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+        }
+
+        input, textarea, select {
+            flex: 1;
+            padding: 12px 16px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        button {
+            padding: 12px 24px;
+            background: var(--accent);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+
+        .refresh-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .refresh-btn:hover {
+            background: rgba(255,255,255,0.05);
+            transform: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><span>HolmOS</span> Pipeline</h1>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                Auto-Healer Active
+            </div>
+        </header>
+
+        <div class="grid">
+            <!-- Services Health -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Services</span>
+                    <button class="refresh-btn" onclick="loadServices()">Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div class="services-grid" id="services-grid">
+                        <div class="empty-state">Loading services...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Task Stats -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Task Queue</span>
+                </div>
+                <div class="card-body">
+                    <div class="stats-row" id="task-stats">
+                        <div class="stat">
+                            <div class="stat-value" id="stat-pending">-</div>
+                            <div class="stat-label">Pending</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-progress">-</div>
+                            <div class="stat-label">In Progress</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-completed">-</div>
+                            <div class="stat-label">Completed</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-failed">-</div>
+                            <div class="stat-label">Failed</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pending Tasks -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Pending Tasks</span>
+                </div>
+                <div class="card-body">
+                    <div class="task-list" id="task-list">
+                        <div class="empty-state">No pending tasks</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Add Task -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Inject Task</span>
+                </div>
+                <div class="card-body">
+                    <form class="add-task-form" onsubmit="submitTask(event)">
+                        <input type="text" id="task-title" placeholder="Task title" required>
+                        <textarea id="task-description" placeholder="Description - what needs to be done?"></textarea>
+                        <div class="form-row">
+                            <select id="task-type">
+                                <option value="bug">Bug Fix</option>
+                                <option value="feature">Feature</option>
+                                <option value="fix">General Fix</option>
+                                <option value="docs">Documentation</option>
+                                <option value="security">Security</option>
+                            </select>
+                            <select id="task-priority">
+                                <option value="1">Critical (1)</option>
+                                <option value="3">High (3)</option>
+                                <option value="5" selected>Medium (5)</option>
+                                <option value="7">Low (7)</option>
+                            </select>
+                        </div>
+                        <input type="text" id="task-service" placeholder="Affected service (optional)">
+                        <button type="submit">Submit Task</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Conversation -->
+            <div class="card" style="grid-column: span 2;">
+                <div class="card-header">
+                    <span class="card-title">Karen & Steve Chat</span>
+                    <button class="refresh-btn" onclick="loadConversation()">Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div class="conversation" id="conversation">
+                        <div class="empty-state">Loading conversation...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+
+        async function loadServices() {
+            try {
+                // Use Karen's service check endpoint
+                const resp = await fetch('/api/services');
+                const data = await resp.json();
+
+                const grid = document.getElementById('services-grid');
+
+                if (!data.services || data.services.length === 0) {
+                    grid.innerHTML = '<div class="empty-state">No services configured</div>';
+                    return;
+                }
+
+                grid.innerHTML = data.services.map(svc => `
+                    <div class="service-card ${svc.status === 'WORKING' ? 'healthy' : svc.status === 'SLOW' ? 'warning' : 'error'}">
+                        <div class="service-name">${svc.name}</div>
+                        <div class="service-status">${svc.status}</div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                document.getElementById('services-grid').innerHTML =
+                    '<div class="empty-state">Could not load services</div>';
+            }
+        }
+
+        async function loadStats() {
+            try {
+                const resp = await fetch('/api/tasks/stats');
+                const data = await resp.json();
+
+                document.getElementById('stat-pending').textContent = data.pending || 0;
+                document.getElementById('stat-progress').textContent = data.in_progress || 0;
+                document.getElementById('stat-completed').textContent = data.completed || 0;
+                document.getElementById('stat-failed').textContent = data.failed || 0;
+            } catch (err) {
+                console.error('Failed to load stats:', err);
+            }
+        }
+
+        async function loadTasks() {
+            try {
+                const resp = await fetch('/api/tasks?status=pending&limit=10');
+                const data = await resp.json();
+
+                const list = document.getElementById('task-list');
+
+                if (!data.tasks || data.tasks.length === 0) {
+                    list.innerHTML = '<div class="empty-state">No pending tasks</div>';
+                    return;
+                }
+
+                list.innerHTML = data.tasks.map(task => {
+                    const priorityClass = task.priority <= 2 ? 'high' : task.priority <= 5 ? 'medium' : 'low';
+                    return `
+                        <div class="task-item">
+                            <span class="task-priority priority-${priorityClass}">P${task.priority}</span>
+                            <div class="task-content">
+                                <div class="task-title">#${task.id}: ${task.title}</div>
+                                <div class="task-meta">${task.task_type} • ${task.affected_service || 'No service'} • by ${task.reported_by}</div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) {
+                document.getElementById('task-list').innerHTML =
+                    '<div class="empty-state">Could not load tasks</div>';
+            }
+        }
+
+        async function loadConversation() {
+            try {
+                const resp = await fetch('/api/conversation?limit=20');
+                const data = await resp.json();
+
+                const conv = document.getElementById('conversation');
+
+                if (!data.messages || data.messages.length === 0) {
+                    conv.innerHTML = '<div class="empty-state">No conversation yet</div>';
+                    return;
+                }
+
+                conv.innerHTML = data.messages.map(msg => {
+                    const isSteve = msg.speaker.toLowerCase().includes('steve');
+                    const avatar = isSteve ? 'S' : 'K';
+                    const avatarClass = isSteve ? 'steve' : 'karen';
+                    const time = new Date(msg.timestamp).toLocaleTimeString();
+
+                    // Truncate long messages
+                    let text = msg.message;
+                    if (text.length > 500) {
+                        text = text.substring(0, 500) + '...';
+                    }
+
+                    return `
+                        <div class="message">
+                            <div class="avatar ${avatarClass}">${avatar}</div>
+                            <div class="message-content">
+                                <div class="message-header">
+                                    <span class="message-sender">${msg.speaker}</span>
+                                    <span class="message-time">${time}</span>
+                                </div>
+                                <div class="message-text">${text}</div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                // Scroll to bottom
+                conv.scrollTop = conv.scrollHeight;
+            } catch (err) {
+                document.getElementById('conversation').innerHTML =
+                    '<div class="empty-state">Could not load conversation</div>';
+            }
+        }
+
+        async function submitTask(event) {
+            event.preventDefault();
+
+            const task = {
+                title: document.getElementById('task-title').value,
+                description: document.getElementById('task-description').value,
+                task_type: document.getElementById('task-type').value,
+                priority: parseInt(document.getElementById('task-priority').value),
+                affected_service: document.getElementById('task-service').value,
+                reported_by: 'dashboard'
+            };
+
+            try {
+                const resp = await fetch('/api/tasks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(task)
+                });
+
+                const data = await resp.json();
+
+                if (data.success) {
+                    alert(`Task #${data.task_id} created!`);
+                    document.getElementById('task-title').value = '';
+                    document.getElementById('task-description').value = '';
+                    document.getElementById('task-service').value = '';
+                    loadTasks();
+                    loadStats();
+                } else {
+                    alert('Error: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                alert('Failed to submit task: ' + err.message);
+            }
+        }
+
+        // Initial load
+        loadServices();
+        loadStats();
+        loadTasks();
+        loadConversation();
+
+        // Auto-refresh every 10 seconds
+        setInterval(() => {
+            loadServices();
+            loadStats();
+            loadTasks();
+            loadConversation();
+        }, 10000);
+    </script>
+</body>
+</html>

@@ -21,8 +21,9 @@ RUN pip install --no-cache-dir \
     aiohttp \
     simple-websocket
 
-# Copy bot scripts
+# Copy bot scripts and templates
 COPY steve.py karen.py /app/
+COPY templates/ /app/templates/
 
 # Create data and screenshots directories
 RUN mkdir -p /data /data/screenshots

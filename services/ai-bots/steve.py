@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from flask_sock import Sock
 import threading
 
@@ -908,12 +908,56 @@ def get_task_stats():
     stats = steve.db.get_task_stats()
     return jsonify({
         "stats": stats,
-        "total": sum(stats.values()),
+        "total": stats.get('total', 0),
         "pending": stats.get('pending', 0),
         "in_progress": stats.get('in_progress', 0),
         "completed": stats.get('completed', 0),
         "failed": stats.get('failed', 0)
     })
+
+# ============================================
+# DASHBOARD & UI
+# ============================================
+
+@app.route('/')
+def dashboard():
+    """Serve the pipeline dashboard."""
+    return render_template('dashboard.html')
+
+@app.route('/api/services')
+def get_services():
+    """Get service health status (from Karen's checks or cluster)."""
+    # Try to get recent service status from conversations or use kubectl
+    services = []
+
+    # Get pods from holm namespace
+    pods_output = steve.kube.get_pods("holm")
+
+    # Known services to check
+    service_names = [
+        "youtube-dl", "chat-hub", "calculator", "terminal-web",
+        "file-web", "registry-ui", "metrics", "steve-bot", "karen-bot"
+    ]
+
+    for svc in service_names:
+        status = "UNKNOWN"
+        if svc in pods_output:
+            if "Running" in pods_output:
+                status = "WORKING"
+            elif "CrashLoopBackOff" in pods_output or "Error" in pods_output:
+                status = "BROKEN"
+            elif "Pending" in pods_output:
+                status = "SLOW"
+        services.append({"name": svc, "status": status})
+
+    return jsonify({"services": services})
+
+@app.route('/api/conversation')
+def get_conversation():
+    """Get recent conversation between Karen and Steve."""
+    limit = request.args.get('limit', 20, type=int)
+    messages = steve.db.get_recent_messages(limit)
+    return jsonify({"messages": messages, "count": len(messages)})
 
 @sock.route('/ws')
 def websocket(ws):

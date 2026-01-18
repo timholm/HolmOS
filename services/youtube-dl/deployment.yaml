@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: youtube-dl
+  namespace: holm
+  labels:
+    app: youtube-dl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: youtube-dl
+  template:
+    metadata:
+      labels:
+        app: youtube-dl
+    spec:
+      containers:
+      - name: youtube-dl
+        image: registry.holm.svc.cluster.local:5000/youtube-dl:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: youtube-dl
+  namespace: holm
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30088
+  selector:
+    app: youtube-dl

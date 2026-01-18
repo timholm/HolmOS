@@ -128,53 +128,73 @@ jobs:
           name: image-${{ matrix.service }}
           path: /tmp
 
-      - name: Install SSH client
-        run: sudo apt-get update && sudo apt-get install -y sshpass
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Deploy to Pi Cluster
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
-          # Disable strict host key checking
-          mkdir -p ~/.ssh
-          echo "StrictHostKeyChecking no" >> ~/.ssh/config
-          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
-          chmod 600 ~/.ssh/config
-
-          echo "📦 Transferring image to cluster..."
-          sshpass -p "$SSH_PASSWORD" scp -P $SSH_PORT \
-            /tmp/${{ matrix.service }}.tar \
-            $SSH_USER@$SSH_HOST:/tmp/${{ matrix.service }}.tar
-
-          echo "🚀 Deploying ${{ matrix.service }}..."
-          sshpass -p "$SSH_PASSWORD" ssh -p $SSH_PORT $SSH_USER@$SSH_HOST << 'DEPLOY_SCRIPT'
-          set -e
-
           SERVICE="${{ matrix.service }}"
           IMAGE_TAG="${{ github.sha }}"
+
+          echo "📦 Transferring image to Mac mini..."
+          scp -P $SSH_PORT /tmp/${SERVICE}.tar $SSH_USER@$SSH_HOST:/tmp/${SERVICE}.tar
+
+          echo "🚀 Deploying ${SERVICE}..."
+          ssh -p $SSH_PORT $SSH_USER@$SSH_HOST << DEPLOY_SCRIPT
+          set -e
+
+          SERVICE="${SERVICE}"
+          IMAGE_TAG="${IMAGE_TAG}"
+          REGISTRY="${{ env.REGISTRY }}"
+          RPI_HOST="192.168.8.197"
+          RPI_USER="rpi1"
+          RPI_PASS="19209746"
+
+          echo "Transferring image to Pi cluster..."
+          sshpass -p "\$RPI_PASS" scp -o StrictHostKeyChecking=no /tmp/\${SERVICE}.tar \$RPI_USER@\$RPI_HOST:/tmp/\${SERVICE}.tar
+
+          echo "Loading and deploying on cluster..."
+          sshpass -p "\$RPI_PASS" ssh -o StrictHostKeyChecking=no \$RPI_USER@\$RPI_HOST << 'CLUSTER_SCRIPT'
+          set -e
+          SERVICE="${SERVICE}"
+          IMAGE_TAG="${IMAGE_TAG}"
           REGISTRY="${{ env.REGISTRY }}"
 
           echo "Loading image into containerd..."
-          sudo ctr -n k8s.io images import /tmp/${SERVICE}.tar
+          sudo ctr -n k8s.io images import /tmp/\${SERVICE}.tar
 
           echo "Pushing to local registry..."
-          sudo ctr -n k8s.io images push --plain-http ${REGISTRY}/${SERVICE}:${IMAGE_TAG} || true
-          sudo ctr -n k8s.io images push --plain-http ${REGISTRY}/${SERVICE}:latest || true
+          sudo ctr -n k8s.io images push --plain-http \${REGISTRY}/\${SERVICE}:\${IMAGE_TAG} || true
+          sudo ctr -n k8s.io images push --plain-http \${REGISTRY}/\${SERVICE}:latest || true
 
           echo "Updating deployment..."
-          if kubectl get deployment ${SERVICE} -n holm >/dev/null 2>&1; then
-            kubectl set image deployment/${SERVICE} ${SERVICE}=${REGISTRY}/${SERVICE}:${IMAGE_TAG} -n holm
-            kubectl rollout status deployment/${SERVICE} -n holm --timeout=120s
+          if kubectl get deployment \${SERVICE} -n holm >/dev/null 2>&1; then
+            kubectl set image deployment/\${SERVICE} \${SERVICE}=\${REGISTRY}/\${SERVICE}:\${IMAGE_TAG} -n holm
+            kubectl rollout status deployment/\${SERVICE} -n holm --timeout=120s
           else
-            echo "No deployment found for ${SERVICE}, skipping rollout"
+            echo "No deployment found for \${SERVICE}, skipping rollout"
           fi
 
           echo "Cleaning up..."
-          rm -f /tmp/${SERVICE}.tar
+          rm -f /tmp/\${SERVICE}.tar
+          echo "✅ Cluster deployment complete!"
+          CLUSTER_SCRIPT
 
+          rm -f /tmp/\${SERVICE}.tar
           echo "✅ Deployment complete!"
           DEPLOY_SCRIPT
 

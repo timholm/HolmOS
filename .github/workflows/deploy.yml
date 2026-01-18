@@ -1,3 +1,9 @@
+# Deploy to Pi Cluster
+#
+# Remote Access via cmd.holm.chat:
+# curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+#   -d '{"cmd": "sshpass -p YOUR_PASSWORD ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
+
 name: Deploy to Pi Cluster
 
 on:

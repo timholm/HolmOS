@@ -709,3 +709,11 @@ kubectl delete deployment SERVICE -n holm
 - **Scribe Logs**: http://192.168.8.197:30860
 - **Pulse Metrics**: http://192.168.8.197:30006
 - **SSH Access**: `ssh rpi1@192.168.8.197`
+
+## Remote Command Execution
+
+Run cluster commands remotely via cmd.holm.chat:
+```bash
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "sshpass -p YOUR_PASSWORD ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
+```

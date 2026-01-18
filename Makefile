@@ -1,5 +1,9 @@
 # HolmOS Makefile
 # Simple commands for managing the Pi cluster
+#
+# Remote Access via cmd.holm.chat:
+# curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+#   -d '{"cmd": "sshpass -p YOUR_PASSWORD ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
 
 PI_HOST := 192.168.8.197
 PI_USER := rpi1

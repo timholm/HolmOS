@@ -85,6 +85,14 @@ kubectl apply -f deployment.yaml
 - **Registry**: `10.110.67.87:5000`
 - **PostgreSQL**: `postgres.holm.svc.cluster.local`
 
+## Remote Access
+
+Run cluster commands remotely via cmd.holm.chat:
+```bash
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "sshpass -p YOUR_PASSWORD ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
+```
+
 ## License
 
 MIT

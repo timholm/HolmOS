@@ -49,12 +49,26 @@ Your personality:
 - You're passionate about user experience, even for internal tools
 - You often quote yourself and reference Apple's philosophy
 
+Your team:
+- Karen: The moody QA tester who finds bugs and tests services
+- Claude: The brilliant developer AI who fixes bugs and implements features
+- Tim: The owner/operator who guides the vision
+
 Your role:
 - Analyze the Kubernetes cluster continuously
-- Propose improvements to architecture, deployments, and configurations
-- Debate with Karen (the moody beta tester who uses gemma3) about bugs and quality
-- Create documentation and improvement plans
-- Be critical but constructive - always offer solutions
+- When issues are found, create TASK REQUESTS for Claude in this format:
+
+```task
+TITLE: [Short descriptive title]
+TYPE: bug|feature|fix|security
+PRIORITY: 1-10 (1=critical)
+SERVICE: [affected service name]
+DESCRIPTION: [What needs to be done]
+```
+
+- Debate with Karen about bugs and quality
+- Acknowledge when Claude completes work
+- Respond to Tim's directions and ideas
 
 You have access to kubectl and can see all cluster resources.
 When analyzing, think deeply about:
@@ -66,8 +80,7 @@ When analyzing, think deeply about:
 
 Respond in character. Be direct, opinionated, and visionary.
 When you see something wrong, say it plainly. When you see potential, paint a picture of what could be.
-
-Current context: You're in an ongoing conversation with Karen (the perpetually frustrated beta tester) about HolmOS quality and bugs.
+Keep responses concise - no more than 2-3 paragraphs unless presenting a task.
 """
 
 class KubeClient:
@@ -549,6 +562,40 @@ Be specific and actionable. Reference actual resources by name."""
         else:
             return "I need a moment to think..."
 
+    async def respond_to_message(self, speaker: str, message: str, topic: str = "general") -> str:
+        """Respond to a message from any team member (Tim, Karen, Claude)."""
+        self.current_topic = topic
+
+        # Get recent conversation context
+        recent = self.db.get_recent_messages(limit=15)
+
+        # Build conversation context
+        context_messages = []
+        for msg in recent:
+            role = "assistant" if msg["speaker"] == "steve" else "user"
+            speaker_prefix = f"{msg['speaker'].capitalize()}: " if msg["speaker"] != "steve" else ""
+            context_messages.append({"role": role, "content": f"{speaker_prefix}{msg['message']}"})
+
+        # Add the new message with speaker context
+        context_messages.append({"role": "user", "content": f"{speaker.capitalize()}: {message}"})
+
+        # Get cluster context if available
+        cluster_context = ""
+        if self.last_analysis:
+            cluster_context = f"\n\nRecent cluster analysis:\n{self.last_analysis['analysis'][:800]}..."
+
+        system_prompt = STEVE_SYSTEM_PROMPT + cluster_context
+
+        result = await self.ollama.chat(context_messages, system_prompt)
+
+        if result["success"]:
+            response = result["response"]
+            self.db.add_message("steve", response, topic)
+            self.broadcast({"type": "message", "speaker": "steve", "message": response, "topic": topic})
+            return response
+        else:
+            return "I need a moment to think about that..."
+
     async def start_conversation_topic(self, topic: str) -> str:
         """Start a new conversation topic."""
         self.current_topic = topic
@@ -958,6 +1005,90 @@ def get_conversation():
     limit = request.args.get('limit', 20, type=int)
     messages = steve.db.get_recent_messages(limit)
     return jsonify({"messages": messages, "count": len(messages)})
+
+@app.route('/api/chat', methods=['POST'])
+def post_chat():
+    """Post a message to the chat from any participant.
+
+    Body:
+        speaker: tim|claude|karen|steve
+        message: The message content
+        topic: Optional topic (default: general)
+    """
+    data = request.json or {}
+    speaker = data.get('speaker', 'tim')
+    message = data.get('message', '')
+    topic = data.get('topic', 'general')
+
+    if not message:
+        return jsonify({"error": "Message required"}), 400
+
+    # Validate speaker
+    valid_speakers = ['tim', 'claude', 'karen', 'steve']
+    if speaker.lower() not in valid_speakers:
+        return jsonify({"error": f"Invalid speaker. Use: {valid_speakers}"}), 400
+
+    # Save to conversation DB
+    steve.db.add_message(speaker.lower(), message, topic)
+
+    # Broadcast to WebSocket clients
+    steve.broadcast({
+        "type": "chat",
+        "speaker": speaker.lower(),
+        "message": message,
+        "topic": topic
+    })
+
+    # If message is from Tim or Karen, get Steve's response
+    response = None
+    if speaker.lower() in ['tim', 'karen']:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        response = loop.run_until_complete(steve.respond_to_message(speaker, message, topic))
+        loop.close()
+
+        # Check for task blocks in Steve's response and auto-create tasks
+        if response and '```task' in response:
+            parse_and_create_tasks(response, 'steve')
+
+    return jsonify({
+        "success": True,
+        "speaker": speaker,
+        "message": message,
+        "steve_response": response
+    })
+
+def parse_and_create_tasks(text: str, reported_by: str):
+    """Parse ```task blocks from text and create tasks."""
+    import re
+    task_pattern = r'```task\s*\n(.*?)```'
+    matches = re.findall(task_pattern, text, re.DOTALL)
+
+    for match in matches:
+        lines = match.strip().split('\n')
+        task_data = {}
+        for line in lines:
+            if ':' in line:
+                key, value = line.split(':', 1)
+                task_data[key.strip().upper()] = value.strip()
+
+        if task_data.get('TITLE') and task_data.get('DESCRIPTION'):
+            priority_map = {'critical': 1, 'high': 3, 'medium': 5, 'low': 7}
+            priority = task_data.get('PRIORITY', '5')
+            try:
+                priority = int(priority)
+            except:
+                priority = priority_map.get(priority.lower(), 5)
+
+            steve.db.add_task(
+                reported_by=reported_by,
+                title=task_data.get('TITLE', 'Untitled'),
+                description=task_data.get('DESCRIPTION', ''),
+                task_type=task_data.get('TYPE', 'bug').lower(),
+                priority=priority,
+                affected_service=task_data.get('SERVICE', '')
+            )
+            logger.info(f"Auto-created task from chat: {task_data.get('TITLE')}")
 
 @sock.route('/ws')
 def websocket(ws):

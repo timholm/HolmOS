@@ -10,10 +10,16 @@ on:
         description: 'Service to deploy (or "all")'
         required: true
         default: 'all'
+      skip_build:
+        description: 'Skip build, just deploy existing images'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
-  REGISTRY: localhost:31500
+  REGISTRY: 10.110.67.87:5000
   PI_HOST: 192.168.8.197
+  PI_USER: rpi1
 
 jobs:
   detect:
@@ -62,7 +68,7 @@ jobs:
   build:
     name: Build ${{ matrix.service }}
     needs: detect
-    if: needs.detect.outputs.has_services == 'true'
+    if: needs.detect.outputs.has_services == 'true' && github.event.inputs.skip_build != 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
@@ -110,30 +116,144 @@ jobs:
           path: /tmp/${{ matrix.service }}.tar
           retention-days: 7
 
+  deploy:
+    name: Deploy to Cluster
+    needs: [detect, build]
+    if: |
+      always() &&
+      needs.detect.outputs.has_services == 'true' &&
+      (needs.build.result == 'success' || github.event.inputs.skip_build == 'true')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all image artifacts
+        if: github.event.inputs.skip_build != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/images
+          pattern: image-*
+
+      - name: Setup Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+        # Alternative: use auth key instead of OAuth
+        # authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Wait for Tailscale connection
+        run: |
+          echo "Waiting for Tailscale to connect..."
+          sleep 5
+          tailscale status
+          echo "Testing connectivity to Pi cluster..."
+          ping -c 3 ${{ env.PI_HOST }} || echo "Direct ping failed, trying Tailscale IP..."
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ env.PI_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          # Also add Tailscale hostname if available
+          ssh-keyscan -H holmos-cluster >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Push images to cluster registry
+        if: github.event.inputs.skip_build != 'true'
+        run: |
+          SERVICES='${{ needs.detect.outputs.services }}'
+          for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+            echo "=== Pushing $svc to cluster registry ==="
+            if [ -f "/tmp/images/image-$svc/$svc.tar" ]; then
+              # Copy image to Pi
+              scp -o StrictHostKeyChecking=no \
+                /tmp/images/image-$svc/$svc.tar \
+                ${{ env.PI_USER }}@${{ env.PI_HOST }}:/tmp/
+
+              # Import and push to local registry
+              ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${{ env.PI_HOST }} << EOF
+                echo "Importing $svc..."
+                sudo ctr -n k8s.io images import /tmp/$svc.tar
+
+                echo "Tagging for local registry..."
+                sudo ctr -n k8s.io images tag \
+                  ${{ env.REGISTRY }}/$svc:latest \
+                  ${{ env.REGISTRY }}/$svc:${{ github.sha }} || true
+
+                echo "Pushing to registry..."
+                sudo ctr -n k8s.io images push --plain-http \
+                  ${{ env.REGISTRY }}/$svc:latest || true
+
+                rm -f /tmp/$svc.tar
+                echo "$svc pushed successfully!"
+          EOF
+            else
+              echo "No image artifact for $svc, skipping..."
+            fi
+          done
+
+      - name: Deploy services to Kubernetes
+        run: |
+          SERVICES='${{ needs.detect.outputs.services }}'
+          for svc in $(echo "$SERVICES" | jq -r '.[]'); do
+            echo "=== Deploying $svc ==="
+            ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${{ env.PI_HOST }} << EOF
+              # Check if deployment exists
+              if kubectl get deployment $svc -n holm &>/dev/null; then
+                echo "Restarting deployment $svc..."
+                kubectl rollout restart deployment/$svc -n holm
+                kubectl rollout status deployment/$svc -n holm --timeout=120s || true
+              else
+                echo "Deployment $svc not found, checking for deployment.yaml..."
+                if [ -f "/home/${{ env.PI_USER }}/builds/$svc/deployment.yaml" ]; then
+                  kubectl apply -f /home/${{ env.PI_USER }}/builds/$svc/deployment.yaml
+                else
+                  echo "No deployment found for $svc, skipping..."
+                fi
+              fi
+          EOF
+          done
+
+      - name: Verify deployments
+        run: |
+          echo "=== Cluster Status ==="
+          ssh -o StrictHostKeyChecking=no ${{ env.PI_USER }}@${{ env.PI_HOST }} << 'EOF'
+            echo "Nodes:"
+            kubectl get nodes
+            echo ""
+            echo "Recent deployments in holm namespace:"
+            kubectl get deployments -n holm -o wide | head -20
+            echo ""
+            echo "Pod status:"
+            kubectl get pods -n holm --sort-by=.metadata.creationTimestamp | tail -20
+          EOF
+
   summary:
     name: Build Summary
-    needs: [detect, build]
+    needs: [detect, build, deploy]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Generate summary
         run: |
-          echo "## 🚀 HolmOS Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 HolmOS Deployment Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Services:** ${{ needs.detect.outputs.services }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Deployment" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Detect | ${{ needs.detect.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The Pi cluster is on a private network and cannot be reached from GitHub Actions." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**To deploy manually:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# Download artifacts from Actions tab, then on Pi:" >> $GITHUB_STEP_SUMMARY
-          echo "sudo ctr -n k8s.io images import <service>.tar" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl rollout restart deployment/<service> -n holm" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+
           echo "### Access Points" >> $GITHUB_STEP_SUMMARY
           echo "- HolmOS Shell: http://${{ env.PI_HOST }}:30000" >> $GITHUB_STEP_SUMMARY
           echo "- Nova Dashboard: http://${{ env.PI_HOST }}:30004" >> $GITHUB_STEP_SUMMARY
+          echo "- Terminal: http://${{ env.PI_HOST }}:30800" >> $GITHUB_STEP_SUMMARY

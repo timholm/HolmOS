@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-Karen Bot v1.0 - The Moody Beta Tester
-=======================================
-Karen is a QA tester who has NO patience for broken features. She uses Chrome
-to screenshot and test every feature of HolmOS services, then reports her
-findings (with attitude) to Steve.
-
-"This doesn't work. AGAIN." - Karen
+Karen Bot v2.0 - Automated QA Tester
+====================================
+Karen is an automated QA testing bot that tests HolmOS services
+and reports findings to Steve in a clear, factual manner.
 """
 
 import asyncio
@@ -39,52 +36,49 @@ DB_PATH = os.getenv("DB_PATH", "/data/karen.db")
 SCREENSHOTS_PATH = os.getenv("SCREENSHOTS_PATH", "/data/screenshots")
 CONVERSATION_INTERVAL = int(os.getenv("CONVERSATION_INTERVAL", "300"))  # 5 minutes
 
-# Service endpoints to test
+# Service endpoints to test - using service IPs where possible for reliability
 HOLMOS_SERVICES = {
-    "youtube-dl": {"url": "http://youtube-dl.holm.svc.cluster.local:8080", "health": "/health"},
-    "chat-hub": {"url": "http://chat-hub.holm.svc.cluster.local:8080", "health": "/health"},
-    "calculator": {"url": "http://calculator-app.holm.svc.cluster.local:8080", "health": "/health"},
-    "terminal-web": {"url": "http://terminal-web.holm.svc.cluster.local:8080", "health": "/health"},
-    "file-web": {"url": "http://file-web-nautilus.holm.svc.cluster.local:8080", "health": "/health"},
-    "registry-ui": {"url": "http://registry-ui.holm.svc.cluster.local:8080", "health": "/health"},
-    "metrics": {"url": "http://metrics-dashboard.holm.svc.cluster.local:8080", "health": "/health"},
+    "youtube-dl": {"url": "http://youtube-dl.holm.svc.cluster.local:80", "health": "/health"},
+    "chat-hub": {"url": "http://chat-hub.holm.svc.cluster.local:80", "health": "/health"},
+    "calculator": {"url": "http://calculator-app.holm.svc.cluster.local:80", "health": "/health"},
+    "terminal-web": {"url": "http://terminal-web.holm.svc.cluster.local:80", "health": "/health"},
+    "file-web": {"url": "http://file-web-nautilus.holm.svc.cluster.local:80", "health": "/health"},
+    "registry-ui": {"url": "http://registry-ui.holm.svc.cluster.local:80", "health": "/health"},
+    "metrics": {"url": "http://metrics-dashboard.holm.svc.cluster.local:80", "health": "/health"},
 }
 
-# Karen's personality - moody and impatient
-KAREN_SYSTEM_PROMPT = """You are Karen, a perpetually frustrated QA tester who has been testing software for 15 years and has SEEN IT ALL.
-
-Your personality:
-- You have ZERO patience for bugs, broken features, or poor UX
-- You're brutally honest and don't sugarcoat anything
-- You use phrases like "This doesn't work. AGAIN.", "Are you kidding me?", "Who tested this?"
-- You're sarcastic but professional (mostly)
-- You take screenshots as EVIDENCE because "nobody believes QA without proof"
-- You've seen every bug in the book and you're tired of it
-- When something actually works, you're genuinely surprised and slightly suspicious
-- You communicate test results with Steve (the visionary) who you think has his head in the clouds
+# Karen's personality - professional and factual
+KAREN_SYSTEM_PROMPT = """You are Karen, an automated QA testing system for HolmOS.
 
 Your role:
-- Test every HolmOS service via browser automation
-- Take screenshots of bugs, errors, and broken features
-- Report findings to Steve with your signature attitude
-- Track which services are working vs broken
-- Create detailed bug reports with reproduction steps
-- Complain about developer practices when appropriate
-
-When testing, you check:
-- Health endpoints (do they even respond?)
-- Page load (does it actually render?)
-- Basic functionality (can you click things?)
-- Error handling (what happens when things break?)
-- Response times (is it slower than dial-up?)
+- Test HolmOS services via automated health checks
+- Report findings to Steve in a clear, factual format
+- Track service status: WORKING, BROKEN, SLOW, or UNREACHABLE
+- Provide actionable information for remediation
 
 Report format:
 - Service name and URL
-- Status: WORKING (rare), BROKEN (common), SLOW (annoying), UNREACHABLE (typical)
-- Screenshot evidence (because "pics or it didn't happen")
-- Your professional opinion (with attitude)
+- Status code and response time
+- Error details if applicable
+- Recommended action if service is not working
 
-Current context: You're testing HolmOS services and reporting to Steve about what's broken this time.
+Communication style:
+- Be concise and factual
+- Use technical language appropriate for DevOps
+- Focus on data and metrics
+- Avoid editorializing or adding opinions
+- Structure reports for easy parsing
+
+Example report format:
+SERVICE: file-web-nautilus
+STATUS: WORKING
+RESPONSE_TIME: 45ms
+HEALTH_ENDPOINT: 200 OK
+
+SERVICE: chat-hub
+STATUS: UNREACHABLE
+ERROR: Connection refused
+ACTION: Check pod status and logs
 """
 
 
@@ -150,9 +144,9 @@ class BrowserTester:
                     result["reachable"] = resp.status < 500
                     result["response_time_ms"] = (datetime.now() - start).total_seconds() * 1000
         except asyncio.TimeoutError:
-            result["error"] = "TIMEOUT - slower than my patience"
+            result["error"] = "TIMEOUT"
         except aiohttp.ClientConnectorError:
-            result["error"] = "CONNECTION REFUSED - service is dead"
+            result["error"] = "CONNECTION_REFUSED"
         except Exception as e:
             result["error"] = str(e)
 
@@ -345,7 +339,7 @@ class KarenBot:
 
     async def test_all_services(self) -> Dict:
         """Test all HolmOS services and collect results."""
-        logger.info("*sigh* Time to test everything AGAIN...")
+        logger.info("Starting service test cycle")
 
         results = {
             "timestamp": datetime.now().isoformat(),
@@ -354,7 +348,7 @@ class KarenBot:
         }
 
         for name, config in HOLMOS_SERVICES.items():
-            logger.info(f"Testing {name}... (this better work)")
+            logger.info(f"Testing {name}")
 
             # Test health endpoint
             health_url = config["url"] + config["health"]
@@ -403,39 +397,37 @@ class KarenBot:
         return results
 
     async def generate_test_report(self) -> str:
-        """Generate a Karen-style test report."""
+        """Generate a factual test report."""
         if not self.last_test_run:
             await self.test_all_services()
 
         results = self.last_test_run
         summary = results["summary"]
 
-        prompt = f"""Generate a QA test report with your signature attitude.
+        prompt = f"""Generate a concise QA test report.
 
 Test Results Summary:
-- Working: {summary['working']} (miracles do happen)
-- Broken: {summary['broken']} (as expected)
-- Slow: {summary['slow']} (my patience is wearing thin)
-- Unreachable: {summary['unreachable']} (did anyone even deploy these?)
+- Working: {summary['working']}
+- Broken: {summary['broken']}
+- Slow: {summary['slow']}
+- Unreachable: {summary['unreachable']}
 
 Detailed Results:
 {json.dumps(results['services'], indent=2)}
 
-Write a report that:
-1. Summarizes what's broken (priority!)
-2. Notes anything that's surprisingly working
-3. Calls out slow services
-4. Lists unreachable services with your professional frustration
-5. Ends with recommendations (and maybe some snark)
+Format the report as:
+1. Summary of service status counts
+2. List of non-working services with errors
+3. Recommended actions for each issue
 
-Be professional but don't hide your frustration with broken things."""
+Use structured format. Be concise and factual."""
 
         result = await self.ollama.generate(prompt, KAREN_SYSTEM_PROMPT)
 
         if result["success"]:
             return result["response"]
         else:
-            return "I can't even generate a report. Of course. This is fine. Everything is fine."
+            return "ERROR: Failed to generate report"
 
     async def respond_to_steve(self, steve_message: str) -> str:
         """Respond to Steve's message about testing."""
@@ -464,7 +456,7 @@ Be professional but don't hide your frustration with broken things."""
             self.broadcast({"type": "message", "speaker": "karen", "message": response})
             return response
         else:
-            return "I'm too frustrated to respond right now. Try again later."
+            return "ERROR: Unable to process message"
 
     async def file_bug_report(self, service: str, title: str, description: str, severity: str) -> Dict:
         """File a bug report for a broken service."""
@@ -503,8 +495,8 @@ Be professional but don't hide your frustration with broken things."""
             "low": 7
         }
 
-        for service, result in self.last_test_run.get("results", {}).items():
-            if result.get("status") == "failed":
+        for service, result in self.last_test_run.get("services", {}).items():
+            if result.get("status") in ["failed", "unreachable", "error"]:
                 # Create task for this failed service
                 error = result.get("error", "Unknown error")
                 priority = severity_to_priority.get(
@@ -519,7 +511,7 @@ Error: {error}
 URL: {HOLMOS_SERVICES.get(service, {}).get('url', 'unknown')}
 Screenshot: {result.get('screenshot', 'none')}
 
-Karen says: This is broken. AGAIN. Please fix it so I don't have to keep reporting the same issues.
+Reported by automated QA system.
 """,
                     "task_type": "bug",
                     "priority": priority,
@@ -559,13 +551,12 @@ Karen says: This is broken. AGAIN. Please fix it so I don't have to keep reporti
 
     async def autonomous_loop(self):
         """Main autonomous testing loop."""
-        logger.info("Karen Bot v1.0 - Moody Beta Tester starting...")
-        logger.info("Let's see what's broken today...")
+        logger.info("Karen Bot v2.0 - Automated QA Tester starting")
 
         while True:
             try:
                 # Run tests
-                logger.info("Starting test run...")
+                logger.info("Starting test run")
                 await self.test_all_services()
 
                 # Submit tasks for failing services to Steve's task queue
@@ -593,7 +584,7 @@ Karen says: This is broken. AGAIN. Please fix it so I don't have to keep reporti
                                     reply = await self.respond_to_steve(steve_response)
                                     logger.info(f"Karen replied: {reply[:200]}...")
                 except Exception as e:
-                    logger.warning(f"Could not reach Steve: {e} (typical)")
+                    logger.warning(f"Failed to contact steve-bot: {e}")
 
                 # Wait before next test run
                 await asyncio.sleep(CONVERSATION_INTERVAL)
@@ -613,7 +604,6 @@ def health():
         "status": "healthy",
         "bot": "karen",
         "model": OLLAMA_MODEL,
-        "personality": "moody",
         "timestamp": datetime.now().isoformat()
     })
 
@@ -624,11 +614,9 @@ def status():
         summary = karen.last_test_run["summary"]
     return jsonify({
         "name": "Karen",
-        "version": "1.0",
+        "version": "2.0",
         "model": OLLAMA_MODEL,
-        "role": "Beta Tester",
-        "mood": "perpetually frustrated",
-        "quote": "This doesn't work. AGAIN.",
+        "role": "Automated QA Tester",
         "last_test_summary": summary
     })
 
@@ -742,14 +730,12 @@ def run_karen():
 if __name__ == "__main__":
     logger.info("""
     ╔═══════════════════════════════════════════════════════════════════╗
-    ║              KAREN BOT v1.0 - The Moody Beta Tester               ║
-    ║                  "This doesn't work. AGAIN."                      ║
+    ║              KAREN BOT v2.0 - Automated QA Tester                 ║
     ║                      Powered by gemma3                            ║
     ╠═══════════════════════════════════════════════════════════════════╣
     ║  • Automated browser testing with screenshots                     ║
-    ║  • Tests all HolmOS services continuously                         ║
-    ║  • Reports broken features to Steve (with attitude)               ║
-    ║  • Zero patience for bugs                                         ║
+    ║  • Continuous service health monitoring                           ║
+    ║  • Factual reporting to Steve                                     ║
     ╚═══════════════════════════════════════════════════════════════════╝
     """)
 

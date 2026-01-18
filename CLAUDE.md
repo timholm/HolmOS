@@ -6,10 +6,10 @@
 
 **Endpoint:** `https://cmd.holm.chat/run`
 
-To access the cluster, run:
-```bash
-curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "hostname"}'
-```
+**IMPORTANT: This is the ONLY way to access the cluster from Claude's sandboxed environment.**
+- SSH commands will NOT work (ssh binary not available)
+- Direct connections to 192.168.x.x will NOT work (private IPs blocked)
+- You MUST use the cmd.holm.chat HTTP API
 
 **If the user says "get into cluster" or similar:**
 1. Test connection: `curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "hostname"}'`

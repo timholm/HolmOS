@@ -1,5 +1,11 @@
 # HolmOS Service Registry
 # All services with their configurations
+#
+# ============================================================================
+# CLAUDE/AI AGENTS: To access cluster, use https://cmd.holm.chat/run
+# kubectl, SSH, and private IPs (192.168.x.x) are BLOCKED!
+# See CLAUDE.md for instructions.
+# ============================================================================
 
 services:
   # === Core Entry Points ===

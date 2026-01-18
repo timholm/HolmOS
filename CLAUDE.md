@@ -1,5 +1,7 @@
 # HolmOS - Claude Quick Start
 
+> **🚀 GET INTO CLUSTER:** Just run `curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "hostname"}'` - No setup needed!
+
 ## Get Into Cluster
 
 **Endpoint:** `https://cmd.holm.chat/run`

@@ -36,15 +36,15 @@ DB_PATH = os.getenv("DB_PATH", "/data/karen.db")
 SCREENSHOTS_PATH = os.getenv("SCREENSHOTS_PATH", "/data/screenshots")
 CONVERSATION_INTERVAL = int(os.getenv("CONVERSATION_INTERVAL", "300"))  # 5 minutes
 
-# Service endpoints to test - using service IPs where possible for reliability
+# Service endpoints to test - using cluster DNS with correct ports
 HOLMOS_SERVICES = {
-    "youtube-dl": {"url": "http://youtube-dl.holm.svc.cluster.local:80", "health": "/health"},
+    "youtube-dl": {"url": "http://youtube-dl.holm.svc.cluster.local:8080", "health": "/health"},
     "chat-hub": {"url": "http://chat-hub.holm.svc.cluster.local:80", "health": "/health"},
     "calculator": {"url": "http://calculator-app.holm.svc.cluster.local:80", "health": "/health"},
     "terminal-web": {"url": "http://terminal-web.holm.svc.cluster.local:80", "health": "/health"},
     "file-web": {"url": "http://file-web-nautilus.holm.svc.cluster.local:80", "health": "/health"},
-    "registry-ui": {"url": "http://registry-ui.holm.svc.cluster.local:80", "health": "/health"},
-    "metrics": {"url": "http://metrics-dashboard.holm.svc.cluster.local:80", "health": "/health"},
+    "registry-ui": {"url": "http://registry-ui.holm.svc.cluster.local:8080", "health": "/"},
+    "metrics": {"url": "http://metrics-dashboard.holm.svc.cluster.local:8080", "health": "/health"},
 }
 
 # Karen's personality - professional and factual

@@ -242,9 +242,25 @@ class ConversationDB:
     def add_task(self, reported_by: str, title: str, description: str,
                  task_type: str = "bug", priority: int = 5,
                  affected_service: str = "", file_path: str = "") -> int:
-        """Add a new task for Claude Code to work on."""
+        """Add a new task for Claude Code to work on.
+
+        Deduplication: Won't create duplicate tasks for same service with same error
+        if a pending/in_progress task already exists.
+        """
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
+
+        # Check for existing pending/in_progress task for same service
+        if affected_service:
+            c.execute('''SELECT id FROM tasks
+                        WHERE affected_service = ?
+                        AND status IN ('pending', 'in_progress')
+                        LIMIT 1''', (affected_service,))
+            existing = c.fetchone()
+            if existing:
+                conn.close()
+                return existing[0]  # Return existing task ID
+
         c.execute('''INSERT INTO tasks
                      (timestamp, reported_by, title, description, task_type,
                       priority, status, affected_service, file_path)
@@ -293,6 +309,48 @@ class ConversationDB:
         conn.commit()
         conn.close()
         return affected > 0
+
+    def claim_next_task(self, claimed_by: str = "claude-code") -> Optional[Dict]:
+        """Atomically claim the next pending task (highest priority, oldest first).
+
+        Returns the task and marks it as in_progress, or None if no tasks.
+        """
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+
+        # Get next pending task
+        c.execute('''SELECT id, timestamp, reported_by, title, description,
+                            task_type, priority, status, affected_service, file_path
+                     FROM tasks WHERE status = 'pending'
+                     ORDER BY priority ASC, timestamp ASC LIMIT 1''')
+        row = c.fetchone()
+
+        if not row:
+            conn.close()
+            return None
+
+        task = {
+            "id": row[0], "timestamp": row[1], "reported_by": row[2], "title": row[3],
+            "description": row[4], "task_type": row[5], "priority": row[6],
+            "status": "in_progress", "affected_service": row[8], "file_path": row[9],
+            "claimed_by": claimed_by
+        }
+
+        # Mark as in_progress
+        c.execute('''UPDATE tasks SET status = 'in_progress' WHERE id = ?''', (row[0],))
+        conn.commit()
+        conn.close()
+
+        return task
+
+    def get_task_stats(self) -> Dict:
+        """Get task statistics."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT status, COUNT(*) FROM tasks GROUP BY status''')
+        stats = {row[0]: row[1] for row in c.fetchall()}
+        conn.close()
+        return stats
 
 
 class OllamaClient:
@@ -741,6 +799,67 @@ def complete_task(task_id):
         return jsonify({"success": True, "task_id": task_id, "completed_by": completed_by})
     else:
         return jsonify({"error": "Task not found"}), 404
+
+@app.route('/api/tasks/next', methods=['POST'])
+def claim_next_task():
+    """Claim the next pending task for Claude Code.
+
+    Atomically claims the highest priority pending task and marks it in_progress.
+    Returns the task details as a Claude Code prompt.
+
+    Body:
+        claimed_by: Who is claiming (default: claude-code)
+    """
+    data = request.json or {}
+    claimed_by = data.get('claimed_by', 'claude-code')
+
+    task = steve.db.claim_next_task(claimed_by)
+
+    if task:
+        logger.info(f"Task #{task['id']} claimed by {claimed_by}")
+        steve.broadcast({"type": "task_claimed", "task_id": task['id'], "claimed_by": claimed_by})
+
+        # Format as Claude Code prompt
+        prompt = f"""## Task #{task['id']}: {task['title']}
+
+**Type:** {task['task_type']}
+**Priority:** {task['priority']} (1=critical, 10=low)
+**Service:** {task.get('affected_service', 'N/A')}
+**Reported by:** {task['reported_by']}
+
+### Description:
+{task['description']}
+
+### Instructions:
+1. Investigate and fix this issue
+2. Test the fix if possible
+3. When done, mark complete: `curl -X POST http://192.168.8.197:30099/api/tasks/{task['id']}/complete`
+"""
+        return jsonify({
+            "success": True,
+            "task": task,
+            "prompt": prompt,
+            "complete_url": f"/api/tasks/{task['id']}/complete"
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "message": "No pending tasks available",
+            "task": None
+        })
+
+@app.route('/api/tasks/stats', methods=['GET'])
+def get_task_stats():
+    """Get task queue statistics."""
+    stats = steve.db.get_task_stats()
+    return jsonify({
+        "stats": stats,
+        "total": sum(stats.values()),
+        "pending": stats.get('pending', 0),
+        "in_progress": stats.get('in_progress', 0),
+        "completed": stats.get('completed', 0),
+        "failed": stats.get('failed', 0)
+    })
 
 @sock.route('/ws')
 def websocket(ws):

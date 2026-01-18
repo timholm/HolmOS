@@ -9,8 +9,31 @@ import requests
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 app = Flask(__name__)
+
+# Prometheus metrics
+REQUEST_COUNT = Counter('nautilus_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
+REQUEST_LATENCY = Histogram('nautilus_request_duration_seconds', 'Request latency', ['method', 'endpoint'])
+STORAGE_TOTAL = Gauge('nautilus_storage_bytes_total', 'Total storage bytes')
+STORAGE_USED = Gauge('nautilus_storage_bytes_used', 'Used storage bytes')
+STORAGE_FREE = Gauge('nautilus_storage_bytes_free', 'Free storage bytes')
+FILES_COUNT = Gauge('nautilus_files_total', 'Total number of files')
+DIRS_COUNT = Gauge('nautilus_directories_total', 'Total number of directories')
+
+@app.before_request
+def before_request():
+    request.start_time = time.time()
+
+@app.after_request
+def after_request(response):
+    if hasattr(request, 'start_time'):
+        latency = time.time() - request.start_time
+        endpoint = request.endpoint or 'unknown'
+        REQUEST_COUNT.labels(method=request.method, endpoint=endpoint, status=response.status_code).inc()
+        REQUEST_LATENCY.labels(method=request.method, endpoint=endpoint).observe(latency)
+    return response
 
 # Configuration
 BASE_PATH = os.environ.get('FILE_BASE_PATH', '/data')
@@ -237,6 +260,35 @@ def format_size(size):
 @app.route('/health')
 def health():
     return jsonify({'status': 'healthy', 'service': 'file-web-nautilus-v3'})
+
+@app.route('/metrics')
+def metrics():
+    """Prometheus metrics endpoint"""
+    # Update storage metrics
+    try:
+        base = get_base_path()
+        stat = os.statvfs(base)
+        total = stat.f_blocks * stat.f_frsize
+        free = stat.f_bfree * stat.f_frsize
+        used = total - free
+        STORAGE_TOTAL.set(total)
+        STORAGE_USED.set(used)
+        STORAGE_FREE.set(free)
+
+        # Count files and directories
+        files = 0
+        dirs = 0
+        for root, dirnames, filenames in os.walk(base):
+            files += len(filenames)
+            dirs += len(dirnames)
+            if files + dirs > 10000:  # Limit scan for performance
+                break
+        FILES_COUNT.set(files)
+        DIRS_COUNT.set(dirs)
+    except:
+        pass
+
+    return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 @app.route('/api/list')
 def list_directory():

@@ -199,6 +199,34 @@ class ConversationDB:
             completed_by TEXT
         )''')
 
+        # Pipelines table - reusable automation workflows
+        c.execute('''CREATE TABLE IF NOT EXISTS pipelines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT,
+            created_by TEXT,
+            name TEXT UNIQUE,
+            description TEXT,
+            trigger_service TEXT,
+            trigger_condition TEXT,
+            steps TEXT,
+            auto_execute INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 1,
+            last_run TEXT,
+            run_count INTEGER DEFAULT 0
+        )''')
+
+        # Pipeline execution log
+        c.execute('''CREATE TABLE IF NOT EXISTS pipeline_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pipeline_id INTEGER,
+            started_at TEXT,
+            completed_at TEXT,
+            status TEXT,
+            trigger_source TEXT,
+            output TEXT,
+            FOREIGN KEY (pipeline_id) REFERENCES pipelines(id)
+        )''')
+
         conn.commit()
         conn.close()
 
@@ -406,6 +434,134 @@ class ConversationDB:
 
         logger.info(f"New task notification: #{task_id} - {task.get('title', 'No title')}")
         return notification
+
+    # ============================================
+    # PIPELINE METHODS
+    # ============================================
+
+    def add_pipeline(self, created_by: str, name: str, description: str,
+                     trigger_service: str, trigger_condition: str,
+                     steps: List[str], auto_execute: bool = False) -> Optional[int]:
+        """Create a new pipeline."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        try:
+            c.execute('''INSERT INTO pipelines
+                         (created_at, created_by, name, description, trigger_service,
+                          trigger_condition, steps, auto_execute)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                      (datetime.now().isoformat(), created_by, name, description,
+                       trigger_service, trigger_condition, json.dumps(steps),
+                       1 if auto_execute else 0))
+            pipeline_id = c.lastrowid
+            conn.commit()
+            conn.close()
+            logger.info(f"Pipeline created: {name} (#{pipeline_id})")
+            return pipeline_id
+        except sqlite3.IntegrityError:
+            conn.close()
+            return None  # Name already exists
+
+    def get_pipelines(self, service: str = None, enabled_only: bool = True) -> List[Dict]:
+        """Get all pipelines, optionally filtered by service."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        query = '''SELECT id, created_at, created_by, name, description,
+                          trigger_service, trigger_condition, steps, auto_execute,
+                          enabled, last_run, run_count FROM pipelines'''
+        params = []
+
+        conditions = []
+        if enabled_only:
+            conditions.append("enabled = 1")
+        if service:
+            conditions.append("trigger_service = ?")
+            params.append(service)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        c.execute(query, params)
+        pipelines = [{
+            "id": r[0], "created_at": r[1], "created_by": r[2], "name": r[3],
+            "description": r[4], "trigger_service": r[5], "trigger_condition": r[6],
+            "steps": json.loads(r[7]) if r[7] else [], "auto_execute": bool(r[8]),
+            "enabled": bool(r[9]), "last_run": r[10], "run_count": r[11]
+        } for r in c.fetchall()]
+        conn.close()
+        return pipelines
+
+    def get_pipeline(self, pipeline_id: int) -> Optional[Dict]:
+        """Get a specific pipeline by ID."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT id, created_at, created_by, name, description,
+                            trigger_service, trigger_condition, steps, auto_execute,
+                            enabled, last_run, run_count FROM pipelines WHERE id = ?''',
+                  (pipeline_id,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            return {
+                "id": row[0], "created_at": row[1], "created_by": row[2], "name": row[3],
+                "description": row[4], "trigger_service": row[5], "trigger_condition": row[6],
+                "steps": json.loads(row[7]) if row[7] else [], "auto_execute": bool(row[8]),
+                "enabled": bool(row[9]), "last_run": row[10], "run_count": row[11]
+            }
+        return None
+
+    def find_matching_pipelines(self, service: str, condition: str) -> List[Dict]:
+        """Find pipelines that match a service and condition."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT id, name, steps, auto_execute FROM pipelines
+                     WHERE enabled = 1 AND trigger_service = ? AND trigger_condition = ?''',
+                  (service, condition))
+        pipelines = [{
+            "id": r[0], "name": r[1], "steps": json.loads(r[2]) if r[2] else [],
+            "auto_execute": bool(r[3])
+        } for r in c.fetchall()]
+        conn.close()
+        return pipelines
+
+    def log_pipeline_run(self, pipeline_id: int, status: str, trigger_source: str,
+                        output: str = "") -> int:
+        """Log a pipeline execution."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+
+        c.execute('''INSERT INTO pipeline_runs (pipeline_id, started_at, status, trigger_source, output)
+                     VALUES (?, ?, ?, ?, ?)''',
+                  (pipeline_id, now, status, trigger_source, output))
+        run_id = c.lastrowid
+
+        # Update pipeline stats
+        c.execute('''UPDATE pipelines SET last_run = ?, run_count = run_count + 1
+                     WHERE id = ?''', (now, pipeline_id))
+        conn.commit()
+        conn.close()
+        return run_id
+
+    def update_pipeline_run(self, run_id: int, status: str, output: str):
+        """Update a pipeline run with completion status."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''UPDATE pipeline_runs SET completed_at = ?, status = ?, output = ?
+                     WHERE id = ?''',
+                  (datetime.now().isoformat(), status, output, run_id))
+        conn.commit()
+        conn.close()
+
+    def delete_pipeline(self, pipeline_id: int) -> bool:
+        """Delete a pipeline."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''DELETE FROM pipelines WHERE id = ?''', (pipeline_id,))
+        affected = c.rowcount
+        conn.commit()
+        conn.close()
+        return affected > 0
 
 
 class OllamaClient:
@@ -966,6 +1122,60 @@ def get_task_stats():
         "completed": stats.get('completed', 0),
         "failed": stats.get('failed', 0)
     })
+
+# ============================================
+# PIPELINE API
+# ============================================
+
+@app.route('/api/pipelines', methods=['GET'])
+def list_pipelines():
+    """Get all pipelines."""
+    service = request.args.get('service')
+    pipelines = steve.db.get_pipelines(service=service, enabled_only=False)
+    return jsonify({"pipelines": pipelines, "count": len(pipelines)})
+
+@app.route('/api/pipelines', methods=['POST'])
+def create_pipeline():
+    """Create a new pipeline."""
+    data = request.json or {}
+
+    name = data.get('name', '')
+    if not name:
+        return jsonify({"error": "Pipeline name required"}), 400
+
+    pipeline_id = steve.db.add_pipeline(
+        created_by=data.get('created_by', 'claude'),
+        name=name,
+        description=data.get('description', ''),
+        trigger_service=data.get('trigger_service', ''),
+        trigger_condition=data.get('trigger_condition', ''),
+        steps=data.get('steps', []),
+        auto_execute=data.get('auto_execute', False)
+    )
+
+    if pipeline_id:
+        logger.info(f"Pipeline created: {name} (#{pipeline_id})")
+        steve.broadcast({"type": "pipeline_created", "pipeline_id": pipeline_id, "name": name})
+        return jsonify({"success": True, "pipeline_id": pipeline_id, "name": name})
+    else:
+        return jsonify({"error": "Pipeline name already exists"}), 409
+
+@app.route('/api/pipelines/<int:pipeline_id>', methods=['GET'])
+def get_pipeline_detail(pipeline_id):
+    """Get a specific pipeline."""
+    pipeline = steve.db.get_pipeline(pipeline_id)
+    if pipeline:
+        return jsonify({"pipeline": pipeline})
+    else:
+        return jsonify({"error": "Pipeline not found"}), 404
+
+@app.route('/api/pipelines/<int:pipeline_id>', methods=['DELETE'])
+def remove_pipeline(pipeline_id):
+    """Delete a pipeline."""
+    if steve.db.delete_pipeline(pipeline_id):
+        return jsonify({"success": True})
+    else:
+        return jsonify({"error": "Pipeline not found"}), 404
 
 # ============================================
 # DASHBOARD & UI

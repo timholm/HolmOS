@@ -102,7 +102,7 @@ class BrowserTester:
 
             # Use Chrome headless to take screenshot
             cmd = [
-                "chromium-browser", "--headless", "--disable-gpu",
+                "chromium", "--headless", "--disable-gpu",
                 "--no-sandbox", "--disable-dev-shm-usage",
                 f"--screenshot={screenshot_file}",
                 "--window-size=1920,1080",

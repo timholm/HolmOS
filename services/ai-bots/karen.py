@@ -487,6 +487,65 @@ Be professional but don't hide your frustration with broken things."""
             "filed_at": datetime.now().isoformat()
         }
 
+    async def submit_tasks_to_steve(self) -> int:
+        """Submit failing services as tasks to Steve's task API for Claude Code.
+
+        Returns number of tasks submitted.
+        """
+        if not self.last_test_run:
+            return 0
+
+        tasks_submitted = 0
+        severity_to_priority = {
+            "critical": 1,
+            "high": 3,
+            "medium": 5,
+            "low": 7
+        }
+
+        for service, result in self.last_test_run.get("results", {}).items():
+            if result.get("status") == "failed":
+                # Create task for this failed service
+                error = result.get("error", "Unknown error")
+                priority = severity_to_priority.get(
+                    result.get("severity", "medium"), 5
+                )
+
+                task_data = {
+                    "title": f"Fix {service} - {error[:50]}",
+                    "description": f"""Service '{service}' is failing.
+
+Error: {error}
+URL: {HOLMOS_SERVICES.get(service, {}).get('url', 'unknown')}
+Screenshot: {result.get('screenshot', 'none')}
+
+Karen says: This is broken. AGAIN. Please fix it so I don't have to keep reporting the same issues.
+""",
+                    "task_type": "bug",
+                    "priority": priority,
+                    "affected_service": service,
+                    "reported_by": "karen"
+                }
+
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            f"{STEVE_URL}/api/tasks",
+                            json=task_data,
+                            timeout=aiohttp.ClientTimeout(total=10)
+                        ) as resp:
+                            if resp.status == 200:
+                                result = await resp.json()
+                                logger.info(f"Task submitted to Steve: #{result.get('task_id')} - {service}")
+                                tasks_submitted += 1
+                            else:
+                                logger.warning(f"Failed to submit task for {service}: {resp.status}")
+                except Exception as e:
+                    logger.warning(f"Could not submit task to Steve: {e}")
+
+        logger.info(f"Submitted {tasks_submitted} tasks to Steve for Claude Code")
+        return tasks_submitted
+
     def broadcast(self, message: Dict):
         """Broadcast message to all WebSocket clients."""
         message_json = json.dumps(message)
@@ -508,6 +567,11 @@ Be professional but don't hide your frustration with broken things."""
                 # Run tests
                 logger.info("Starting test run...")
                 await self.test_all_services()
+
+                # Submit tasks for failing services to Steve's task queue
+                tasks_submitted = await self.submit_tasks_to_steve()
+                if tasks_submitted > 0:
+                    logger.info(f"Filed {tasks_submitted} tasks for Claude Code to fix")
 
                 # Generate report
                 report = await self.generate_test_report()

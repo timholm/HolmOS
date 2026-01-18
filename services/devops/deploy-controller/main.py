@@ -5,6 +5,7 @@ Watches for new images in registry and auto-deploys them.
 """
 
 import asyncio
+import os
 import subprocess
 import json
 import yaml
@@ -22,14 +23,14 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Deploy Controller", version="1.0.0")
 
 # Configuration
-REGISTRY_URL = "http://10.110.67.87:5000"
+REGISTRY_URL = os.getenv("REGISTRY_URL", "http://registry.holm.svc.cluster.local:5000")
 NAMESPACE = "holm"
 CHECK_INTERVAL = 30  # seconds
 
 # State tracking
 deployments_state: dict = {}
 deployment_history: list = []
-auto_deploy_enabled = True
+auto_deploy_enabled = False  # Disabled by default - enable via API when needed
 last_check_time: Optional[datetime] = None
 
 
@@ -89,7 +90,7 @@ def generate_deployment_yaml(service_name: str, replicas: int = 1) -> str:
                     },
                     "containers": [{
                         "name": service_name,
-                        "image": f"10.110.67.87:5000/holm/{service_name}:latest",
+                        "image": f"localhost:31500/{service_name}:latest",
                         "ports": [{
                             "containerPort": 8080
                         }],
@@ -130,9 +131,8 @@ async def get_registry_images() -> list[str]:
             if response.status_code == 200:
                 data = response.json()
                 repos = data.get("repositories", [])
-                # Filter for holm namespace images
-                holm_images = [r for r in repos if r.startswith("holm/")]
-                return holm_images
+                # Return all images (no holm/ prefix filter needed)
+                return repos
             return []
     except Exception as e:
         logger.error(f"Failed to get registry images: {e}")
@@ -159,7 +159,7 @@ async def get_image_digest(image: str, tag: str = "latest") -> Optional[str]:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.head(
                 f"{REGISTRY_URL}/v2/{image}/manifests/{tag}",
-                headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"}
+                headers={"Accept": "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"}
             )
             if response.status_code == 200:
                 return response.headers.get("Docker-Content-Digest")
@@ -296,11 +296,8 @@ async def auto_deploy_loop():
 
                 # Check each image
                 for image in registry_images:
-                    # Extract service name (holm/service-name -> service-name)
-                    if image.startswith("holm/"):
-                        service_name = image.replace("holm/", "")
-                    else:
-                        continue
+                    # Image name is the service name (no holm/ prefix)
+                    service_name = image
 
                     # Get image digest
                     current_digest = await get_image_digest(image, "latest")
@@ -351,9 +348,7 @@ async def dashboard():
 
     # Calculate pending deployments
     deployed_services = set(current_deployments.keys())
-    registry_services = set(
-        img.replace("holm/", "") for img in registry_images if img.startswith("holm/")
-    )
+    registry_services = set(registry_images)
     pending = registry_services - deployed_services
 
     html = """
@@ -554,7 +549,7 @@ async def dashboard():
                     const response = await fetch('/api/deploy', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({image: 'holm/' + service})
+                        body: JSON.stringify({image: service})
                     });
                     const result = await response.json();
                     alert(result.message || 'Deployed');
@@ -668,13 +663,12 @@ async def list_pending():
 
     pending = []
     for image in registry_images:
-        if image.startswith("holm/"):
-            service_name = image.replace("holm/", "")
-            if service_name not in deployed_services:
-                pending.append({
-                    "image": image,
-                    "service": service_name
-                })
+        service_name = image
+        if service_name not in deployed_services:
+            pending.append({
+                "image": image,
+                "service": service_name
+            })
 
     return {
         "pending": pending,

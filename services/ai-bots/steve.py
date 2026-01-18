@@ -169,6 +169,22 @@ class ConversationDB:
             category TEXT
         )''')
 
+        # Tasks table - for Claude Code automation
+        c.execute('''CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            reported_by TEXT,
+            title TEXT,
+            description TEXT,
+            task_type TEXT,
+            priority INTEGER DEFAULT 5,
+            status TEXT DEFAULT 'pending',
+            affected_service TEXT,
+            file_path TEXT,
+            completed_at TEXT,
+            completed_by TEXT
+        )''')
+
         conn.commit()
         conn.close()
 
@@ -222,6 +238,61 @@ class ConversationDB:
                   (datetime.now().isoformat(), author, title, content, category))
         conn.commit()
         conn.close()
+
+    def add_task(self, reported_by: str, title: str, description: str,
+                 task_type: str = "bug", priority: int = 5,
+                 affected_service: str = "", file_path: str = "") -> int:
+        """Add a new task for Claude Code to work on."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''INSERT INTO tasks
+                     (timestamp, reported_by, title, description, task_type,
+                      priority, status, affected_service, file_path)
+                     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)''',
+                  (datetime.now().isoformat(), reported_by, title, description,
+                   task_type, priority, affected_service, file_path))
+        task_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        return task_id
+
+    def get_tasks(self, status: str = "pending", limit: int = 20) -> List[Dict]:
+        """Get tasks sorted by priority (1=highest, 10=lowest)."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT id, timestamp, reported_by, title, description,
+                            task_type, priority, status, affected_service, file_path
+                     FROM tasks WHERE status = ?
+                     ORDER BY priority ASC, timestamp ASC LIMIT ?''', (status, limit))
+        tasks = [{
+            "id": r[0], "timestamp": r[1], "reported_by": r[2], "title": r[3],
+            "description": r[4], "task_type": r[5], "priority": r[6],
+            "status": r[7], "affected_service": r[8], "file_path": r[9]
+        } for r in c.fetchall()]
+        conn.close()
+        return tasks
+
+    def complete_task(self, task_id: int, completed_by: str = "claude-code") -> bool:
+        """Mark a task as completed."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''UPDATE tasks SET status = 'completed',
+                     completed_at = ?, completed_by = ? WHERE id = ?''',
+                  (datetime.now().isoformat(), completed_by, task_id))
+        affected = c.rowcount
+        conn.commit()
+        conn.close()
+        return affected > 0
+
+    def update_task_status(self, task_id: int, status: str) -> bool:
+        """Update task status (pending, in_progress, completed, failed)."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''UPDATE tasks SET status = ? WHERE id = ?''', (status, task_id))
+        affected = c.rowcount
+        conn.commit()
+        conn.close()
+        return affected > 0
 
 
 class OllamaClient:
@@ -568,6 +639,108 @@ def get_improvements():
 def get_cluster():
     summary = steve.kube.get_cluster_summary()
     return jsonify(summary)
+
+# ============================================
+# TASK API - For Claude Code Automation
+# ============================================
+
+@app.route('/api/tasks', methods=['GET'])
+def get_tasks():
+    """Get pending tasks for Claude Code to work on.
+
+    Query params:
+        status: pending|in_progress|completed|failed (default: pending)
+        limit: max tasks to return (default: 20)
+    """
+    status = request.args.get('status', 'pending')
+    limit = request.args.get('limit', 20, type=int)
+    tasks = steve.db.get_tasks(status=status, limit=limit)
+    return jsonify({
+        "tasks": tasks,
+        "count": len(tasks),
+        "status_filter": status,
+        "message": "Tasks sorted by priority (1=critical, 10=low)"
+    })
+
+@app.route('/api/tasks', methods=['POST'])
+def add_task():
+    """Add a new task for Claude Code.
+
+    Body:
+        title: Short task title (required)
+        description: Detailed description (required)
+        task_type: bug|feature|fix|docs|security (default: bug)
+        priority: 1-10, 1=highest (default: 5)
+        affected_service: Service name if applicable
+        file_path: File path if known
+        reported_by: Who reported (default: api)
+    """
+    data = request.json or {}
+
+    title = data.get('title', '')
+    description = data.get('description', '')
+
+    if not title or not description:
+        return jsonify({"error": "title and description required"}), 400
+
+    task_id = steve.db.add_task(
+        reported_by=data.get('reported_by', 'api'),
+        title=title,
+        description=description,
+        task_type=data.get('task_type', 'bug'),
+        priority=data.get('priority', 5),
+        affected_service=data.get('affected_service', ''),
+        file_path=data.get('file_path', '')
+    )
+
+    logger.info(f"New task added: #{task_id} - {title}")
+    steve.broadcast({"type": "new_task", "task_id": task_id, "title": title})
+
+    return jsonify({
+        "success": True,
+        "task_id": task_id,
+        "message": f"Task #{task_id} created"
+    })
+
+@app.route('/api/tasks/<int:task_id>/status', methods=['PUT'])
+def update_task_status(task_id):
+    """Update a task's status.
+
+    Body:
+        status: pending|in_progress|completed|failed
+    """
+    data = request.json or {}
+    status = data.get('status', '')
+
+    if status not in ['pending', 'in_progress', 'completed', 'failed']:
+        return jsonify({"error": "Invalid status"}), 400
+
+    success = steve.db.update_task_status(task_id, status)
+
+    if success:
+        logger.info(f"Task #{task_id} status -> {status}")
+        return jsonify({"success": True, "task_id": task_id, "status": status})
+    else:
+        return jsonify({"error": "Task not found"}), 404
+
+@app.route('/api/tasks/<int:task_id>/complete', methods=['POST'])
+def complete_task(task_id):
+    """Mark a task as completed.
+
+    Body:
+        completed_by: Who completed it (default: claude-code)
+    """
+    data = request.json or {}
+    completed_by = data.get('completed_by', 'claude-code')
+
+    success = steve.db.complete_task(task_id, completed_by)
+
+    if success:
+        logger.info(f"Task #{task_id} completed by {completed_by}")
+        steve.broadcast({"type": "task_completed", "task_id": task_id})
+        return jsonify({"success": True, "task_id": task_id, "completed_by": completed_by})
+    else:
+        return jsonify({"error": "Task not found"}), 404
 
 @sock.route('/ws')
 def websocket(ws):

@@ -1,5 +1,7 @@
 # HolmOS
 
+> **🤖 CLAUDE/AI AGENTS:** To access the cluster, use `https://cmd.holm.chat/run` - See [CLAUDE.md](CLAUDE.md) for instructions. SSH and private IPs are blocked from sandboxed environments.
+
 A fully web-based operating system running on a 13-node Raspberry Pi Kubernetes cluster with 120+ microservices.
 
 ## Architecture

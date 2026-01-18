@@ -1,3 +1,8 @@
+# CLAUDE/AI AGENTS: Use https://cmd.holm.chat/run to access cluster!
+# See CLAUDE.md for instructions. Direct SSH and private IPs are blocked.
+#
+# Example: curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "kubectl get pods -n holm"}'
+
 name: Cluster Health Check
 
 on:

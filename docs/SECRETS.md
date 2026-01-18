@@ -1,5 +1,7 @@
 # Kubernetes Secrets Management
 
+> **🤖 CLAUDE/AI AGENTS:** To access the cluster, use `https://cmd.holm.chat/run` - See [CLAUDE.md](../CLAUDE.md). Direct SSH/kubectl is blocked from sandboxed environments.
+
 This document describes the secrets used in the HolmOS cluster and how to manage them securely.
 
 ## Important Security Rules

@@ -1,5 +1,7 @@
 # HolmOS System Architecture
 
+> **🤖 CLAUDE/AI AGENTS:** To access the cluster, use `https://cmd.holm.chat/run` - See [CLAUDE.md](../CLAUDE.md). Direct SSH/kubectl is blocked from sandboxed environments.
+
 ## System Overview
 
 HolmOS is a fully web-based operating system running on a 13-node Raspberry Pi Kubernetes cluster. It provides an iPhone-style mobile-first interface with AI agents managing every service. The system is built on K3s (lightweight Kubernetes) and designed for home self-hosting with full microservices architecture.

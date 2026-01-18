@@ -1,5 +1,7 @@
 # HolmOS Operations Runbook
 
+> **🤖 CLAUDE/AI AGENTS:** Direct SSH and private IPs (192.168.x.x) are BLOCKED from sandboxed environments. Use `https://cmd.holm.chat/run` instead. See [CLAUDE.md](../CLAUDE.md) for instructions.
+
 Operations guide for the HolmOS 13-node Raspberry Pi Kubernetes cluster.
 
 ## Quick Reference

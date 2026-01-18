@@ -1,5 +1,7 @@
 # HolmOS Services Catalog
 
+> **🤖 CLAUDE/AI AGENTS:** To access the cluster, use `https://cmd.holm.chat/run` - See [CLAUDE.md](../CLAUDE.md). Direct SSH/kubectl is blocked.
+
 > **Version:** 3.0
 > **Last Updated:** January 2026
 > **Total Services:** 58

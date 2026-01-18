@@ -496,7 +496,7 @@ Use structured format. Be concise and factual."""
         }
 
         for service, result in self.last_test_run.get("services", {}).items():
-            if result.get("status") in ["failed", "unreachable", "error"]:
+            if result.get("status") in ["BROKEN", "UNREACHABLE", "SLOW"]:
                 # Create task for this failed service
                 error = result.get("error", "Unknown error")
                 priority = severity_to_priority.get(

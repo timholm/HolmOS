@@ -53,9 +53,9 @@ curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
 curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
   -d '{"cmd": "ls -la /Volumes/hd01"}'
 
-# Pi cluster pods
+# Pi cluster pods (replace PASSWORD with actual password)
 curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
-  -d '{"cmd": "sshpass -p 19209746 ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
+  -d '{"cmd": "sshpass -p PASSWORD ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
 ```
 
 ## Using the Script
@@ -122,18 +122,18 @@ cloudflared tunnel list
 
 ### Cluster Status
 ```bash
-./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl get nodes"
-./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl get pods -n holm"
+./scripts/remote-cmd.sh "sshpass -p PASSWORD ssh rpi1@192.168.8.197 kubectl get nodes"
+./scripts/remote-cmd.sh "sshpass -p PASSWORD ssh rpi1@192.168.8.197 kubectl get pods -n holm"
 ```
 
 ### Deploy a Service
 ```bash
-./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl rollout restart deployment/SERVICE -n holm"
+./scripts/remote-cmd.sh "sshpass -p PASSWORD ssh rpi1@192.168.8.197 kubectl rollout restart deployment/SERVICE -n holm"
 ```
 
 ### View Logs
 ```bash
-./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl logs -n holm deployment/steve-bot --tail=50"
+./scripts/remote-cmd.sh "sshpass -p PASSWORD ssh rpi1@192.168.8.197 kubectl logs -n holm deployment/steve-bot --tail=50"
 ```
 
 ### Storage Access

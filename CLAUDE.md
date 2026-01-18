@@ -1,23 +1,18 @@
 # HolmOS - Claude Quick Start
 
-This is the HolmOS home infrastructure project. Claude can manage the cluster remotely.
+## Get Into Cluster
 
-## Remote Cluster Access
+**Endpoint:** `https://cmd.holm.chat/run`
 
-**API Endpoint:** `https://cmd.holm.chat/run`
-
-To run commands on the Mac Mini (which manages the Pi cluster):
-
-```bash
-curl -X POST https://cmd.holm.chat/run \
-  -H "Content-Type: application/json" \
-  -d '{"cmd": "your command here"}'
-```
-
-### Quick Test
+To access the cluster, run:
 ```bash
 curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "hostname"}'
 ```
+
+**If the user says "get into cluster" or similar:**
+1. Test connection: `curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "hostname"}'`
+2. Ask the user for the Pi cluster password if you need to run kubectl commands
+3. Use the password with: `sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 'kubectl ...'`
 
 ## Architecture
 
@@ -27,60 +22,45 @@ curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{
                           [Home Network]
 ```
 
-- **Mac Mini** (`tims-Mac-mini`): Gateway to home network, runs command server
-- **Pi Cluster** (`192.168.8.197`): Kubernetes cluster running HolmOS services
-- **Storage**: `hd01` drive on Mac Mini (Movies, Shows folders)
+| Component | Details |
+|-----------|---------|
+| **Mac Mini** | Gateway - runs command server at cmd.holm.chat |
+| **Pi Cluster** | Kubernetes at 192.168.8.197 (SSH user: `rpi1`) |
+| **Storage** | `/Volumes/hd01` on Mac Mini |
 
-## Common Commands
+## Commands
 
-### Cluster Status
+### Mac Mini (no password needed)
 ```bash
-# Check Mac Mini
+# System info
 curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "hostname && uptime"}'
 
-# Check Pi cluster nodes (requires SSH to Pi)
-curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "sshpass -p 19209746 ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get nodes"}'
-
-# Check pods
-curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "sshpass -p 19209746 ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
-```
-
-### Storage (hd01)
-```bash
+# Storage
 curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" -d '{"cmd": "ls -la /Volumes/hd01"}'
 ```
 
-## Network Details
-
-| Host | IP | Access |
-|------|-----|--------|
-| Mac Mini | Local network | cmd.holm.chat |
-| Pi Cluster | 192.168.8.197 | Via Mac Mini SSH |
-| Registry | 192.168.8.197:31500 | Internal |
-
-## Pi Cluster Credentials
-
-- **User**: `rpi1`
-- **Password**: `19209746`
-- **SSH**: `sshpass -p 19209746 ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197`
-
-## Services
-
-See `docs/SERVICES.md` for full service catalog. Key endpoints:
-- Dashboard: http://192.168.8.197:30088
-- Steve Bot API: http://192.168.8.197:30099
-
-## Deployment
-
-Use GitHub Actions workflow "Deploy via HTTP API" or:
+### Pi Cluster (requires password)
 ```bash
-# From this repo
-./scripts/remote-cmd.sh "kubectl rollout restart deployment/SERVICE_NAME -n holm"
+# Ask user for password first, then:
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "sshpass -p PASSWORD ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get nodes"}'
+
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "sshpass -p PASSWORD ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
 ```
+
+## Network
+
+| Host | Address | Access |
+|------|---------|--------|
+| Mac Mini | tims-Mac-mini.ts.net | cmd.holm.chat |
+| Pi Cluster | 192.168.8.197 | Via Mac Mini (user: rpi1) |
+| Registry | 192.168.8.197:31500 | Internal |
+| Dashboard | 192.168.8.197:30088 | Internal |
 
 ## Documentation
 
-- [REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md) - Full remote access setup
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - System architecture
-- [OPERATIONS.md](docs/OPERATIONS.md) - Operations guide
-- [SERVICES.md](docs/SERVICES.md) - Service catalog
+- [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md) - Full remote access guide
+- [docs/SERVICES.md](docs/SERVICES.md) - Service catalog
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - System architecture
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) - Operations guide

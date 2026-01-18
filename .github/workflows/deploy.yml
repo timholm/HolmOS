@@ -12,8 +12,7 @@ on:
         default: 'all'
 
 env:
-  REGISTRY: localhost:31500
-  PI_HOST: 192.168.8.197
+  REGISTRY: 192.168.8.197:31500
 
 jobs:
   detect:
@@ -108,32 +107,110 @@ jobs:
         with:
           name: image-${{ matrix.service }}
           path: /tmp/${{ matrix.service }}.tar
-          retention-days: 7
+          retention-days: 1
+
+  deploy:
+    name: Deploy ${{ matrix.service }}
+    needs: [detect, build]
+    if: needs.detect.outputs.has_services == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp
+
+      - name: Install SSH client
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Deploy to Pi Cluster
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          # Disable strict host key checking
+          mkdir -p ~/.ssh
+          echo "StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+          echo "📦 Transferring image to cluster..."
+          sshpass -p "$SSH_PASSWORD" scp -P $SSH_PORT \
+            /tmp/${{ matrix.service }}.tar \
+            $SSH_USER@$SSH_HOST:/tmp/${{ matrix.service }}.tar
+
+          echo "🚀 Deploying ${{ matrix.service }}..."
+          sshpass -p "$SSH_PASSWORD" ssh -p $SSH_PORT $SSH_USER@$SSH_HOST << 'DEPLOY_SCRIPT'
+          set -e
+
+          SERVICE="${{ matrix.service }}"
+          IMAGE_TAG="${{ github.sha }}"
+          REGISTRY="${{ env.REGISTRY }}"
+
+          echo "Loading image into containerd..."
+          sudo ctr -n k8s.io images import /tmp/${SERVICE}.tar
+
+          echo "Pushing to local registry..."
+          sudo ctr -n k8s.io images push --plain-http ${REGISTRY}/${SERVICE}:${IMAGE_TAG} || true
+          sudo ctr -n k8s.io images push --plain-http ${REGISTRY}/${SERVICE}:latest || true
+
+          echo "Updating deployment..."
+          if kubectl get deployment ${SERVICE} -n holm >/dev/null 2>&1; then
+            kubectl set image deployment/${SERVICE} ${SERVICE}=${REGISTRY}/${SERVICE}:${IMAGE_TAG} -n holm
+            kubectl rollout status deployment/${SERVICE} -n holm --timeout=120s
+          else
+            echo "No deployment found for ${SERVICE}, skipping rollout"
+          fi
+
+          echo "Cleaning up..."
+          rm -f /tmp/${SERVICE}.tar
+
+          echo "✅ Deployment complete!"
+          DEPLOY_SCRIPT
 
   summary:
-    name: Build Summary
-    needs: [detect, build]
+    name: Deployment Summary
+    needs: [detect, build, deploy]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Generate summary
         run: |
-          echo "## 🚀 HolmOS Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 HolmOS Deployment Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Services:** ${{ needs.detect.outputs.services }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Deployment" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Detect | ${{ needs.detect.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The Pi cluster is on a private network and cannot be reached from GitHub Actions." >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.deploy.result }}" = "success" ]; then
+            echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Services have been deployed to the Pi cluster." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ⚠️ Deployment Status" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the deploy job logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**To deploy manually:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# Download artifacts from Actions tab, then on Pi:" >> $GITHUB_STEP_SUMMARY
-          echo "sudo ctr -n k8s.io images import <service>.tar" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl rollout restart deployment/<service> -n holm" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Access Points" >> $GITHUB_STEP_SUMMARY
-          echo "- HolmOS Shell: http://${{ env.PI_HOST }}:30000" >> $GITHUB_STEP_SUMMARY
-          echo "- Nova Dashboard: http://${{ env.PI_HOST }}:30004" >> $GITHUB_STEP_SUMMARY
+          echo "### Cluster Access" >> $GITHUB_STEP_SUMMARY
+          echo "- HolmOS Dashboard: http://192.168.8.197:30088" >> $GITHUB_STEP_SUMMARY
+          echo "- Steve Bot API: http://192.168.8.197:30099" >> $GITHUB_STEP_SUMMARY

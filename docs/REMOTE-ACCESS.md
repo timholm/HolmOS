@@ -1,50 +1,103 @@
 # Remote Access to HolmOS Cluster
 
-This document describes how to access the Mac Mini and Pi cluster remotely via HTTP API over ngrok.
+Access the Mac Mini and Pi cluster remotely via the HTTP command API.
 
-## Overview
+## Quick Start
 
-The cluster can be accessed remotely using an HTTP command API that runs on the Mac Mini and is exposed via ngrok. This approach:
-- Bypasses SSH protocol issues with firewalls/proxies
-- Works through corporate networks and sandboxed environments
-- Provides simple REST API for command execution
+**Endpoint:** `https://cmd.holm.chat/run`
+
+```bash
+curl -X POST https://cmd.holm.chat/run \
+  -H "Content-Type: application/json" \
+  -d '{"cmd": "hostname"}'
+```
+
+Or use the script:
+```bash
+./scripts/remote-cmd.sh "hostname"
+```
 
 ## Architecture
 
 ```
-[Remote Client] → [ngrok] → [Mac Mini Command Server] → [Pi Cluster]
-                    ↓
-              HTTPS tunnel
+[Remote Client] → [cmd.holm.chat] → [Cloudflare Tunnel] → [Mac Mini] → [Pi Cluster]
 ```
 
-## Setup (Mac Mini)
+- **cmd.holm.chat** - Public endpoint (Cloudflare tunnel to Mac Mini)
+- **Mac Mini** - Runs command-server.py, gateway to home network
+- **Pi Cluster** - Kubernetes cluster at 192.168.8.197
 
-### 1. Start the Command Server
+## API Reference
+
+### POST /run
+
+Execute a command on the Mac Mini.
+
+**Request:**
+```json
+{"cmd": "your command here"}
+```
+
+**Response:**
+```json
+{"stdout": "output", "stderr": "", "code": 0}
+```
+
+**Examples:**
+```bash
+# Mac Mini info
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "hostname && uptime"}'
+
+# List storage
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "ls -la /Volumes/hd01"}'
+
+# Pi cluster pods
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "sshpass -p 19209746 ssh -o StrictHostKeyChecking=no rpi1@192.168.8.197 kubectl get pods -n holm"}'
+```
+
+## Using the Script
+
+The `remote-cmd.sh` script defaults to cmd.holm.chat:
 
 ```bash
-# Clone the repo if needed
-cd ~/HolmOS
-
-# Run the command server
-python3 scripts/command-server.py &
+# No setup needed - just run
+./scripts/remote-cmd.sh "hostname"
+./scripts/remote-cmd.sh "ls /Volumes/hd01"
+./scripts/remote-cmd.sh "kubectl get nodes"  # Runs on Mac Mini
 ```
 
-The server runs on port 8080 by default.
+Override endpoint if needed:
+```bash
+REMOTE_API_URL=https://other.url ./scripts/remote-cmd.sh "hostname"
+```
 
-### 2. Expose via ngrok
+## Server Setup (Mac Mini)
+
+The command server should already be running. If you need to restart:
 
 ```bash
-# Start ngrok tunnel
-ngrok http 8080
+# Start the command server
+python3 ~/HolmOS/scripts/command-server.py &
+
+# Verify it's running
+curl http://localhost:8080/run -X POST -H "Content-Type: application/json" -d '{"cmd": "echo ok"}'
 ```
 
-Note the generated URL (e.g., `https://xxxx.ngrok-free.app`)
+### Cloudflare Tunnel
 
-### 3. Keep it Running (Optional)
+The tunnel exposes port 8080 as cmd.holm.chat. Managed via cloudflared:
 
-For persistent access, use a systemd service or launchd:
+```bash
+# Check tunnel status
+cloudflared tunnel list
+```
 
-**macOS launchd** (`~/Library/LaunchAgents/com.holmos.command-server.plist`):
+### Persistent Service (launchd)
+
+`~/Library/LaunchAgents/com.holmos.command-server.plist`:
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,103 +118,59 @@ For persistent access, use a systemd service or launchd:
 </plist>
 ```
 
-Load with: `launchctl load ~/Library/LaunchAgents/com.holmos.command-server.plist`
-
-## Usage
-
-### Using the Remote Command Script
-
-```bash
-# Set the ngrok URL
-export REMOTE_API_URL="https://xxxx.ngrok-free.app"
-
-# Run commands
-./scripts/remote-cmd.sh "hostname"
-./scripts/remote-cmd.sh "kubectl get pods -n holm"
-./scripts/remote-cmd.sh "docker ps"
-```
-
-### Direct curl Usage
-
-```bash
-# Run a command
-curl -X POST https://xxxx.ngrok-free.app/run \
-  -H "Content-Type: application/json" \
-  -d '{"cmd": "kubectl get nodes"}'
-
-# Response format:
-# {"stdout": "...", "stderr": "...", "code": 0}
-```
-
-### From CI/CD (GitHub Actions)
-
-```yaml
-- name: Run remote command
-  env:
-    REMOTE_API_URL: ${{ secrets.REMOTE_API_URL }}
-  run: |
-    curl -X POST $REMOTE_API_URL/run \
-      -H "Content-Type: application/json" \
-      -d '{"cmd": "kubectl rollout status deployment/my-app -n holm"}'
-```
-
-## Common Commands
+## Common Operations
 
 ### Cluster Status
 ```bash
-./scripts/remote-cmd.sh "kubectl get nodes"
-./scripts/remote-cmd.sh "kubectl get pods -n holm"
-./scripts/remote-cmd.sh "kubectl top nodes"
+./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl get nodes"
+./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl get pods -n holm"
 ```
 
 ### Deploy a Service
 ```bash
-./scripts/remote-cmd.sh "kubectl set image deployment/steve-bot steve-bot=192.168.8.197:31500/steve-bot:latest -n holm"
-./scripts/remote-cmd.sh "kubectl rollout status deployment/steve-bot -n holm"
+./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl rollout restart deployment/SERVICE -n holm"
 ```
 
 ### View Logs
 ```bash
-./scripts/remote-cmd.sh "kubectl logs -n holm deployment/steve-bot --tail=50"
+./scripts/remote-cmd.sh "sshpass -p 19209746 ssh rpi1@192.168.8.197 kubectl logs -n holm deployment/steve-bot --tail=50"
 ```
 
-### Access Pi Cluster from Mac Mini
+### Storage Access
 ```bash
-./scripts/remote-cmd.sh "sshpass -p '19209746' ssh rpi1@192.168.8.197 'kubectl get pods -n holm'"
+./scripts/remote-cmd.sh "ls -la /Volumes/hd01/Movies"
+./scripts/remote-cmd.sh "df -h /Volumes/hd01"
 ```
 
-## Security Considerations
+## Network Reference
 
-1. **ngrok URL rotation** - Free ngrok URLs change on restart. Use ngrok paid plan for stable URLs, or update `REMOTE_API_URL` secret when URL changes.
-
-2. **Authentication** - The basic command server has no authentication. For production:
-   - Use ngrok's built-in auth: `ngrok http 8080 --basic-auth="user:password"`
-   - Add API key validation to command-server.py
-   - Use ngrok's IP restrictions
-
-3. **Command injection** - The server executes arbitrary commands. Only expose to trusted clients.
+| Host | Address | Access |
+|------|---------|--------|
+| Mac Mini | tims-Mac-mini.ts.net | cmd.holm.chat |
+| Pi Cluster | 192.168.8.197 | Via Mac Mini |
+| Registry | 192.168.8.197:31500 | Internal |
+| Dashboard | 192.168.8.197:30088 | Internal |
 
 ## Troubleshooting
 
 ### Connection refused
-- Ensure command-server.py is running: `ps aux | grep command-server`
-- Check ngrok is running: `ngrok status`
+```bash
+# Check if server is running on Mac Mini
+curl -X POST https://cmd.holm.chat/run -H "Content-Type: application/json" \
+  -d '{"cmd": "ps aux | grep command-server"}'
+```
 
 ### Timeout errors
-- Commands have a 5-minute timeout by default
-- For long-running commands, increase timeout in command-server.py
+Commands timeout after 5 minutes. For long operations, run in background:
+```bash
+./scripts/remote-cmd.sh "nohup long-command &"
+```
 
-### ngrok URL changed
-- Restart ngrok: `ngrok http 8080`
-- Update `REMOTE_API_URL` environment variable or GitHub secret
-
-## GitHub Secrets Required
-
-| Secret | Description |
-|--------|-------------|
-| `REMOTE_API_URL` | ngrok URL (e.g., `https://xxxx.ngrok-free.app`) |
+### Cloudflare tunnel down
+SSH directly to Mac Mini if tunnel is down, then restart cloudflared.
 
 ## Related Documentation
 
+- [CLAUDE.md](../CLAUDE.md) - Quick start for Claude
 - [OPERATIONS.md](./OPERATIONS.md) - Cluster operations guide
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - System architecture

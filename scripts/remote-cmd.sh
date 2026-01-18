@@ -2,27 +2,20 @@
 # remote-cmd.sh - Run commands on Mac Mini via HTTP API
 # Usage: ./remote-cmd.sh "command to run"
 #
-# Environment variables:
-#   REMOTE_API_URL - The ngrok URL for the command API (required)
-#
-# Example:
-#   export REMOTE_API_URL="https://xxxxx.ngrok-free.app"
-#   ./remote-cmd.sh "kubectl get pods -n holm"
+# Default endpoint: https://cmd.holm.chat
+# Override with: REMOTE_API_URL=https://other.url ./remote-cmd.sh "cmd"
 
 set -e
 
-# Check for required environment variable
-if [ -z "$REMOTE_API_URL" ]; then
-    echo "Error: REMOTE_API_URL environment variable not set"
-    echo "Set it to your ngrok HTTP API URL, e.g.:"
-    echo "  export REMOTE_API_URL=\"https://xxxxx.ngrok-free.app\""
-    exit 1
-fi
+# Default to cmd.holm.chat
+REMOTE_API_URL="${REMOTE_API_URL:-https://cmd.holm.chat}"
 
 # Check for command argument
 if [ -z "$1" ]; then
     echo "Usage: $0 \"command to run\""
     echo "Example: $0 \"hostname && uname -a\""
+    echo ""
+    echo "Endpoint: $REMOTE_API_URL"
     exit 1
 fi
 

@@ -13,6 +13,7 @@ on:
 
 env:
   REGISTRY: 192.168.8.197:31500
+  REMOTE_API_URL: https://cmd.holm.chat
 
 jobs:
   custom-command:
@@ -21,14 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run command on cluster
-        env:
-          REMOTE_API_URL: ${{ secrets.REMOTE_API_URL }}
         run: |
-          if [ -z "$REMOTE_API_URL" ]; then
-            echo "Error: REMOTE_API_URL secret not set"
-            exit 1
-          fi
-
           echo "Running: ${{ github.event.inputs.command }}"
           RESPONSE=$(curl -s -X POST "${REMOTE_API_URL}/run" \
             -H "Content-Type: application/json" \
@@ -130,8 +124,6 @@ jobs:
           path: /tmp
 
       - name: Deploy via HTTP API
-        env:
-          REMOTE_API_URL: ${{ secrets.REMOTE_API_URL }}
         run: |
           SERVICE="${{ matrix.service }}"
           IMAGE_TAG="${{ github.sha }}"

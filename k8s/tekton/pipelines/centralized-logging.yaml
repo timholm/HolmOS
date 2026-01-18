@@ -1,0 +1,165 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+    description: 'Ongoing: Implement centralized logging with structured JSON format'
+      {"apiVersion":"tekton.dev/v1","kind":"Pipeline","metadata":{"annotations":{"description":"Ongoing: Implement centralized logging with structured JSON format","steve-recommendation":"Implement centralized logging system with structured formats for better monitoring"},"name":"centralized-logging","namespace":"holm"},"spec":{"params":[{"default":"30","name":"log-retention-days","type":"string"},{"default":"json","name":"log-format","type":"string"}],"tasks":[{"name":"deploy-fluentd","params":[{"name":"MANIFEST","value":"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fluentd-config\n  namespace: holm\ndata:\n  fluent.conf: |\n    \u003csource\u003e\n      @type tail\n      path /var/log/containers/*.log\n      pos_file /var/log/fluentd-containers.log.pos\n      tag kubernetes.*\n      format json\n      time_key time\n      time_format %Y-%m-%dT%H:%M:%S.%NZ\n    \u003c/source\u003e\n    \u003cfilter kubernetes.**\u003e\n      @type record_transformer\n      \u003crecord\u003e\n        hostname ${hostname}\n        cluster holmos\n      \u003c/record\u003e\n    \u003c/filter\u003e\n    \u003cmatch kubernetes.**\u003e\n      @type elasticsearch\n      host elasticsearch.holm.svc.cluster.local\n      port 9200\n      logstash_format true\n      logstash_prefix holmos-logs\n    \u003c/match\u003e\n---\napiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: fluentd\n  namespace: holm\n  labels:\n    app: fluentd\nspec:\n  selector:\n    matchLabels:\n      app: fluentd\n  template:\n    metadata:\n      labels:\n        app: fluentd\n    spec:\n      tolerations:\n      - key: node-role.kubernetes.io/control-plane\n        operator: Exists\n        effect: NoSchedule\n      containers:\n      - name: fluentd\n        image: fluent/fluentd-kubernetes-daemonset:v1-debian-elasticsearch\n        env:\n        - name: FLUENT_ELASTICSEARCH_HOST\n          value: \"elasticsearch.holm.svc.cluster.local\"\n        - name: FLUENT_ELASTICSEARCH_PORT\n          value: \"9200\"\n        volumeMounts:\n        - name: varlog\n          mountPath: /var/log\n        - name: config\n          mountPath: /fluentd/etc\n      volumes:\n      - name: varlog\n        hostPath:\n          path: /var/log\n      - name: config\n        configMap:\n          name: fluentd-config\n"}],"taskRef":{"name":"kubectl-apply"}},{"name":"deploy-elasticsearch","params":[{"name":"MANIFEST","value":"apiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: elasticsearch\n  namespace: holm\nspec:\n  serviceName: elasticsearch\n  replicas: 1\n  selector:\n    matchLabels:\n      app: elasticsearch\n  template:\n    metadata:\n      labels:\n        app: elasticsearch\n    spec:\n      containers:\n      - name: elasticsearch\n        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0\n        ports:\n        - containerPort: 9200\n        - containerPort: 9300\n        env:\n        - name: discovery.type\n          value: single-node\n        - name: xpack.security.enabled\n          value: \"false\"\n        resources:\n          requests:\n            memory: \"1Gi\"\n            cpu: \"500m\"\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: elasticsearch\n  namespace: holm\nspec:\n  selector:\n    app: elasticsearch\n  ports:\n  - port: 9200\n    targetPort: 9200\n"}],"taskRef":{"name":"kubectl-apply"}},{"name":"configure-log-retention","params":[{"name":"MANIFEST","value":"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: log-retention-policy\n  namespace: holm\ndata:\n  retention_days: \"$(params.log-retention-days)\"\n  log_format: \"$(params.log-format)\"\n  cleanup_schedule: \"0 2 * * *\"\n"}],"runAfter":["deploy-elasticsearch"],"taskRef":{"name":"kubectl-apply"}}]}}
+    steve-recommendation: Implement centralized logging system with structured formats
+      for better monitoring
+  name: centralized-logging
+  namespace: holm
+spec:
+  params:
+  - default: "30"
+    name: log-retention-days
+    type: string
+  - default: json
+    name: log-format
+    type: string
+  tasks:
+  - name: deploy-fluentd
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: fluentd-config
+          namespace: holm
+        data:
+          fluent.conf: |
+            <source>
+              @type tail
+              path /var/log/containers/*.log
+              pos_file /var/log/fluentd-containers.log.pos
+              tag kubernetes.*
+              format json
+              time_key time
+              time_format %Y-%m-%dT%H:%M:%S.%NZ
+            </source>
+            <filter kubernetes.**>
+              @type record_transformer
+              <record>
+                hostname ${hostname}
+                cluster holmos
+              </record>
+            </filter>
+            <match kubernetes.**>
+              @type elasticsearch
+              host elasticsearch.holm.svc.cluster.local
+              port 9200
+              logstash_format true
+              logstash_prefix holmos-logs
+            </match>
+        ---
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: fluentd
+          namespace: holm
+          labels:
+            app: fluentd
+        spec:
+          selector:
+            matchLabels:
+              app: fluentd
+          template:
+            metadata:
+              labels:
+                app: fluentd
+            spec:
+              tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
+              containers:
+              - name: fluentd
+                image: fluent/fluentd-kubernetes-daemonset:v1-debian-elasticsearch
+                env:
+                - name: FLUENT_ELASTICSEARCH_HOST
+                  value: "elasticsearch.holm.svc.cluster.local"
+                - name: FLUENT_ELASTICSEARCH_PORT
+                  value: "9200"
+                volumeMounts:
+                - name: varlog
+                  mountPath: /var/log
+                - name: config
+                  mountPath: /fluentd/etc
+              volumes:
+              - name: varlog
+                hostPath:
+                  path: /var/log
+              - name: config
+                configMap:
+                  name: fluentd-config
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: deploy-elasticsearch
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: elasticsearch
+          namespace: holm
+        spec:
+          serviceName: elasticsearch
+          replicas: 1
+          selector:
+            matchLabels:
+              app: elasticsearch
+          template:
+            metadata:
+              labels:
+                app: elasticsearch
+            spec:
+              containers:
+              - name: elasticsearch
+                image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+                ports:
+                - containerPort: 9200
+                - containerPort: 9300
+                env:
+                - name: discovery.type
+                  value: single-node
+                - name: xpack.security.enabled
+                  value: "false"
+                resources:
+                  requests:
+                    memory: "1Gi"
+                    cpu: "500m"
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: elasticsearch
+          namespace: holm
+        spec:
+          selector:
+            app: elasticsearch
+          ports:
+          - port: 9200
+            targetPort: 9200
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: configure-log-retention
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: log-retention-policy
+          namespace: holm
+        data:
+          retention_days: "$(params.log-retention-days)"
+          log_format: "$(params.log-format)"
+          cleanup_schedule: "0 2 * * *"
+    runAfter:
+    - deploy-elasticsearch
+    taskRef:
+      kind: Task
+      name: kubectl-apply

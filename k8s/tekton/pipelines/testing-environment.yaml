@@ -1,0 +1,119 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+    description: 'Priority 2: Provision testing environments with automated testing'
+      {"apiVersion":"tekton.dev/v1","kind":"Pipeline","metadata":{"annotations":{"description":"Priority 2: Provision testing environments with automated testing","steve-recommendation":"Provision dedicated testing environments with integrated automated testing frameworks"},"name":"testing-environment","namespace":"holm"},"spec":{"params":[{"default":"holm-test","name":"test-namespace","type":"string"},{"default":"all","name":"service-to-test","type":"string"}],"tasks":[{"name":"create-test-namespace","params":[{"name":"MANIFEST","value":"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: holm-test\n  labels:\n    environment: test\n    purpose: automated-testing\n"}],"taskRef":{"name":"kubectl-apply"}},{"name":"deploy-test-services","params":[{"name":"MANIFEST","value":"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: test-runner\n  namespace: holm-test\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: test-runner\n  template:\n    metadata:\n      labels:\n        app: test-runner\n    spec:\n      containers:\n      - name: test-runner\n        image: python:3.11-slim\n        command: [\"sleep\", \"infinity\"]\n        resources:\n          requests:\n            memory: \"256Mi\"\n            cpu: \"200m\"\n"}],"runAfter":["create-test-namespace"],"taskRef":{"name":"kubectl-apply"}},{"name":"clone-test-repo","params":[{"name":"IMAGE","value":"skip"},{"name":"GIT_URL","value":"https://github.com/timholm/HolmOS.git"},{"name":"GIT_SUBDIR","value":"tests"},{"name":"DOCKERFILE","value":"skip"},{"name":"CONTEXT","value":"."}],"runAfter":["deploy-test-services"],"taskRef":{"name":"kaniko-build"},"workspaces":[{"name":"source","workspace":"shared-workspace"}]},{"name":"run-unit-tests","params":[{"name":"TEST_IMAGE","value":"python:3.11-slim"},{"name":"TEST_COMMAND","value":"python -m pytest"},{"name":"TEST_ARGS","value":"unit/ -v --tb=short"}],"runAfter":["clone-test-repo"],"taskRef":{"name":"run-tests"},"workspaces":[{"name":"source","workspace":"shared-workspace"}]},{"name":"run-integration-tests","params":[{"name":"TEST_IMAGE","value":"python:3.11-slim"},{"name":"TEST_COMMAND","value":"python -m pytest"},{"name":"TEST_ARGS","value":"integration/ -v --tb=short"}],"runAfter":["run-unit-tests"],"taskRef":{"name":"run-tests"},"workspaces":[{"name":"source","workspace":"shared-workspace"}]}],"workspaces":[{"name":"shared-workspace"}]}}
+    steve-recommendation: Provision dedicated testing environments with integrated
+      automated testing frameworks
+  name: testing-environment
+  namespace: holm
+spec:
+  params:
+  - default: holm-test
+    name: test-namespace
+    type: string
+  - default: all
+    name: service-to-test
+    type: string
+  tasks:
+  - name: create-test-namespace
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: holm-test
+          labels:
+            environment: test
+            purpose: automated-testing
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: deploy-test-services
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: test-runner
+          namespace: holm-test
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: test-runner
+          template:
+            metadata:
+              labels:
+                app: test-runner
+            spec:
+              containers:
+              - name: test-runner
+                image: python:3.11-slim
+                command: ["sleep", "infinity"]
+                resources:
+                  requests:
+                    memory: "256Mi"
+                    cpu: "200m"
+    runAfter:
+    - create-test-namespace
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: clone-test-repo
+    params:
+    - name: IMAGE
+      value: skip
+    - name: GIT_URL
+      value: https://github.com/timholm/HolmOS.git
+    - name: GIT_SUBDIR
+      value: tests
+    - name: DOCKERFILE
+      value: skip
+    - name: CONTEXT
+      value: .
+    runAfter:
+    - deploy-test-services
+    taskRef:
+      kind: Task
+      name: kaniko-build
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  - name: run-unit-tests
+    params:
+    - name: TEST_IMAGE
+      value: python:3.11-slim
+    - name: TEST_COMMAND
+      value: python -m pytest
+    - name: TEST_ARGS
+      value: unit/ -v --tb=short
+    runAfter:
+    - clone-test-repo
+    taskRef:
+      kind: Task
+      name: run-tests
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  - name: run-integration-tests
+    params:
+    - name: TEST_IMAGE
+      value: python:3.11-slim
+    - name: TEST_COMMAND
+      value: python -m pytest
+    - name: TEST_ARGS
+      value: integration/ -v --tb=short
+    runAfter:
+    - run-unit-tests
+    taskRef:
+      kind: Task
+      name: run-tests
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  workspaces:
+  - name: shared-workspace

@@ -1,0 +1,33 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Task","metadata":{"annotations":{},"name":"health-check","namespace":"holm"},"spec":{"params":[{"description":"URL to health check","name":"SERVICE_URL","type":"string"},{"default":"200","name":"EXPECTED_STATUS","type":"string"}],"steps":[{"image":"curlimages/curl:latest","name":"check","script":"#!/bin/sh\nset -ex\nfor i in 1 2 3 4 5; do\n  status=$(curl -s -o /dev/null -w \"%{http_code}\" $(params.SERVICE_URL) || echo \"000\")\n  if [ \"$status\" = \"$(params.EXPECTED_STATUS)\" ]; then\n    echo \"Health check passed: $status\"\n    exit 0\n  fi\n  echo \"Attempt $i: got $status, expected $(params.EXPECTED_STATUS)\"\n  sleep 5\ndone\necho \"Health check failed after 5 attempts\"\nexit 1\n"}]}}
+  name: health-check
+  namespace: holm
+spec:
+  params:
+  - description: URL to health check
+    name: SERVICE_URL
+    type: string
+  - default: "200"
+    name: EXPECTED_STATUS
+    type: string
+  steps:
+  - computeResources: {}
+    image: curlimages/curl:latest
+    name: check
+    script: |
+      #!/bin/sh
+      set -ex
+      for i in 1 2 3 4 5; do
+        status=$(curl -s -o /dev/null -w "%{http_code}" $(params.SERVICE_URL) || echo "000")
+        if [ "$status" = "$(params.EXPECTED_STATUS)" ]; then
+          echo "Health check passed: $status"
+          exit 0
+        fi
+        echo "Attempt $i: got $status, expected $(params.EXPECTED_STATUS)"
+        sleep 5
+      done
+      echo "Health check failed after 5 attempts"
+      exit 1

@@ -1,0 +1,24 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Task","metadata":{"annotations":{},"name":"kubectl-apply","namespace":"holm"},"spec":{"params":[{"description":"Path to manifest or inline YAML","name":"MANIFEST","type":"string"},{"default":"apply","description":"kubectl action (apply, delete, patch)","name":"ACTION","type":"string"}],"steps":[{"image":"bitnami/kubectl:latest","name":"kubectl","script":"#!/bin/sh\nset -ex\necho \"$(params.MANIFEST)\" | kubectl $(params.ACTION) --validate=false -f -\n"}]}}
+  name: kubectl-apply
+  namespace: holm
+spec:
+  params:
+  - description: Path to manifest or inline YAML
+    name: MANIFEST
+    type: string
+  - default: apply
+    description: kubectl action (apply, delete, patch)
+    name: ACTION
+    type: string
+  steps:
+  - computeResources: {}
+    image: bitnami/kubectl:latest
+    name: kubectl
+    script: |
+      #!/bin/sh
+      set -ex
+      echo "$(params.MANIFEST)" | kubectl $(params.ACTION) --validate=false -f -

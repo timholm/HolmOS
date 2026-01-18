@@ -1,0 +1,120 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+    description: 'Priority 1: Consolidate File-Web and Terminal-Web into unified-web
+      service'
+    steve-recommendation: Service Consolidation - reduce redundancy and enhance performance
+  name: service-consolidation
+  namespace: holm
+spec:
+  params:
+  - default: latest
+    description: Image tag for services
+    name: image-tag
+    type: string
+  tasks:
+  - name: build-file-web
+    params:
+    - name: IMAGE
+      value: 10.43.48.161:5000/file-web-nautilus:$(params.image-tag)
+    - name: GIT_URL
+      value: https://github.com/timholm/HolmOS.git
+    - name: GIT_SUBDIR
+      value: services/file-web-nautilus
+    - name: DOCKERFILE
+      value: Dockerfile
+    - name: CONTEXT
+      value: .
+    taskRef:
+      kind: Task
+      name: kaniko-build
+    workspaces:
+    - name: source
+      workspace: file-web-workspace
+  - name: build-terminal-web
+    params:
+    - name: IMAGE
+      value: 10.43.48.161:5000/terminal-web:$(params.image-tag)
+    - name: GIT_URL
+      value: https://github.com/timholm/HolmOS.git
+    - name: GIT_SUBDIR
+      value: services/terminal-web
+    - name: DOCKERFILE
+      value: Dockerfile
+    - name: CONTEXT
+      value: .
+    taskRef:
+      kind: Task
+      name: kaniko-build
+    workspaces:
+    - name: source
+      workspace: terminal-web-workspace
+  - name: create-unified-service
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: unified-web-config
+          namespace: holm
+        data:
+          CONSOLIDATION_STATUS: "complete"
+          FILE_WEB_IMAGE: "10.43.48.161:5000/file-web-nautilus:$(params.image-tag)"
+          TERMINAL_WEB_IMAGE: "10.43.48.161:5000/terminal-web:$(params.image-tag)"
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: unified-web
+          namespace: holm
+          labels:
+            app: unified-web
+            consolidation: file-terminal
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: unified-web
+          template:
+            metadata:
+              labels:
+                app: unified-web
+            spec:
+              containers:
+              - name: file-web
+                image: 10.43.48.161:5000/file-web-nautilus:$(params.image-tag)
+                ports:
+                - containerPort: 8080
+                  name: file-port
+              - name: terminal-web
+                image: 10.43.48.161:5000/terminal-web:$(params.image-tag)
+                ports:
+                - containerPort: 3000
+                  name: terminal-port
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: unified-web
+          namespace: holm
+        spec:
+          selector:
+            app: unified-web
+          ports:
+          - name: files
+            port: 8080
+            targetPort: file-port
+          - name: terminal
+            port: 3000
+            targetPort: terminal-port
+    runAfter:
+    - build-file-web
+    - build-terminal-web
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  workspaces:
+  - name: file-web-workspace
+  - name: terminal-web-workspace

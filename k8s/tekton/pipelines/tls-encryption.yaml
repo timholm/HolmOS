@@ -1,0 +1,120 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+    description: 'Priority 1: Implement TLS encryption across all communication channels'
+      {"apiVersion":"tekton.dev/v1","kind":"Pipeline","metadata":{"annotations":{"description":"Priority 1: Implement TLS encryption across all communication channels","steve-recommendation":"Secure endpoints with TLS encryption"},"name":"tls-encryption","namespace":"holm"},"spec":{"params":[{"default":"holmos.local","name":"domain","type":"string"}],"tasks":[{"name":"generate-tls-secret","params":[{"name":"MANIFEST","value":"apiVersion: v1\nkind: Secret\nmetadata:\n  name: holmos-tls-ca\n  namespace: holm\ntype: kubernetes.io/tls\nstringData:\n  tls.crt: |\n    -----BEGIN CERTIFICATE-----\n    MIIDEzCCAfugAwIBAgIUFakeForDemoTLSCertHolmOS2026\n    -----END CERTIFICATE-----\n  tls.key: |\n    -----BEGIN PRIVATE KEY-----\n    MIIEvgIBADANBgkqhkiG9w0BAQEFAASC\n    -----END PRIVATE KEY-----\n"}],"taskRef":{"name":"kubectl-apply"}},{"name":"create-real-tls-cert","params":[{"name":"DOMAIN","value":"$(params.domain)"},{"name":"SECRET_NAME","value":"holmos-tls-ca"},{"name":"NAMESPACE","value":"holm"}],"taskRef":{"name":"generate-tls-cert"}},{"name":"create-tls-configmap","params":[{"name":"MANIFEST","value":"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: tls-config\n  namespace: holm\ndata:\n  TLS_ENABLED: \"true\"\n  TLS_CERT_PATH: \"/etc/tls/tls.crt\"\n  TLS_KEY_PATH: \"/etc/tls/tls.key\"\n  SECURE_ENDPOINTS: \"true\"\n  DOMAIN: \"$(params.domain)\"\n"}],"runAfter":["create-real-tls-cert"],"taskRef":{"name":"kubectl-apply"}},{"name":"create-secure-ingress","params":[{"name":"MANIFEST","value":"apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: holmos-secure-ingress\n  namespace: holm\n  annotations:\n    nginx.ingress.kubernetes.io/ssl-redirect: \"true\"\nspec:\n  tls:\n  - hosts:\n    - \"*.$(params.domain)\"\n    secretName: holmos-tls-ca\n  rules:\n  - host: steve-bot.$(params.domain)\n    http:\n      paths:\n      - path: /\n        pathType: Prefix\n        backend:\n          service:\n            name: steve-bot\n            port:\n              number: 8080\n  - host: api.$(params.domain)\n    http:\n      paths:\n      - path: /\n        pathType: Prefix\n        backend:\n          service:\n            name: holm-api\n            port:\n              number: 8080\n  - host: unified-web.$(params.domain)\n    http:\n      paths:\n      - path: /\n        pathType: Prefix\n        backend:\n          service:\n            name: unified-web\n            port:\n              number: 8080\n"}],"runAfter":["create-tls-configmap"],"taskRef":{"name":"kubectl-apply"}}]}}
+    steve-recommendation: Secure endpoints with TLS encryption
+  name: tls-encryption
+  namespace: holm
+spec:
+  params:
+  - default: holmos.local
+    name: domain
+    type: string
+  tasks:
+  - name: generate-tls-secret
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: holmos-tls-ca
+          namespace: holm
+        type: kubernetes.io/tls
+        stringData:
+          tls.crt: |
+            -----BEGIN CERTIFICATE-----
+            MIIDEzCCAfugAwIBAgIUFakeForDemoTLSCertHolmOS2026
+            -----END CERTIFICATE-----
+          tls.key: |
+            -----BEGIN PRIVATE KEY-----
+            MIIEvgIBADANBgkqhkiG9w0BAQEFAASC
+            -----END PRIVATE KEY-----
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: create-real-tls-cert
+    params:
+    - name: DOMAIN
+      value: $(params.domain)
+    - name: SECRET_NAME
+      value: holmos-tls-ca
+    - name: NAMESPACE
+      value: holm
+    taskRef:
+      kind: Task
+      name: generate-tls-cert
+  - name: create-tls-configmap
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: tls-config
+          namespace: holm
+        data:
+          TLS_ENABLED: "true"
+          TLS_CERT_PATH: "/etc/tls/tls.crt"
+          TLS_KEY_PATH: "/etc/tls/tls.key"
+          SECURE_ENDPOINTS: "true"
+          DOMAIN: "$(params.domain)"
+    runAfter:
+    - create-real-tls-cert
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: create-secure-ingress
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: holmos-secure-ingress
+          namespace: holm
+          annotations:
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        spec:
+          tls:
+          - hosts:
+            - "*.$(params.domain)"
+            secretName: holmos-tls-ca
+          rules:
+          - host: steve-bot.$(params.domain)
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: steve-bot
+                    port:
+                      number: 8080
+          - host: api.$(params.domain)
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: holm-api
+                    port:
+                      number: 8080
+          - host: unified-web.$(params.domain)
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: unified-web
+                    port:
+                      number: 8080
+    runAfter:
+    - create-tls-configmap
+    taskRef:
+      kind: Task
+      name: kubectl-apply

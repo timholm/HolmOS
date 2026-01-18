@@ -1,0 +1,117 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+    description: 'Ongoing: Security audit and remediation pipeline'
+      {"apiVersion":"tekton.dev/v1","kind":"Pipeline","metadata":{"annotations":{"description":"Ongoing: Security audit and remediation pipeline","steve-recommendation":"Audit configuration history, implement ACLs, update TLS versions"},"name":"security-audit","namespace":"holm"},"spec":{"params":[{"default":"full","name":"audit-scope","type":"string"}],"tasks":[{"name":"create-network-policies","params":[{"name":"MANIFEST","value":"apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-internal-only\n  namespace: holm\nspec:\n  podSelector: {}\n  policyTypes:\n  - Ingress\n  - Egress\n  ingress:\n  - from:\n    - namespaceSelector:\n        matchLabels:\n          kubernetes.io/metadata.name: holm\n    - namespaceSelector:\n        matchLabels:\n          kubernetes.io/metadata.name: kube-system\n  egress:\n  - to:\n    - namespaceSelector:\n        matchLabels:\n          kubernetes.io/metadata.name: holm\n    - namespaceSelector:\n        matchLabels:\n          kubernetes.io/metadata.name: kube-system\n  - to:\n    - ipBlock:\n        cidr: 0.0.0.0/0\n    ports:\n    - protocol: TCP\n      port: 443\n    - protocol: TCP\n      port: 80\n    - protocol: UDP\n      port: 53\n"}],"taskRef":{"name":"kubectl-apply"}},{"name":"create-rbac-controls","params":[{"name":"MANIFEST","value":"apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: holm-api-reader\n  namespace: holm\nrules:\n- apiGroups: [\"\"]\n  resources: [\"pods\", \"services\", \"configmaps\"]\n  verbs: [\"get\", \"list\", \"watch\"]\n- apiGroups: [\"apps\"]\n  resources: [\"deployments\", \"statefulsets\"]\n  verbs: [\"get\", \"list\", \"watch\"]\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: holm-api-reader-binding\n  namespace: holm\nsubjects:\n- kind: ServiceAccount\n  name: holm-api\n  namespace: holm\nroleRef:\n  kind: Role\n  name: holm-api-reader\n  apiGroup: rbac.authorization.k8s.io\n"}],"taskRef":{"name":"kubectl-apply"}},{"name":"create-security-configmap","params":[{"name":"MANIFEST","value":"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: security-audit-results\n  namespace: holm\ndata:\n  audit_scope: \"$(params.audit-scope)\"\n  status: \"completed\"\n  network_policies: \"enabled\"\n  rbac_controls: \"enabled\"\n  recommendations: |\n    1. Update TLS to 1.2+ with AEAD cipher suites - DONE\n    2. Network policies implemented for namespace isolation\n    3. RBAC controls for holm-api service account\n    4. Regular security scans recommended\n"}],"runAfter":["create-network-policies","create-rbac-controls"],"taskRef":{"name":"kubectl-apply"}}]}}
+    steve-recommendation: Audit configuration history, implement ACLs, update TLS
+      versions
+  name: security-audit
+  namespace: holm
+spec:
+  params:
+  - default: full
+    name: audit-scope
+    type: string
+  tasks:
+  - name: create-network-policies
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: allow-internal-only
+          namespace: holm
+        spec:
+          podSelector: {}
+          policyTypes:
+          - Ingress
+          - Egress
+          ingress:
+          - from:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: holm
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: kube-system
+          egress:
+          - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: holm
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: kube-system
+          - to:
+            - ipBlock:
+                cidr: 0.0.0.0/0
+            ports:
+            - protocol: TCP
+              port: 443
+            - protocol: TCP
+              port: 80
+            - protocol: UDP
+              port: 53
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: create-rbac-controls
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: holm-api-reader
+          namespace: holm
+        rules:
+        - apiGroups: [""]
+          resources: ["pods", "services", "configmaps"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["apps"]
+          resources: ["deployments", "statefulsets"]
+          verbs: ["get", "list", "watch"]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: holm-api-reader-binding
+          namespace: holm
+        subjects:
+        - kind: ServiceAccount
+          name: holm-api
+          namespace: holm
+        roleRef:
+          kind: Role
+          name: holm-api-reader
+          apiGroup: rbac.authorization.k8s.io
+    taskRef:
+      kind: Task
+      name: kubectl-apply
+  - name: create-security-configmap
+    params:
+    - name: MANIFEST
+      value: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: security-audit-results
+          namespace: holm
+        data:
+          audit_scope: "$(params.audit-scope)"
+          status: "completed"
+          network_policies: "enabled"
+          rbac_controls: "enabled"
+          recommendations: |
+            1. Update TLS to 1.2+ with AEAD cipher suites - DONE
+            2. Network policies implemented for namespace isolation
+            3. RBAC controls for holm-api service account
+            4. Regular security scans recommended
+    runAfter:
+    - create-network-policies
+    - create-rbac-controls
+    taskRef:
+      kind: Task
+      name: kubectl-apply

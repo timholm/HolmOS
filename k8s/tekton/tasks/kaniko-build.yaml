@@ -1,0 +1,73 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Task","metadata":{"annotations":{},"name":"kaniko-build","namespace":"holm"},"spec":{"params":[{"description":"Destination image with tag","name":"IMAGE","type":"string"},{"default":"Dockerfile","description":"Path to Dockerfile","name":"DOCKERFILE","type":"string"},{"default":".","description":"Build context path","name":"CONTEXT","type":"string"},{"description":"Git repository URL","name":"GIT_URL","type":"string"},{"default":"","description":"Subdirectory within repo","name":"GIT_SUBDIR","type":"string"}],"stepTemplate":{"env":[{"name":"http_proxy","value":""},{"name":"https_proxy","value":""}]},"steps":[{"image":"alpine/git:latest","name":"git-clone","script":"#!/bin/sh\nset -ex\n# Configure DNS\necho \"nameserver 8.8.8.8\" \u003e /etc/resolv.conf\necho \"nameserver 8.8.4.4\" \u003e\u003e /etc/resolv.conf\n# Retry loop for DNS issues\nfor i in 1 2 3 4 5; do\n  echo \"Attempt $i...\"\n  if git clone --depth 1 $(params.GIT_URL) /workspace/source/repo; then\n    break\n  fi\n  echo \"Clone failed, waiting 5s...\"\n  sleep 5\ndone\nif [ ! -d \"/workspace/source/repo\" ]; then\n  echo \"Failed to clone after 5 attempts\"\n  exit 1\nfi\nif [ -n \"$(params.GIT_SUBDIR)\" ]; then\n  cp -r /workspace/source/repo/$(params.GIT_SUBDIR)/* /workspace/source/\nelse\n  cp -r /workspace/source/repo/* /workspace/source/\nfi\nrm -rf /workspace/source/repo\nls -la /workspace/source/\n"},{"args":["--dockerfile=$(params.DOCKERFILE)","--context=dir:///workspace/source/$(params.CONTEXT)","--destination=$(params.IMAGE)","--insecure","--skip-tls-verify"],"image":"gcr.io/kaniko-project/executor:latest","name":"build-and-push"}],"workspaces":[{"name":"source"}]}}
+  name: kaniko-build
+  namespace: holm
+spec:
+  params:
+  - description: Destination image with tag
+    name: IMAGE
+    type: string
+  - default: Dockerfile
+    description: Path to Dockerfile
+    name: DOCKERFILE
+    type: string
+  - default: .
+    description: Build context path
+    name: CONTEXT
+    type: string
+  - description: Git repository URL
+    name: GIT_URL
+    type: string
+  - default: ""
+    description: Subdirectory within repo
+    name: GIT_SUBDIR
+    type: string
+  stepTemplate:
+    computeResources: {}
+    env:
+    - name: http_proxy
+    - name: https_proxy
+  steps:
+  - computeResources: {}
+    image: alpine/git:latest
+    name: git-clone
+    script: |
+      #!/bin/sh
+      set -ex
+      # Configure DNS
+      echo "nameserver 8.8.8.8" > /etc/resolv.conf
+      echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+      # Retry loop for DNS issues
+      for i in 1 2 3 4 5; do
+        echo "Attempt $i..."
+        if git clone --depth 1 $(params.GIT_URL) /workspace/source/repo; then
+          break
+        fi
+        echo "Clone failed, waiting 5s..."
+        sleep 5
+      done
+      if [ ! -d "/workspace/source/repo" ]; then
+        echo "Failed to clone after 5 attempts"
+        exit 1
+      fi
+      if [ -n "$(params.GIT_SUBDIR)" ]; then
+        cp -r /workspace/source/repo/$(params.GIT_SUBDIR)/* /workspace/source/
+      else
+        cp -r /workspace/source/repo/* /workspace/source/
+      fi
+      rm -rf /workspace/source/repo
+      ls -la /workspace/source/
+  - args:
+    - --dockerfile=$(params.DOCKERFILE)
+    - --context=dir:///workspace/source/$(params.CONTEXT)
+    - --destination=$(params.IMAGE)
+    - --insecure
+    - --skip-tls-verify
+    computeResources: {}
+    image: gcr.io/kaniko-project/executor:latest
+    name: build-and-push
+  workspaces:
+  - name: source

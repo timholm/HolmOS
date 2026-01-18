@@ -1,0 +1,118 @@
+---
+# Tekton Task: Build container image with Kaniko
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: kaniko-build
+  namespace: holm
+spec:
+  params:
+    - name: IMAGE
+      description: Destination image with tag
+      type: string
+    - name: DOCKERFILE
+      description: Path to Dockerfile
+      type: string
+      default: "Dockerfile"
+    - name: CONTEXT
+      description: Build context path
+      type: string
+      default: "."
+    - name: GIT_URL
+      description: Git repository URL
+      type: string
+    - name: GIT_SUBDIR
+      description: Subdirectory within repo
+      type: string
+      default: ""
+  workspaces:
+    - name: source
+  stepTemplate:
+    env:
+      - name: http_proxy
+        value: ""
+      - name: https_proxy
+        value: ""
+  steps:
+    - name: git-clone
+      image: alpine/git:latest
+      script: |
+        #!/bin/sh
+        set -ex
+        # Configure DNS
+        echo "nameserver 8.8.8.8" > /etc/resolv.conf
+        echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+        # Retry loop for DNS issues
+        for i in 1 2 3 4 5; do
+          echo "Attempt $i..."
+          if git clone --depth 1 $(params.GIT_URL) /workspace/source/repo; then
+            break
+          fi
+          echo "Clone failed, waiting 5s..."
+          sleep 5
+        done
+        if [ ! -d "/workspace/source/repo" ]; then
+          echo "Failed to clone after 5 attempts"
+          exit 1
+        fi
+        if [ -n "$(params.GIT_SUBDIR)" ]; then
+          cp -r /workspace/source/repo/$(params.GIT_SUBDIR)/* /workspace/source/
+        else
+          cp -r /workspace/source/repo/* /workspace/source/
+        fi
+        rm -rf /workspace/source/repo
+        ls -la /workspace/source/
+    - name: build-and-push
+      image: gcr.io/kaniko-project/executor:latest
+      args:
+        - --dockerfile=$(params.DOCKERFILE)
+        - --context=dir:///workspace/source/$(params.CONTEXT)
+        - --destination=$(params.IMAGE)
+        - --insecure
+        - --skip-tls-verify
+---
+# Tekton Pipeline: Build AI Bots
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-ai-bots
+  namespace: holm
+spec:
+  params:
+    - name: image-tag
+      description: Tag for the image (e.g., v14, latest)
+      type: string
+      default: "latest"
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: build
+      taskRef:
+        name: kaniko-build
+      params:
+        - name: IMAGE
+          value: "192.168.8.197:31500/ai-bots:$(params.image-tag)"
+        - name: GIT_URL
+          value: "https://github.com/timholm/HolmOS.git"
+        - name: GIT_SUBDIR
+          value: "services/ai-bots"
+        - name: DOCKERFILE
+          value: "Dockerfile"
+        - name: CONTEXT
+          value: "."
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+---
+# PVC for workspace
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tekton-workspace-pvc
+  namespace: holm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

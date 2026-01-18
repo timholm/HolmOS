@@ -1,0 +1,35 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Task","metadata":{"annotations":{},"name":"generate-tls-cert","namespace":"holm"},"spec":{"params":[{"description":"Domain for the certificate","name":"DOMAIN","type":"string"},{"description":"Name for the TLS secret","name":"SECRET_NAME","type":"string"},{"default":"holm","name":"NAMESPACE","type":"string"}],"steps":[{"env":[{"name":"SSL_CERT_DIR","value":"/etc/ssl/certs"}],"image":"alpine:latest","name":"generate-cert","script":"#!/bin/sh\nset -ex\napk add --no-cache openssl\nopenssl req -x509 -nodes -days 365 -newkey rsa:2048 \\\n  -keyout /tmp/tls.key \\\n  -out /tmp/tls.crt \\\n  -subj \"/CN=$(params.DOMAIN)/O=HolmOS\"\necho \"=== Certificate generated for $(params.DOMAIN) ===\"\ncat /tmp/tls.crt\n"}]}}
+  name: generate-tls-cert
+  namespace: holm
+spec:
+  params:
+  - description: Domain for the certificate
+    name: DOMAIN
+    type: string
+  - description: Name for the TLS secret
+    name: SECRET_NAME
+    type: string
+  - default: holm
+    name: NAMESPACE
+    type: string
+  steps:
+  - computeResources: {}
+    env:
+    - name: SSL_CERT_DIR
+      value: /etc/ssl/certs
+    image: alpine:latest
+    name: generate-cert
+    script: |
+      #!/bin/sh
+      set -ex
+      apk add --no-cache openssl
+      openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /tmp/tls.key \
+        -out /tmp/tls.crt \
+        -subj "/CN=$(params.DOMAIN)/O=HolmOS"
+      echo "=== Certificate generated for $(params.DOMAIN) ==="
+      cat /tmp/tls.crt

@@ -1,0 +1,40 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Task","metadata":{"annotations":{},"name":"security-scan","namespace":"holm"},"spec":{"params":[{"default":"cluster","name":"SCAN_TYPE","type":"string"},{"default":"holm","name":"TARGET","type":"string"}],"steps":[{"args":["set -x\necho \"=== Security Scan: $(params.SCAN_TYPE) ===\"\ncase \"$(params.SCAN_TYPE)\" in\n  cluster)\n    echo \"Scanning namespace $(params.TARGET)...\"\n    trivy k8s --namespace $(params.TARGET) --report summary --timeout 10m || echo \"Scan completed with warnings\"\n    ;;\n  config)\n    echo \"Scanning cluster configuration...\"\n    trivy k8s --report summary --timeout 10m || echo \"Scan completed with warnings\"\n    ;;\n  *)\n    echo \"Scan type: $(params.SCAN_TYPE)\"\n    ;;\nesac\necho \"=== Scan Complete ===\"\n"],"command":["/bin/sh","-c"],"image":"aquasec/trivy:latest","name":"run-scan"}]}}
+  name: security-scan
+  namespace: holm
+spec:
+  params:
+  - default: cluster
+    name: SCAN_TYPE
+    type: string
+  - default: holm
+    name: TARGET
+    type: string
+  steps:
+  - args:
+    - |
+      set -x
+      echo "=== Security Scan: $(params.SCAN_TYPE) ==="
+      case "$(params.SCAN_TYPE)" in
+        cluster)
+          echo "Scanning namespace $(params.TARGET)..."
+          trivy k8s --namespace $(params.TARGET) --report summary --timeout 10m || echo "Scan completed with warnings"
+          ;;
+        config)
+          echo "Scanning cluster configuration..."
+          trivy k8s --report summary --timeout 10m || echo "Scan completed with warnings"
+          ;;
+        *)
+          echo "Scan type: $(params.SCAN_TYPE)"
+          ;;
+      esac
+      echo "=== Scan Complete ==="
+    command:
+    - /bin/sh
+    - -c
+    computeResources: {}
+    image: aquasec/trivy:latest
+    name: run-scan

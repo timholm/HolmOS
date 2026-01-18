@@ -1,0 +1,34 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Pipeline","metadata":{"annotations":{},"name":"build-ai-bots","namespace":"holm"},"spec":{"params":[{"default":"latest","description":"Tag for the image (e.g., v14, latest)","name":"image-tag","type":"string"}],"tasks":[{"name":"build","params":[{"name":"IMAGE","value":"192.168.8.197:31500/ai-bots:$(params.image-tag)"},{"name":"GIT_URL","value":"https://github.com/timholm/HolmOS.git"},{"name":"GIT_SUBDIR","value":"services/ai-bots"},{"name":"DOCKERFILE","value":"Dockerfile"},{"name":"CONTEXT","value":"."}],"taskRef":{"name":"kaniko-build"},"workspaces":[{"name":"source","workspace":"shared-workspace"}]}],"workspaces":[{"name":"shared-workspace"}]}}
+  name: build-ai-bots
+  namespace: holm
+spec:
+  params:
+  - default: latest
+    description: Tag for the image (e.g., v14, latest)
+    name: image-tag
+    type: string
+  tasks:
+  - name: build
+    params:
+    - name: IMAGE
+      value: 192.168.8.197:31500/ai-bots:$(params.image-tag)
+    - name: GIT_URL
+      value: https://github.com/timholm/HolmOS.git
+    - name: GIT_SUBDIR
+      value: services/ai-bots
+    - name: DOCKERFILE
+      value: Dockerfile
+    - name: CONTEXT
+      value: .
+    taskRef:
+      kind: Task
+      name: kaniko-build
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  workspaces:
+  - name: shared-workspace

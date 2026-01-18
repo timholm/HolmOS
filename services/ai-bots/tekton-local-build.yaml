@@ -1,0 +1,55 @@
+---
+# Tekton Task: Build container image with Kaniko (local source)
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: kaniko-local-build
+  namespace: holm
+spec:
+  params:
+    - name: IMAGE
+      description: Destination image with tag
+      type: string
+    - name: DOCKERFILE
+      description: Path to Dockerfile
+      type: string
+      default: "Dockerfile"
+  workspaces:
+    - name: source
+      description: Source code already mounted
+  steps:
+    - name: build-and-push
+      image: gcr.io/kaniko-project/executor:latest
+      args:
+        - --dockerfile=/workspace/source/$(params.DOCKERFILE)
+        - --context=dir:///workspace/source
+        - --destination=$(params.IMAGE)
+        - --insecure
+        - --skip-tls-verify
+---
+# Pipeline: Build AI Bots from local source
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-ai-bots-local
+  namespace: holm
+spec:
+  params:
+    - name: image-tag
+      description: Tag for the image (e.g., v14, latest)
+      type: string
+      default: "latest"
+  workspaces:
+    - name: source-workspace
+  tasks:
+    - name: build
+      taskRef:
+        name: kaniko-local-build
+      params:
+        - name: IMAGE
+          value: "192.168.8.197:31500/ai-bots:$(params.image-tag)"
+        - name: DOCKERFILE
+          value: "Dockerfile"
+      workspaces:
+        - name: source
+          workspace: source-workspace

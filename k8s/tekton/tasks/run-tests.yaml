@@ -1,0 +1,29 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Task","metadata":{"annotations":{},"name":"run-tests","namespace":"holm"},"spec":{"params":[{"description":"Image with test framework","name":"TEST_IMAGE","type":"string"},{"default":"pytest","name":"TEST_COMMAND","type":"string"},{"default":"-v --tb=short","name":"TEST_ARGS","type":"string"}],"steps":[{"image":"$(params.TEST_IMAGE)","name":"run-tests","script":"#!/bin/sh\nset -ex\ncd /workspace/source\n$(params.TEST_COMMAND) $(params.TEST_ARGS)\n"}],"workspaces":[{"name":"source"}]}}
+  name: run-tests
+  namespace: holm
+spec:
+  params:
+  - description: Image with test framework
+    name: TEST_IMAGE
+    type: string
+  - default: pytest
+    name: TEST_COMMAND
+    type: string
+  - default: -v --tb=short
+    name: TEST_ARGS
+    type: string
+  steps:
+  - computeResources: {}
+    image: $(params.TEST_IMAGE)
+    name: run-tests
+    script: |
+      #!/bin/sh
+      set -ex
+      cd /workspace/source
+      $(params.TEST_COMMAND) $(params.TEST_ARGS)
+  workspaces:
+  - name: source

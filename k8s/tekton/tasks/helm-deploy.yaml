@@ -1,0 +1,37 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+      {"apiVersion":"tekton.dev/v1","kind":"Task","metadata":{"annotations":{},"name":"helm-deploy","namespace":"holm"},"spec":{"params":[{"name":"RELEASE_NAME","type":"string"},{"name":"CHART_PATH","type":"string"},{"default":"holm","name":"NAMESPACE","type":"string"},{"default":"","name":"VALUES_FILE","type":"string"}],"steps":[{"image":"alpine/helm:latest","name":"helm-install","script":"#!/bin/sh\nset -ex\ncd /workspace/source\nif [ -n \"$(params.VALUES_FILE)\" ]; then\n  helm upgrade --install $(params.RELEASE_NAME) $(params.CHART_PATH) \\\n    -n $(params.NAMESPACE) \\\n    -f $(params.VALUES_FILE)\nelse\n  helm upgrade --install $(params.RELEASE_NAME) $(params.CHART_PATH) \\\n    -n $(params.NAMESPACE)\nfi\n"}],"workspaces":[{"name":"source"}]}}
+  name: helm-deploy
+  namespace: holm
+spec:
+  params:
+  - name: RELEASE_NAME
+    type: string
+  - name: CHART_PATH
+    type: string
+  - default: holm
+    name: NAMESPACE
+    type: string
+  - default: ""
+    name: VALUES_FILE
+    type: string
+  steps:
+  - computeResources: {}
+    image: alpine/helm:latest
+    name: helm-install
+    script: |
+      #!/bin/sh
+      set -ex
+      cd /workspace/source
+      if [ -n "$(params.VALUES_FILE)" ]; then
+        helm upgrade --install $(params.RELEASE_NAME) $(params.CHART_PATH) \
+          -n $(params.NAMESPACE) \
+          -f $(params.VALUES_FILE)
+      else
+        helm upgrade --install $(params.RELEASE_NAME) $(params.CHART_PATH) \
+          -n $(params.NAMESPACE)
+      fi
+  workspaces:
+  - name: source

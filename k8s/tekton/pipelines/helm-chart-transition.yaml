@@ -1,0 +1,71 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  annotations:
+    description: 'Priority 2: Migrate services to Helm charts for declarative config
+      management'
+      {"apiVersion":"tekton.dev/v1","kind":"Pipeline","metadata":{"annotations":{"description":"Priority 2: Migrate services to Helm charts for declarative config management","steve-recommendation":"Integrate declarative configurations using Helm charts"},"name":"helm-chart-transition","namespace":"holm"},"spec":{"params":[{"default":"1.0.0","name":"chart-version","type":"string"},{"default":"production","name":"environment","type":"string"}],"tasks":[{"name":"clone-charts","params":[{"name":"IMAGE","value":"skip-build"},{"name":"GIT_URL","value":"https://github.com/timholm/HolmOS.git"},{"name":"GIT_SUBDIR","value":"helm-charts"},{"name":"DOCKERFILE","value":"skip"},{"name":"CONTEXT","value":"."}],"taskRef":{"name":"kaniko-build"},"workspaces":[{"name":"source","workspace":"shared-workspace"}]},{"name":"deploy-core-services","params":[{"name":"RELEASE_NAME","value":"holmos-core"},{"name":"CHART_PATH","value":"./holmos-core"},{"name":"NAMESPACE","value":"holm"}],"runAfter":["clone-charts"],"taskRef":{"name":"helm-deploy"},"workspaces":[{"name":"source","workspace":"shared-workspace"}]},{"name":"deploy-ai-bots","params":[{"name":"RELEASE_NAME","value":"ai-bots"},{"name":"CHART_PATH","value":"./ai-bots"},{"name":"NAMESPACE","value":"holm"}],"runAfter":["clone-charts"],"taskRef":{"name":"helm-deploy"},"workspaces":[{"name":"source","workspace":"shared-workspace"}]}],"workspaces":[{"name":"shared-workspace"}]}}
+    steve-recommendation: Integrate declarative configurations using Helm charts
+  name: helm-chart-transition
+  namespace: holm
+spec:
+  params:
+  - default: 1.0.0
+    name: chart-version
+    type: string
+  - default: production
+    name: environment
+    type: string
+  tasks:
+  - name: clone-charts
+    params:
+    - name: IMAGE
+      value: skip-build
+    - name: GIT_URL
+      value: https://github.com/timholm/HolmOS.git
+    - name: GIT_SUBDIR
+      value: helm-charts
+    - name: DOCKERFILE
+      value: skip
+    - name: CONTEXT
+      value: .
+    taskRef:
+      kind: Task
+      name: kaniko-build
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  - name: deploy-core-services
+    params:
+    - name: RELEASE_NAME
+      value: holmos-core
+    - name: CHART_PATH
+      value: ./holmos-core
+    - name: NAMESPACE
+      value: holm
+    runAfter:
+    - clone-charts
+    taskRef:
+      kind: Task
+      name: helm-deploy
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  - name: deploy-ai-bots
+    params:
+    - name: RELEASE_NAME
+      value: ai-bots
+    - name: CHART_PATH
+      value: ./ai-bots
+    - name: NAMESPACE
+      value: holm
+    runAfter:
+    - clone-charts
+    taskRef:
+      kind: Task
+      name: helm-deploy
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  workspaces:
+  - name: shared-workspace

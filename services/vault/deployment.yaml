@@ -21,7 +21,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: vault
-        image: localhost:30500/vault:latest
+        image: registry.holm.svc.cluster.local:5000/vault:latest
         ports:
         - containerPort: 8080
         env:

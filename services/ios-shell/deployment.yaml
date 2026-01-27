@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: ios-shell
-          image: localhost:31500/ios-shell:latest
+          image: registry.holm.svc.cluster.local:5000/ios-shell:latest
           ports:
             - containerPort: 8080
           env:

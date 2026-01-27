@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: claude-terminal
-        image: localhost:31500/claude-terminal:latest
+        image: registry.holm.svc.cluster.local:5000/claude-terminal:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

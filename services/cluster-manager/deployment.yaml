@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: cluster-manager
-        image: localhost:31500/cluster-manager:latest
+        image: registry.holm.svc.cluster.local:5000/cluster-manager:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

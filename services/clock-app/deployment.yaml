@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: clock-app
-        image: localhost:31500/clock-app:latest
+        image: registry.holm.svc.cluster.local:5000/clock-app:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 30007

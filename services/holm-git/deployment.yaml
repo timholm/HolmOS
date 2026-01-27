@@ -38,7 +38,7 @@ spec:
                 - openmediavault
       containers:
       - name: holm-git
-        image: localhost:31500/holm-git:latest
+        image: registry.holm.svc.cluster.local:5000/holm-git:latest
         ports:
         - containerPort: 8080
         volumeMounts:

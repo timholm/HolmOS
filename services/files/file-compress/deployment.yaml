@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: file-compress
-        image: 10.110.67.87:5000/holm/file-compress:v1
+        image: registry.holm.svc.cluster.local:5000/holm/file-compress:v1
         ports:
         - containerPort: 8080
         volumeMounts:

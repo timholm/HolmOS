@@ -24,7 +24,7 @@ spec:
                 - openmediavault
       containers:
       - name: audiobook-audio-normalize
-        image: 10.110.67.87:5000/holm/audiobook-audio-normalize:v1
+        image: registry.holm.svc.cluster.local:5000/holm/audiobook-audio-normalize:v1
         ports:
         - containerPort: 8080
         volumeMounts:

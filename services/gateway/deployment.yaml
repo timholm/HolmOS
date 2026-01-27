@@ -51,7 +51,7 @@ spec:
                 - rpi-8
       containers:
       - name: gateway
-        image: 10.110.67.87:5000/holm/gateway:latest
+        image: registry.holm.svc.cluster.local:5000/holm/gateway:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

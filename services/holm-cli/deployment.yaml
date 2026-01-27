@@ -17,7 +17,7 @@ spec:
         kubernetes.io/arch: arm64
       containers:
       - name: holm-cli
-        image: 10.110.67.87:5000/holm/holm-cli:v1
+        image: registry.holm.svc.cluster.local:5000/holm/holm-cli:v1
         ports:
         - containerPort: 8080
 ---

@@ -457,7 +457,7 @@ spec:
         args:
         - "--dockerfile=/workspace/Dockerfile"
         - "--context=dir:///workspace"
-        - "--destination=10.110.67.87:5000/metrics-collector:latest"
+        - "--destination=registry.holm.svc.cluster.local:5000/metrics-collector:latest"
         - "--insecure"
         - "--skip-tls-verify"
         volumeMounts:

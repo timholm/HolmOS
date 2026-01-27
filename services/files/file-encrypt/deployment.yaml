@@ -26,7 +26,7 @@ spec:
                 - openmediavault
       containers:
       - name: file-encrypt
-        image: 10.110.67.87:5000/file-encrypt:latest
+        image: registry.holm.svc.cluster.local:5000/file-encrypt:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

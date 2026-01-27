@@ -16,7 +16,7 @@ spec:
     image: gcr.io/kaniko-project/executor:latest
     args:
     - "--context=dir:///workspace"
-    - "--destination=10.110.67.87:5000/holm/audiobook-audio-normalize:v1"
+    - "--destination=registry.holm.svc.cluster.local:5000/holm/audiobook-audio-normalize:v1"
     - "--insecure"
     - "--cache=true"
     volumeMounts:

@@ -61,13 +61,13 @@ spec:
                 - openmediavault
       containers:
       - name: cicd-controller
-        image: 10.110.67.87:5000/cicd-controller:latest
+        image: registry.holm.svc.cluster.local:5000/cicd-controller:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
         env:
         - name: REGISTRY_URL
-          value: "10.110.67.87:5000"
+          value: "registry.holm.svc.cluster.local:5000"
         - name: HOLMGIT_URL
           value: "http://holm-git.holm.svc.cluster.local:8080"
         - name: PORT

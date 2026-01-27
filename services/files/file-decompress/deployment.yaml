@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: file-decompress
-        image: 10.110.67.87:5000/holm/file-decompress:latest
+        image: registry.holm.svc.cluster.local:5000/holm/file-decompress:latest
         ports:
         - containerPort: 8080
         env:

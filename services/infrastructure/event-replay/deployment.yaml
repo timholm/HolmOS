@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
       - name: event-replay
-        image: 10.110.67.87:5000/holm/event-replay:v1
+        image: registry.holm.svc.cluster.local:5000/holm/event-replay:v1
         ports:
         - containerPort: 8080
           name: http

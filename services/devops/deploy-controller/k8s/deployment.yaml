@@ -64,12 +64,12 @@ spec:
                 - openmediavault
       containers:
       - name: deploy-controller
-        image: 10.110.67.87:5000/holm/deploy-controller:latest
+        image: registry.holm.svc.cluster.local:5000/holm/deploy-controller:latest
         ports:
         - containerPort: 8080
         env:
         - name: REGISTRY_URL
-          value: "http://10.110.67.87:5000"
+          value: "http://registry.holm.svc.cluster.local:5000"
         - name: NAMESPACE
           value: "holm"
         livenessProbe:

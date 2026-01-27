@@ -18,7 +18,7 @@ spec:
       serviceAccountName: pulse
       containers:
         - name: pulse
-          image: registry.holm:5000/pulse:latest
+          image: registry.holm.svc.cluster.local:5000/pulse:latest
           ports:
             - containerPort: 8080
           env:

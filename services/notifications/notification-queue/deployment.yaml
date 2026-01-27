@@ -26,7 +26,7 @@ spec:
                 - openmediavault
       containers:
       - name: notification-queue
-        image: 10.110.67.87:5000/holm/notification-queue:latest
+        image: registry.holm.svc.cluster.local:5000/holm/notification-queue:latest
         ports:
         - containerPort: 8080
         env:

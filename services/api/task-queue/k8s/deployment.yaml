@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: task-queue
-        image: 10.110.67.87:5000/task-queue:latest
+        image: registry.holm.svc.cluster.local:5000/task-queue:latest
         ports:
         - containerPort: 8080
         resources:

@@ -57,7 +57,7 @@ spec:
                 - openmediavault
       containers:
       - name: scribe
-        image: 10.110.67.87:5000/scribe:latest
+        image: registry.holm.svc.cluster.local:5000/scribe:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

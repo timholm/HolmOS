@@ -58,7 +58,7 @@ spec:
         args:
         - "--dockerfile=/workspace/source/Dockerfile"
         - "--context=/workspace/source"
-        - "--destination=10.110.67.87:5000/holm/deploy-controller:latest"
+        - "--destination=registry.holm.svc.cluster.local:5000/holm/deploy-controller:latest"
         - "--insecure"
         - "--skip-tls-verify"
         - "--cache=false"

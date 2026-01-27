@@ -27,7 +27,7 @@ spec:
                 - openmediavault
       containers:
       - name: nova
-        image: 10.110.67.87:5000/holm/nova:latest
+        image: registry.holm.svc.cluster.local:5000/holm/nova:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 80

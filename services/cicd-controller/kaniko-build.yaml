@@ -24,7 +24,7 @@ spec:
         args:
         - "--dockerfile=/workspace/Dockerfile"
         - "--context=/workspace"
-        - "--destination=10.110.67.87:5000/cicd-controller:latest"
+        - "--destination=registry.holm.svc.cluster.local:5000/cicd-controller:latest"
         - "--insecure"
         - "--skip-tls-verify"
         volumeMounts:

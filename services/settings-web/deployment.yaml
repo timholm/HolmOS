@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: settings-web
-        image: 192.168.8.197:30500/settings-web:latest
+        image: registry.holm.svc.cluster.local:5000/settings-web:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

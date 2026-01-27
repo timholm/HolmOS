@@ -16,7 +16,7 @@ spec:
     image: gcr.io/kaniko-project/executor:latest
     args:
     - "--context=dir:///workspace"
-    - "--destination=192.168.8.197:30500/holm/nova:latest"
+    - "--destination=registry.holm.svc.cluster.local:5000/holm/nova:latest"
     - "--insecure"
     - "--cache=true"
     volumeMounts:

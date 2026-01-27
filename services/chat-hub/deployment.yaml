@@ -33,7 +33,7 @@ spec:
                 - rpi-8
       containers:
       - name: chat-hub
-        image: 192.168.8.197:30500/chat-hub:latest
+        image: registry.holm.svc.cluster.local:5000/chat-hub:latest
         ports:
         - containerPort: 8080
         env:

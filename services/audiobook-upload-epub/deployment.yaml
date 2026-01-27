@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: audiobook-upload-epub
-        image: 192.168.8.197:30500/audiobook-upload-epub:latest
+        image: registry.holm.svc.cluster.local:5000/audiobook-upload-epub:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

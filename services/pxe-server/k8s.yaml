@@ -27,7 +27,7 @@ spec:
                 - rpi-1
       containers:
       - name: pxe-server
-        image: 192.168.8.197:31500/pxe-server:latest
+        image: registry.holm.svc.cluster.local:5000/pxe-server:latest
         securityContext:
           capabilities:
             add:

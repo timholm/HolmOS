@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: claude-pod
-        image: 192.168.8.197:30500/claude-pod:latest
+        image: registry.holm.svc.cluster.local:5000/claude-pod:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

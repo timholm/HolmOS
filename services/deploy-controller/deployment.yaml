@@ -72,14 +72,14 @@ spec:
                 - openmediavault
       containers:
       - name: deploy-controller
-        image: 192.168.8.197:30500/deploy-controller:latest
+        image: registry.holm.svc.cluster.local:5000/deploy-controller:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
           name: http
         env:
         - name: REGISTRY_URL
-          value: "192.168.8.197:30500"
+          value: "registry.holm.svc.cluster.local:5000"
         - name: FORGE_URL
           value: "http://forge.holm.svc.cluster.local"
         - name: HOLMGIT_URL

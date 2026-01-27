@@ -80,7 +80,7 @@ spec:
                 - openmediavault
       containers:
       - name: backup-service
-        image: 192.168.8.197:30500/backup-service:latest
+        image: registry.holm.svc.cluster.local:5000/backup-service:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

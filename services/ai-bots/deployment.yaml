@@ -38,7 +38,7 @@ spec:
         kubernetes.io/hostname: rpi-1
       containers:
       - name: steve-bot
-        image: 192.168.8.197:31500/ai-bots:latest
+        image: registry.holm.svc.cluster.local:5000/ai-bots:latest
         command: ["python3", "/app/steve.py"]
         ports:
         - containerPort: 8080

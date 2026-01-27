@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: test-dashboard
-        image: 192.168.8.197:30500/test-dashboard:latest
+        image: registry.holm.svc.cluster.local:5000/test-dashboard:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: app-store-ai
-        image: 192.168.8.197:30500/app-store-ai:latest
+        image: registry.holm.svc.cluster.local:5000/app-store-ai:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

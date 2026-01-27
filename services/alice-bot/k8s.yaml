@@ -26,7 +26,7 @@ spec:
           mountPath: /repo
       containers:
       - name: alice-bot
-        image: 192.168.8.197:31500/alice-bot:latest
+        image: registry.holm.svc.cluster.local:5000/alice-bot:latest
         ports:
         - containerPort: 8080
         env:

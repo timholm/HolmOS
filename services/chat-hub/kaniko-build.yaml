@@ -22,7 +22,7 @@ spec:
     args:
     - "--dockerfile=Dockerfile"
     - "--context=dir:///workspace"
-    - "--destination=192.168.8.197:31500/chat-hub:latest"
+    - "--destination=registry.holm.svc.cluster.local:5000/chat-hub:latest"
     - "--insecure"
     - "--skip-tls-verify"
     volumeMounts:

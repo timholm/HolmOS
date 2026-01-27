@@ -28,7 +28,7 @@ spec:
                 - openmediavault
       containers:
       - name: calculator-app
-        image: 192.168.8.197:30500/calculator-app:latest
+        image: registry.holm.svc.cluster.local:5000/calculator-app:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

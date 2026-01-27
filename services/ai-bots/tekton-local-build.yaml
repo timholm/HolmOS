@@ -47,7 +47,7 @@ spec:
         name: kaniko-local-build
       params:
         - name: IMAGE
-          value: "192.168.8.197:31500/ai-bots:$(params.image-tag)"
+          value: "registry.holm.svc.cluster.local:5000/ai-bots:$(params.image-tag)"
         - name: DOCKERFILE
           value: "Dockerfile"
       workspaces:

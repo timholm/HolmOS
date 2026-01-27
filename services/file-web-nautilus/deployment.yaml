@@ -48,7 +48,7 @@ spec:
                   - node13
       containers:
       - name: file-web-nautilus
-        image: 192.168.8.197:30500/file-web-nautilus:latest
+        image: registry.holm.svc.cluster.local:5000/file-web-nautilus:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 5000

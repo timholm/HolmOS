@@ -1,0 +1,11 @@
+# Ignore non-Kubernetes files
+**/package.json
+**/package-lock.json
+**/*.js
+**/*.ts
+**/*.py
+**/*.md
+**/*.txt
+**/node_modules/**
+**/Dockerfile
+**/.gitignore
